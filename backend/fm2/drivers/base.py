@@ -38,10 +38,10 @@ class PhControl:
     pid: Optional[dict] = None
 
 
-# Parameters a profile loads for each pH control mode. In Adaptive the controller tunes
-# P/I/D itself, so they are neither loaded nor compared.
+# Parameters a profile loads for each pH control mode. In Adaptive, P/I/D are the starting
+# values the controller then adapts (decision 9 Nov 2026: load them in Adaptive too).
 PH_MODE_PARAMS = {"pid": ("P", "I", "D", "deadband", "cycle_time"),
-                  "adaptive": ("deadband", "cycle_time", "settling_time")}
+                  "adaptive": ("P", "I", "D", "deadband", "cycle_time", "settling_time")}
 
 
 @dataclass(frozen=True)

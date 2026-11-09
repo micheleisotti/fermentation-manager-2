@@ -145,7 +145,8 @@ def test_ph_control_switch_to_adaptive(fake):
     from fm2.drivers import PhControl
     drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
     drv.write_ph_control(PhControl(mode="adaptive", pid={"P": 5.0, "I": 1.0, "D": 0.0}))
-    assert fake.writes == [("1.19.0", "1")]                 # PID terms ignored in Adaptive
+    # P/I/D are loaded as starting values in Adaptive too
+    assert fake.writes == [("1.19.0", "1"), ("3.0.0", "5.00"), ("3.3.0", "1.00"), ("3.6.0", "0.00")]
     assert drv.read().ph_control.mode == "adaptive"
     assert fake.holder is None
     drv.close()
@@ -189,7 +190,7 @@ def test_ph_control_loop_parameters(fake):
     fake.writes.clear()
     drv.write_ph_control(PhControl("adaptive", {"P": 1.0, "deadband": 0.05, "cycle_time": 15,
                                                 "settling_time": 600}))
-    assert fake.writes == [("1.19.0", "1"), ("3.71.0", "600")]       # P/I/D are tuned by the controller
+    assert fake.writes == [("1.19.0", "1"), ("3.0.0", "1.00"), ("3.71.0", "600")]   # starting P + settling
     with pytest.raises(DriverError):
         drv.write_ph_control(PhControl("pid", {"deadband": 5.0}))     # above the controller's range
     with pytest.raises(DriverError):

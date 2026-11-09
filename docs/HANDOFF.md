@@ -23,7 +23,7 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   UI (the command then fails, nothing is written). Password in
   `C:\ProgramData\FermentationManager\ez2-password.txt` (ACL: service + admins), never in git.
   **pH control from the profile** (planning only, before Start): PID loads P, I, D, dead band,
-  cycle time; Adaptive loads dead band, cycle time, settling time (P/I/D tuned by the controller).
+  cycle time; Adaptive loads the same (P/I/D as starting values the controller then adapts) plus settling time.
   External control is never written. Profiles can be deleted (refused while a planned
   experiment uses them; started experiments keep their plan snapshot).
 - Reactor names: **R1-sx = 192.0.2.42, R2-dx = 192.0.2.41** (PC Ethernet 192.0.2.10/24, no gateway).

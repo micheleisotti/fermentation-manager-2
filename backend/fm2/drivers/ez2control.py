@@ -390,7 +390,7 @@ class Ez2ControlDriver(ControllerDriver):
         """
         Load the pH control type (PID or Adaptive) and its loop parameters — from planning
         only (services/commands.load_ph_control enforces 'planned'). PID: P, I, D, dead band,
-        cycle time. Adaptive: dead band, cycle time, settling time. Values are checked against
+        cycle time. Adaptive: the same with P/I/D as starting values, plus settling time. Checked against
         the controller's own min/max; only values that differ are written, in one login session.
         """
         import math

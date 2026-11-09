@@ -14,10 +14,10 @@ const PARAMS = {
   settling_time: { label: "Settling time", unit: "s" },
 } as const;
 type ParamKey = keyof typeof PARAMS;
-/** Loaded for each mode; in Adaptive the controller tunes P/I/D itself. */
+/** Loaded for each mode; in Adaptive, P/I/D are starting values the controller then adapts. */
 const MODE_PARAMS: Record<string, ParamKey[]> = {
   pid: ["P", "I", "D", "deadband", "cycle_time"],
-  adaptive: ["deadband", "cycle_time", "settling_time"],
+  adaptive: ["P", "I", "D", "deadband", "cycle_time", "settling_time"],
 };
 
 const EMPTY = { name: "", ph: "", t: "", stir: "", mode: "pid", notes: "",
@@ -132,8 +132,8 @@ export function Profiles() {
             )}
             <span className="xs muted">
               {f.mode === "adaptive"
-                ? "In Adaptive the controller tunes P, I and D itself: only dead band, cycle time and settling time are loaded."
-                : f.mode === "pid" ? "Empty fields are left as they are on the controller. Values are checked against the controller's own limits when loaded." : ""}
+                ? "In Adaptive, P, I and D are starting values: the controller adapts them after Start. "
+                : ""}{f.mode ? "Empty fields are left as they are on the controller. Values are checked against the controller's own limits when loaded." : ""}
             </span>
             <label className="field">Notes<textarea rows={3} value={f.notes} onChange={set("notes")} /></label>
             <button className="btn filled" disabled={!f.name.trim()} onClick={create}>Save profile</button>
