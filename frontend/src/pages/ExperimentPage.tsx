@@ -10,6 +10,7 @@ import { LimitsDialog } from "../components/LimitsDialog";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 import { ModeTabs } from "./ExperimentAnalysis";
+import { ArchiveButton, EndExperimentButton, ExpTags } from "./ExperimentsList";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -22,11 +23,11 @@ export function ExperimentPage() {
   const partner = (all.data ?? []).find((x) => e.parallel_partner_codes.includes(x.code));
   if (e.status === "planned") return <Planning key={e.id} existing={e} onChange={exp.refresh} />;
   return phone
-    ? <PhoneFermentation key={e.id} e={e} partner={partner} />
+    ? <PhoneFermentation key={e.id} e={e} partner={partner} onChange={exp.refresh} />
     : <FermentationView e={e} partner={partner} onChange={exp.refresh} />;
 }
 
-function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
+function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment; onArchive?: () => void }) {
   const nav = useNavigate();
   return (
     <>
@@ -52,9 +53,11 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
               {e.parallel_run_code && ` · parallel run ${e.parallel_run_code}`}</span>
           </div>
           <StatusChip status={e.status} />
+          <ExpTags e={e} />
         </div>
         <div className="row" style={{ gap: 12 }}>
           <ModeTabs e={e} current="fermentation" />
+          <ArchiveButton e={e} onDone={onArchive ?? (() => undefined)} />
           <DeleteExperiment e={e} />
         </div>
       </header>
@@ -100,7 +103,9 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
 
   return (
     <>
-      <Header e={e} partner={partner} />
+      <Header e={e} partner={partner} onArchive={onChange} />
+      {e.end_note && <div className={`banner ${e.status === "aborted" ? "alert" : "warn"} small`} role="note">
+        <b>{e.status === "aborted" ? "Aborted" : "Ended"}{e.ended_at ? ` ${new Date(e.ended_at).toLocaleString()}` : ""}:</b>&nbsp;{e.end_note}</div>}
       {running && (
         <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
           <div className="row" style={{ gap: 24 }}>
@@ -109,9 +114,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
-          <button className="btn outlined" style={{ color: "#22294d" }} onClick={async () => {
-            if (window.confirm(`End production of ${e.code}? Recording stops and the experiment becomes Completed.`)) { await api.end(e.id); onChange(); }
-          }}><Icon name="stop" size={16} />End of production</button>
+          <EndExperimentButton e={e} onDone={onChange} />
         </div>
       )}
 

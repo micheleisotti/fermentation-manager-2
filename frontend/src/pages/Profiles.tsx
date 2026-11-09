@@ -46,7 +46,7 @@ function showLimits(p: Profile) {
   return <span className="stack" style={{ gap: 2 }}>{ph && <span><span className="muted">pH</span> {ph}</span>}{t && <span><span className="muted">T</span> {t} °C</span>}</span>;
 }
 
-export function Profiles() {
+export function Profiles({ embedded = false }: { embedded?: boolean }) {
   const list = usePolling(api.profiles, 60000);
   const [f, setF] = useState(EMPTY);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
@@ -86,7 +86,7 @@ export function Profiles() {
 
   return (
     <>
-      <h1>Controller profiles</h1>
+      {!embedded && <h1>Controller profiles</h1>}
       <span className="muted small">A profile is a named set of setpoints, process limits and pH control settings, loaded onto a controller from the planning screen, before Start.</span>
       <div className="split">
         <div className="wide">

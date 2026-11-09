@@ -8,6 +8,7 @@ export interface Experiment {
   reactor_id: string; status: Status; profile_id: number | null;
   parallel_run_code: string | null; parallel_partner_codes: string[]; channels: Channel[];
   notes: string; started_at: string | null; ended_at: string | null; updated_at: string;
+  archived: boolean; end_note: string | null; author: string; n_sessions: number; created_at: string;
 }
 
 export type Channel = "temperature" | "ph" | "stirrer" | "do2";
@@ -28,7 +29,7 @@ export interface LiveReactor {
   experiment: { id: number; code: string; strain: string; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 
-export interface Named { id: number; name: string; description: string; archived: boolean }
+export interface Named { id: number; name: string; description: string; archived: boolean; n_used: number }
 export interface Profile {
   id: number; name: string; ph_setpoint: number | null; temperature_setpoint: number | null; stirrer_setpoint: number | null;
   ph_control_mode: string | null; ph_pid: Record<string, number> | null; notes: string;
@@ -43,7 +44,7 @@ export type ExperimentDraft = { name: string; reactor_id: string; planned_date?:
 
 export interface Readings { columns: string[]; rows: (number | null)[][] }
 export interface Measurement { id: number; variable_id: number; variable_name: string; sampled_at: string; t_h: number; value: number; unit: string; note: string; author: string }
-export interface Variable { id: number; name: string; unit: string; category: string }
+export interface Variable { id: number; name: string; unit: string; category: string; archived: boolean; n_measurements: number }
 export interface EventItem { id: number; experiment_id: number | null; reactor_id: string; kind: string; severity: "alert" | "info" | "good"; message: string; t_h: number | null; at: string }
 export interface RateBin { t_start_h: number; t_end_h: number; rate_ml_min: number | null; complete: boolean }
 export interface CommandResult { parameter: string; old_value: number | null; requested_value: number; readback_value: number | null; status: string; message: string; warnings: string[] }
@@ -63,7 +64,7 @@ export interface AnalysisResult {
     peak_base_rate_ml_min: number | null; out_of_limit_events: number };
   models: Record<string, string>;
   manual: Record<string, { unit: string; category: string; t: number[]; mean: number[]; sd: (number | null)[]; n: number[] }>;
-  fits: Record<string, { params?: FitParams; curve?: { t: number[]; y: number[] }; error?: string }>;
+  fits: Record<string, { params?: FitParams; curve?: { t: number[]; y: number[] }; error?: string; skipped?: boolean }>;
   series_defs: { key: string; label: string; unit: string }[];
   series: { t: number[] } & Record<string, (number | null)[]>;
   base_dosing: BaseDosing | null; rate_bins: RateBin[]; step_h: number; bin_h: number;
@@ -83,7 +84,7 @@ export interface SessionComparison {
 export interface SessionCurve { t: number[]; mean: number[]; sd: (number | null)[]; n: number; warning: string | null; fit?: { t: number[]; y: number[] } | null }
 export interface SessionResults extends SessionInfo {
   models: Record<string, string>; comparisons: SessionComparison[]; variable: string; step_h: number;
-  variable_options: { key: string; label: string; unit: string; manual: boolean }[];
+  variable_options: { key: string; label: string; unit: string; manual: boolean; category: string | null; fit: boolean }[];
   curves: Record<string, SessionCurve | null>;
   parallel_run_flags: { parallel_run: string; date: string | null; same_condition: boolean; experiments: { code: string; condition: string }[] }[];
   experiments: { id: number; code: string; name: string; strain: string; reactor_id: string; date: string | null; parallel_run: string | null;
@@ -124,14 +125,28 @@ export const api = {
   loadProfile: (id: number) => req<{ results: { parameter: string; status: string; message?: string }[] }>(`/experiments/${id}/load-profile`, { method: "POST" }),
   media: () => req<Named[]>("/media"),
   buffers: () => req<Named[]>("/buffers"),
-  createNamed: (kind: "media" | "buffers", name: string) => req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name }) }),
+  createNamed: (kind: "media" | "buffers", name: string, description = "") =>
+    req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name, description }) }),
   profiles: () => req<Profile[]>("/profiles"),
   createProfile: (body: Omit<Profile, "id">) => req<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
   deleteExperiment: (id: number, code: string) =>
     req<{ deleted: string }>(`/experiments/${id}?confirm=${encodeURIComponent(code)}`, { method: "DELETE" }),
   deleteProfile: (id: number) => req<{ deleted: number; unlinked_experiments: string[] }>(`/profiles/${id}`, { method: "DELETE" }),
   start: (id: number) => req<Experiment>(`/experiments/${id}/start`, { method: "POST" }),
-  end: (id: number) => req<Experiment>(`/experiments/${id}/end`, { method: "POST" }),
+  end: (id: number, outcome: "completed" | "aborted" = "completed", note = "") =>
+    req<Experiment>(`/experiments/${id}/end`, { method: "POST", body: JSON.stringify({ outcome, note }) }),
+  setArchived: (id: number, archived: boolean) =>
+    req<Experiment>(`/experiments/${id}`, { method: "PATCH", body: JSON.stringify({ archived }) }),
+  namedAll: (kind: "media" | "buffers") => req<Named[]>(`/${kind}?include_archived=true`),
+  updateNamed: (kind: "media" | "buffers", id: number, body: { name?: string; description?: string; archived?: boolean }) =>
+    req<Named>(`/${kind}/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteNamed: (kind: "media" | "buffers", id: number) => req<{ deleted: number }>(`/${kind}/${id}`, { method: "DELETE" }),
+  variablesAll: () => req<Variable[]>("/variables?include_archived=true"),
+  createVariable: (body: { name: string; unit: string; category: string }) =>
+    req<Variable>("/variables", { method: "POST", body: JSON.stringify(body) }),
+  updateVariable: (id: number, body: { name?: string; unit?: string; category?: string; archived?: boolean }) =>
+    req<Variable>(`/variables/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteVariable: (id: number) => req<{ deleted: number }>(`/variables/${id}`, { method: "DELETE" }),
   readings: (id: number, sinceH = 0) => req<Readings>(`/experiments/${id}/readings?since_h=${sinceH}`),
   measurements: (id: number) => req<Measurement[]>(`/experiments/${id}/measurements`),
   addMeasurement: (id: number, body: { variable_id: number; value: number; sampled_at?: string; unit?: string; note?: string }) =>

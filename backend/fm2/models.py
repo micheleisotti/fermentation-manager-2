@@ -82,6 +82,7 @@ class Variable(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True)
     unit: Mapped[str] = mapped_column(String(40), default="")
     category: Mapped[VariableCategory] = mapped_column(Enum(VariableCategory))
+    archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
 
 
 class ControllerProfile(Base):
@@ -134,6 +135,9 @@ class Experiment(Base):
     # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)
     channels: Mapped[Optional[list]] = mapped_column(JSON)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Hidden from Home and from analysis-session pickers (reversible; nothing is deleted)
+    archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    end_note: Mapped[Optional[str]] = mapped_column(Text)   # reason given at End of experiment (e.g. why aborted)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # t = 0
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

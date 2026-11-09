@@ -146,6 +146,20 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Desktop/Start-menu shortcut for all Windows users: `deploy\windows\create-shortcut.ps1` (admin, once);
   opens http://localhost:8000 in an Edge/Chrome app window with the FM icon (`fm2.ico`).
 
+## Library, Experiments page, End of experiment (9 Nov 2026)
+- Home shows "Last experiments": recording and planned first, then the most recent, 10 rows, archived hidden.
+- Experiments tab: full list, status chips (incl. Aborted), search, "Analysed" filter, "Show archived".
+  Labels: "Analysed · N" (number of analysis sessions using it; derived, never blocks reuse) and "Archived".
+- Archive (completed/aborted only): hidden from Home and session pickers, kept in sessions already using it;
+  reversible; nothing deleted.
+- One "End of experiment" button (desktop and phone) → Completed (valid, offered in analysis) or Aborted
+  (run failed, kept but not offered), optional note shown on the experiment page and in the event.
+- Library (replaces Profiles; media and buffers moved out of Settings): controller profiles, media,
+  buffers, manual variables. Edit, archive/restore, delete only when unused. New menu links here.
+- Manual variable roles: biomass (growth fit, μmax = specific growth rate), product (fit as accumulation:
+  λ/μmax describe accumulation), substrate and other (plotted/exported, no growth fit). Yields
+  (Yx/s, Yp/x, qs, qp) exist in `analysis/kinetics.compute_kpis` but are not shown yet.
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.

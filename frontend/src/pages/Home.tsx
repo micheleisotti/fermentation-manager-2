@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type EventItem, type Experiment, type LiveReactor, type Status } from "../api";
+import { ExperimentTable } from "./ExperimentsList";
 import { usePolling, fmt, fmtDuration } from "../hooks";
 import { phAndRateOption, trendsOption, TREND_VARS } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
@@ -99,10 +100,6 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
   );
 }
 
-const FILTERS: { key: Status | "all"; label: string }[] = [
-  { key: "all", label: "All" }, { key: "planned", label: "Planned" }, { key: "fermenting", label: "Fermenting" },
-  { key: "completed", label: "Completed" }, { key: "aborted", label: "Aborted" },
-];
 
 const fmtUptime = (s: number) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} d`);
 
@@ -111,15 +108,14 @@ export function Home() {
   const sys = usePolling(api.systemStatus, 30000);
   const exps = usePolling(() => api.experiments(), 30000);
   const events = usePolling(api.recentEvents, 20000);
-  const [filter, setFilter] = useState<Status | "all">("all");
-  const [q, setQ] = useState("");
-  const nav = useNavigate();
 
   const reactors = live.data ?? [];
   const running = reactors.filter((r) => r.experiment);
-  const list = (exps.data ?? []).filter((e) => (filter === "all" || e.status === filter) &&
-    (!q || `${e.code} ${e.name} ${e.strain}`.toLowerCase().includes(q.toLowerCase())));
-  const count = (k: Status | "all") => (exps.data ?? []).filter((e) => k === "all" || e.status === k).length;
+  // Planned and recording first, then the most recent: 10 rows, archived hidden
+  const rank = (e: { status: string }) => (e.status === "fermenting" ? 0 : e.status === "planned" ? 1 : 2);
+  const last = (exps.data ?? []).filter((e) => !e.archived)
+    .sort((x, y) => rank(x) - rank(y) || (y.started_at ?? y.created_at ?? "").localeCompare(x.started_at ?? x.created_at ?? ""))
+    .slice(0, 10);
 
   return (
     <>
@@ -163,41 +159,10 @@ export function Home() {
 
       <section className="stack" aria-labelledby="exp-title">
         <div className="row between">
-          <h2 id="exp-title">Experiments</h2>
-          <label className="field" style={{ minWidth: 280 }}>
-            <span className="sr-only">Search experiments</span>
-            <input type="search" placeholder="Search by code, name or strain" value={q} onChange={(e) => setQ(e.target.value)}
-              style={{ borderRadius: 24, background: "#eef0f4", border: 0 }} />
-          </label>
+          <h2 id="exp-title">Last experiments</h2>
+          <Link className="btn text" to="/experiments">All experiments ({(exps.data ?? []).length}) →</Link>
         </div>
-        <div className="row" role="group" aria-label="Filter by status" style={{ gap: 8 }}>
-          {FILTERS.map((f) => (
-            <button key={f.key} className={`chip ${filter === f.key ? "on" : ""}`} aria-pressed={filter === f.key} onClick={() => setFilter(f.key)}>
-              {filter === f.key && <Icon name="check" size={16} width={2.2} />}{f.label} · {count(f.key)}
-            </button>
-          ))}
-        </div>
-        <div className="card" style={{ padding: 0 }}>
-          <div className="table-wrap">
-            <table className="data" style={{ minWidth: 900 }}>
-              <thead><tr><th>Date</th><th>Experiment</th><th>Strain</th><th>Reactor</th><th>Parallel run</th><th>Status</th><th>Last modified</th></tr></thead>
-              <tbody>
-                {list.map((e: Experiment) => (
-                  <tr key={e.id} className="click" onClick={() => nav(`/experiments/${e.id}`)}>
-                    <td className="mono">{e.planned_date ?? "—"}</td>
-                    <td><span className="mono" style={{ fontWeight: 600 }}>{e.code}</span> · {e.name}</td>
-                    <td className="mono">{e.strain || "—"}</td>
-                    <td className="mono">{e.reactor_id}</td>
-                    <td className="mono muted">{e.parallel_run_code ?? "—"}</td>
-                    <td><StatusChip status={e.status} /></td>
-                    <td className="mono muted">{new Date(e.updated_at).toLocaleString()}</td>
-                  </tr>
-                ))}
-                {list.length === 0 && <tr><td colSpan={7} className="muted">No experiments.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ExperimentTable list={last} empty="No experiments yet: plan one with New → Experiment." />
       </section>
     </>
   );

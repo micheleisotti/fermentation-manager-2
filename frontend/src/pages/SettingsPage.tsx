@@ -13,7 +13,6 @@ const SECTIONS = [
   { id: "remote", label: "Remote access" },
   { id: "alerts", label: "Notifications" },
   { id: "backup", label: "Data and backup" },
-  { id: "lists", label: "Media and buffers" },
   { id: "credits", label: "Credits and license" },
 ];
 
@@ -62,33 +61,6 @@ function useSection<K extends keyof AppSettings>(all: AppSettings | undefined, k
 
 const NUM = { style: { fontFamily: "var(--font-mono)", width: 96 }, inputMode: "decimal" as const };
 const num = (s: string) => (s.trim() === "" ? NaN : Number(s.replace(",", ".")));
-
-function NamedList({ kind, label }: { kind: "media" | "buffers"; label: string }) {
-  const list = usePolling(kind === "media" ? api.media : api.buffers, 600000);
-  const [name, setName] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  async function add() {
-    setErr(null);
-    try { await api.createNamed(kind, name.trim()); setName(""); list.refresh(); }
-    catch (x) { setErr((x as Error).message); }
-  }
-  return (
-    <div className="stack" style={{ gap: 8 }}>
-      <span className="small muted">{label}</span>
-      <div className="row" style={{ gap: 8 }}>
-        {(list.data ?? []).filter((x) => !x.archived).map((x) => <span key={x.id} className="pill">{x.name}</span>)}
-        {(list.data ?? []).length === 0 && <span className="small muted">None yet.</span>}
-      </div>
-      <div className="row" style={{ gap: 8, flexWrap: "nowrap", maxWidth: 520 }}>
-        <label className="field" style={{ flex: "1 1 auto" }}><span className="sr-only">New {label}</span>
-          <input value={name} placeholder={kind === "media" ? "e.g. MRS, CDM + 2% glucose" : "e.g. NaOH 2 M"}
-            onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) void add(); }} /></label>
-        <button className="btn tonal" disabled={!name.trim()} onClick={add}>Add</button>
-      </div>
-      {err && <div className="banner alert small">{err}</div>}
-    </div>
-  );
-}
 
 function UsersSection() {
   const ctx = useUser();
@@ -364,11 +336,6 @@ export function SettingsPage() {
             </div>
             <span className="xs muted">Backups are consistent copies made while recording continues. Do not point the destination at the live data folder, and never open the live database from a synced folder.
               Restore from a backup is done with the service stopped (procedure in the docs).</span>
-          </Section>
-
-          <Section id="lists" title="Media and buffers" sub="Choices offered when planning an experiment. Items used in an experiment are kept, so old experiments keep their references.">
-            <NamedList kind="media" label="Media" />
-            <NamedList kind="buffers" label="Buffers / bases" />
           </Section>
 
           <Section id="credits" title="Credits and license">

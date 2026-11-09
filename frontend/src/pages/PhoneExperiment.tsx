@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { EndExperimentButton } from "./ExperimentsList";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, usePolling } from "../hooks";
 import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
@@ -46,7 +47,7 @@ function Collapsible({ open, onToggle, icon, title, sub, aside, children, label 
   );
 }
 
-export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Experiment }) {
+export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; partner?: Experiment; onChange?: () => void }) {
   const nav = useNavigate();
   const running = e.status === "fermenting";
   const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id]);
@@ -211,6 +212,8 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
           ))}
         </Collapsible>
       )}
+
+      {running && <EndExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
 
       {full && <FullscreenChart e={e} partner={partner} partnerReadings={partnerReadings.data} onClose={() => setFull(false)} />}
       {limitsDialog && s && (

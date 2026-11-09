@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete as sa_delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from .. import __version__
 from ..acquisition import Acquisition, _as_utc
@@ -195,6 +195,11 @@ def _exp_out(e: Experiment) -> S.ExperimentOut:
     out = S.ExperimentOut.model_validate(e)
     out.status = e.status.value
     out.channels = channels_of(e)
+    out.archived = bool(e.archived)
+    sess = object_session(e)
+    if sess is not None:
+        out.n_sessions = sess.scalar(select(func.count(func.distinct(SessionMember.session_id)))
+                                     .where(SessionMember.experiment_id == e.id)) or 0
     if e.parallel_run:
         out.parallel_run_code = e.parallel_run.code
         out.parallel_partner_codes = [x.code for x in e.parallel_run.experiments if x.id != e.id]
@@ -222,7 +227,7 @@ def _catalogue(path: str, model):
         q = select(model).order_by(model.created_at.desc())
         if not include_archived:
             q = q.where(model.archived.is_(False))
-        return db.scalars(q).all()
+        return [_named_out(db, o) for o in db.scalars(q)]
 
     @router.post(f"/{path}", response_model=S.NamedOut, status_code=201, name=f"create_{path}")
     def _create(body: S.NamedIn, db: Session = Depends(get_db)):
@@ -231,35 +236,113 @@ def _catalogue(path: str, model):
         obj = model(name=body.name, description=body.description)
         db.add(obj)
         db.flush()
-        return obj
+        return _named_out(db, obj)
 
     @router.post(f"/{path}/{{item_id}}/archive", response_model=S.NamedOut, name=f"archive_{path}")
     def _archive(item_id: int, db: Session = Depends(get_db)):
         obj = _404(db.get(model, item_id))
         obj.archived = True  # used items are archived, never deleted
-        return obj
+        return _named_out(db, obj)
+
+    @router.put(f"/{path}/{{item_id}}", response_model=S.NamedOut, name=f"update_{path}")
+    def _update(item_id: int, body: S.NamedPatch, db: Session = Depends(get_db)):
+        obj = _404(db.get(model, item_id))
+        if body.name is not None:
+            name = body.name.strip()
+            if not name or db.scalar(select(model).where(model.name == name, model.id != item_id)):
+                raise HTTPException(409, "Name empty or already used")
+            obj.name = name
+        if body.description is not None:
+            obj.description = body.description
+        if body.archived is not None:
+            obj.archived = body.archived
+        db.flush()
+        return _named_out(db, obj)
+
+    @router.delete(f"/{path}/{{item_id}}", name=f"delete_{path}")
+    def _delete(item_id: int, db: Session = Depends(get_db)):
+        obj = _404(db.get(model, item_id))
+        n = _n_used(db, obj)
+        if n:
+            raise HTTPException(409, f"'{obj.name}' is used by {n} experiment(s): archive it instead.")
+        db.delete(obj)
+        return {"deleted": item_id}
+
+
+def _n_used(db: Session, obj) -> int:
+    col = Experiment.medium_id if isinstance(obj, Medium) else Experiment.buffer_id
+    return db.scalar(select(func.count()).select_from(Experiment).where(col == obj.id)) or 0
+
+
+def _named_out(db: Session, obj) -> S.NamedOut:
+    out = S.NamedOut.model_validate(obj)
+    out.n_used = _n_used(db, obj)
+    return out
 
 
 _catalogue("media", Medium)
 _catalogue("buffers", Buffer)
 
 
+VARIABLE_ROLES = ("biomass", "product", "substrate", "other")
+FIT_ROLES = ("biomass", "product")   # growth-like (increasing) curves: the primary models apply
+
+
+def _var_out(db: Session, v: Variable) -> S.VariableOut:
+    n = db.scalar(select(func.count()).select_from(ManualMeasurement).where(ManualMeasurement.variable_id == v.id)) or 0
+    return S.VariableOut(id=v.id, name=v.name, unit=v.unit, category=v.category.value, archived=bool(v.archived),
+                         n_measurements=n)
+
+
+def _role(value: str) -> VariableCategory:
+    if value not in VARIABLE_ROLES:
+        raise HTTPException(422, f"Role must be one of {', '.join(VARIABLE_ROLES)}")
+    return VariableCategory(value)
+
+
 @router.get("/variables", response_model=list[S.VariableOut])
-def list_variables(db: Session = Depends(get_db)):
-    return [S.VariableOut(id=v.id, name=v.name, unit=v.unit, category=v.category.value)
-            for v in db.scalars(select(Variable).order_by(Variable.name))]
+def list_variables(db: Session = Depends(get_db), include_archived: bool = False):
+    vs = db.scalars(select(Variable).order_by(Variable.name)).all()
+    return [_var_out(db, v) for v in vs if include_archived or not v.archived]
 
 
 @router.post("/variables", response_model=S.VariableOut, status_code=201)
 def create_variable(body: S.VariableIn, db: Session = Depends(get_db)):
-    try:
-        cat = VariableCategory(body.category)
-    except ValueError:
-        raise HTTPException(422, f"Category must be one of {[c.value for c in VariableCategory]}")
-    v = Variable(name=body.name, unit=body.unit, category=cat)
+    name = body.name.strip()
+    if db.scalar(select(Variable).where(func.lower(Variable.name) == name.lower())):
+        raise HTTPException(409, f"A variable named {name} already exists")
+    v = Variable(name=name, unit=body.unit.strip(), category=_role(body.category))
     db.add(v)
     db.flush()
-    return S.VariableOut(id=v.id, name=v.name, unit=v.unit, category=v.category.value)
+    return _var_out(db, v)
+
+
+@router.put("/variables/{vid}", response_model=S.VariableOut)
+def update_variable(vid: int, body: S.VariablePatch, db: Session = Depends(get_db)):
+    """Rename, change unit or role, archive. Measurements keep the unit they were entered with."""
+    v = _404(db.get(Variable, vid))
+    if body.name is not None:
+        name = body.name.strip()
+        if not name or db.scalar(select(Variable).where(func.lower(Variable.name) == name.lower(), Variable.id != vid)):
+            raise HTTPException(409, "Name empty or already used")
+        v.name = name
+    if body.unit is not None:
+        v.unit = body.unit.strip()
+    if body.category is not None:
+        v.category = _role(body.category)
+    if body.archived is not None:
+        v.archived = body.archived
+    db.flush()
+    return _var_out(db, v)
+
+
+@router.delete("/variables/{vid}")
+def delete_variable(vid: int, db: Session = Depends(get_db)):
+    v = _404(db.get(Variable, vid))
+    if _var_out(db, v).n_measurements:
+        raise HTTPException(409, f"{v.name} has measurements: archive it instead.")
+    db.delete(v)
+    return {"deleted": vid}
 
 
 @router.get("/profiles", response_model=list[S.ProfileOut])
@@ -497,30 +580,37 @@ def start_experiment(exp_id: int, request: Request, db: Session = Depends(get_db
     return _exp_out(e)
 
 
-def _close(exp_id: int, request: Request, db: Session, status: ExperimentStatus) -> S.ExperimentOut:
+def _close(exp_id: int, request: Request, db: Session, status: ExperimentStatus, note: str = "") -> S.ExperimentOut:
     e = _404(db.get(Experiment, exp_id))
     if e.status != ExperimentStatus.fermenting:
         raise HTTPException(409, "Experiment is not fermenting")
     e.status, e.ended_at = status, now_of(request)
+    e.end_note = note.strip() or None
     t_h = (_as_utc(e.ended_at) - _as_utc(e.started_at)).total_seconds() / 3600 if e.started_at else None
     _event(db, e, "ended" if status == ExperimentStatus.completed else "aborted",
-           f"{e.code} {'ended (end of production)' if status == ExperimentStatus.completed else 'aborted'} by {who(request, db)}", t_h)
+           f"{e.code} {'completed' if status == ExperimentStatus.completed else 'aborted'} by {who(request, db)}"
+           + (f": {e.end_note}" if e.end_note else ""), t_h)
     return _exp_out(e)
 
 
 @router.post("/experiments/{exp_id}/end", response_model=S.ExperimentOut)
-def end_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
-    out = _close(exp_id, request, db, ExperimentStatus.completed)
+def end_experiment(exp_id: int, request: Request, body: Optional[S.EndIn] = None, db: Session = Depends(get_db)):
+    """End of experiment: outcome "completed" (end of production) or "aborted" (run failed), with an optional note."""
+    body = body or S.EndIn()
+    if body.outcome not in ("completed", "aborted"):
+        raise HTTPException(422, "Outcome must be completed or aborted")
+    status = ExperimentStatus.completed if body.outcome == "completed" else ExperimentStatus.aborted
+    out = _close(exp_id, request, db, status, body.note)
     db.commit()
     cfg = request.app.state.app_settings.get("backup")
     if cfg["enabled"] and cfg["on_end_of_production"] and cfg["destination"]:
-        request.app.state.backups.run_in_background(f"end of production {out.code}")
+        request.app.state.backups.run_in_background(f"end of experiment {out.code} ({body.outcome})")
     return out
 
 
 @router.post("/experiments/{exp_id}/abort", response_model=S.ExperimentOut)
 def abort_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
-    return _close(exp_id, request, db, ExperimentStatus.aborted)
+    return end_experiment(exp_id, request, S.EndIn(outcome="aborted"), db)
 
 
 @router.delete("/experiments/{exp_id}")
@@ -807,6 +897,10 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
     for v in _measured_variables(db, exp_id):
         t, y = _manual_series(db, exp_id, v.name)
         manual[v.name] = {"unit": v.unit, "category": v.category.value, **report.grouped_points(t, y)}
+        if v.category.value not in FIT_ROLES:
+            fits[v.name] = {"error": f"Not fitted: {v.category.value} variables are not growth curves "
+                                     "(change the role in Library › Variables).", "skipped": True}
+            continue
         f, err = _fit(db, exp_id, v.name, model)
         fits[v.name] = {"params": f.summary(), "curve": f.curve()} if f else {"error": err}
     keys = [sd.key for sd in report.CONTROLLER_SERIES if sd.channel in ch]
@@ -1058,12 +1152,13 @@ def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: O
             "ci95": cmp.ci95, "posthoc": cmp.posthoc, "warning": cmp.warning,
             "conditions": {c: x.__dict__ for c, x in cmp.conditions.items()}})
     is_manual = variable not in SESSION_CTRL_VARS
+    cats = {v.name: v.category.value for v in db.scalars(select(Variable))}
     curves = {}
     for c, ids in by_cond.items():
         if not ids:
             continue
         curve = _session_curve(db, ids, variable, step_h)
-        if curve is not None and is_manual:
+        if curve is not None and is_manual and cats.get(variable) in FIT_ROLES:
             curve["fit"] = _pooled_fit(db, ids, variable, model)
         curves[c] = curve
     runs: dict[str, dict] = {}
@@ -1077,8 +1172,9 @@ def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: O
     manual_vars = sorted({v.name for eid in exps for v in _measured_variables(db, eid)},
                          key=lambda n: ({"OD600": 0, "AFU": 1}.get(n, 2), n))
     units = {v.name: v.unit for v in db.scalars(select(Variable))}
-    var_opts = [{"key": n, "label": n, "unit": units.get(n, ""), "manual": True} for n in manual_vars]
-    var_opts += [{"key": k, "label": l, "unit": u, "manual": False} for k, (l, u) in SESSION_CTRL_VARS.items()
+    var_opts = [{"key": n, "label": n, "unit": units.get(n, ""), "manual": True, "category": cats.get(n),
+                 "fit": cats.get(n) in FIT_ROLES} for n in manual_vars]
+    var_opts += [{"key": k, "label": l, "unit": u, "manual": False, "category": None, "fit": False} for k, (l, u) in SESSION_CTRL_VARS.items()
                  if any(k in channels_of(e) or (k.startswith("base") and "ph" in channels_of(e)) for e in exps.values())]
     experiments = [{"id": e.id, "code": e.code, "name": e.name, "strain": e.strain, "reactor_id": e.reactor_id,
                     "date": e.started_at.date().isoformat() if e.started_at else None,

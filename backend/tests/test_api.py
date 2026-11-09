@@ -330,3 +330,34 @@ def test_users_pin_and_signatures(env):
     for _ in range(5):
         c.post("/api/auth/login", json={"user_id": mid, "pin": "0000"})
     assert c.post("/api/auth/login", json={"user_id": mid, "pin": "13579"}).status_code == 429
+
+
+def test_library_archive_and_end_outcome(env):
+    c, clock, app, _ = env
+    # variables: roles, rename, archive, delete only if unused
+    v = c.post("/api/variables", json={"name": "Residual sugar", "unit": "g/L", "category": "substrate"}).json()
+    assert c.post("/api/variables", json={"name": "residual sugar", "unit": "", "category": "other"}).status_code == 409
+    assert c.post("/api/variables", json={"name": "X", "unit": "", "category": "nonsense"}).status_code == 422
+    assert c.put(f"/api/variables/{v['id']}", json={"unit": "mM"}).json()["unit"] == "mM"
+    # media: rename, archive, delete refused when used
+    m = c.post("/api/media", json={"name": "MRS"}).json()
+    e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "medium_id": m["id"]}).json()
+    assert c.get("/api/media").json()[0]["n_used"] == 1
+    assert c.delete(f"/api/media/{m['id']}").status_code == 409
+    assert c.put(f"/api/media/{m['id']}", json={"name": "MRS broth", "archived": True}).json()["archived"] is True
+    assert c.get("/api/media").json() == [] and len(c.get("/api/media?include_archived=true").json()) == 1
+    # substrate variables are plotted, not fitted
+    c.post(f"/api/experiments/{e['id']}/start")
+    for i in range(5):
+        clock.advance(hours=1)
+        c.post(f"/api/experiments/{e['id']}/measurements", json={"variable_id": v["id"], "value": 20 - 3 * i})
+    assert c.delete(f"/api/variables/{v['id']}").status_code == 409
+    an = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    assert an["fits"]["Residual sugar"]["skipped"] is True and len(an["manual"]["Residual sugar"]["t"]) == 5
+    # one End of experiment with outcome + note; archive
+    assert c.post(f"/api/experiments/{e['id']}/end", json={"outcome": "maybe"}).status_code == 422
+    out = c.post(f"/api/experiments/{e['id']}/end", json={"outcome": "aborted", "note": "contaminated"}).json()
+    assert out["status"] == "aborted" and out["end_note"] == "contaminated"
+    assert any("aborted" in x["message"] and "contaminated" in x["message"] for x in c.get(f"/api/experiments/{e['id']}/events").json())
+    assert c.patch(f"/api/experiments/{e['id']}", json={"archived": True}).json()["archived"] is True
+    assert c.get(f"/api/experiments/{e['id']}").json()["n_sessions"] == 0

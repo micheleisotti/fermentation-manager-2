@@ -5,6 +5,7 @@ import { CustomChart, ScatterChart } from "echarts/charts";
 import { api, type Experiment, type SessionBody, type SessionInfo, type SessionResults } from "../api";
 import { fmt, usePolling } from "../hooks";
 import { EChart, Icon, Segmented } from "../components/ui";
+import { ExpTags } from "./ExperimentsList";
 
 echarts.use([ScatterChart, CustomChart]);
 
@@ -95,7 +96,7 @@ export function SessionPage() {
             <span className="small muted">Fit on</span>
             <select value={sess.fit_variable} onChange={(x) => save({ ...body, fit_variable: x.target.value })} style={{ height: 36 }}
               aria-label="Variable for kinetic fit">
-              {(r?.variable_options.filter((o) => o.manual) ?? [{ key: sess.fit_variable }]).map((o) => <option key={o.key}>{o.key}</option>)}
+              {(r?.variable_options.filter((o) => o.fit) ?? [{ key: sess.fit_variable }]).map((o) => <option key={o.key}>{o.key}</option>)}
             </select>
             <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <span className="muted">Model</span>
@@ -122,7 +123,7 @@ export function SessionPage() {
             <SessionChart r={r} />
             <span className="small muted">
               {r.variable_options.find((o) => o.key === r.variable)?.manual
-                ? "Mean ± SD per condition: each experiment is interpolated linearly on the grid, within the time range common to its replicates. Line = model fitted on the pooled replicates (each normalised to its first point)."
+                ? (r.variable_options.find((o) => o.key === r.variable)?.fit ? "" : "Not a growth-like variable: no model line. ") + "Mean ± SD per condition: each experiment is interpolated linearly on the grid, within the time range common to its replicates. Line = model fitted on the pooled replicates (each normalised to its first point)."
                 : "Mean ± SD per condition of the per-experiment interval means; intervals missing in any replicate are left out."}
               {Object.values(r.curves).some((c) => c?.warning) && ` ${[...new Set(Object.values(r.curves).map((c) => c?.warning).filter(Boolean))].join(" ")}`}
             </span>
@@ -159,13 +160,15 @@ function Step1({ sess, body, save, all, flags }: { sess: SessionInfo; body: Sess
   flags: SessionResults["parallel_run_flags"] }) {
   const [show, setShow] = useState<"selected" | "all">(Object.keys(sess.members).length ? "selected" : "all");
   const [filter, setFilter] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [newCond, setNewCond] = useState<string | null>(null);
   const selected = new Set(Object.keys(sess.members).map(Number));
   const rows = useMemo(() => all
     .filter((e) => show === "all" || selected.has(e.id))
+    .filter((e) => showArchived || !e.archived || selected.has(e.id))
     .filter((e) => !filter || `${e.code} ${e.name} ${e.strain} ${e.started_at ?? ""}`.toLowerCase().includes(filter.toLowerCase()))
     .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? "")),
-  [all, show, filter, sess.members]);  // eslint-disable-line react-hooks/exhaustive-deps
+  [all, show, filter, showArchived, sess.members]);  // eslint-disable-line react-hooks/exhaustive-deps
   const ci = (c: string) => Math.max(0, sess.conditions.indexOf(c));
 
   const setMember = (eid: number, cond: string | null) => {
@@ -218,6 +221,8 @@ function Step1({ sess, body, save, all, flags }: { sess: SessionInfo; body: Sess
         <button className={`chip ${show === "all" ? "on" : ""}`} aria-pressed={show === "all"} onClick={() => setShow("all")}>All completed · {all.length}</button>
         <button className={`chip ${show === "selected" ? "on" : ""}`} aria-pressed={show === "selected"} onClick={() => setShow("selected")}>
           {show === "selected" && <Icon name="check" size={16} width={2.4} />}Selected · {selected.size}</button>
+        <label className="row small" style={{ gap: 6 }}><input type="checkbox" checked={showArchived}
+          onChange={(x) => setShowArchived(x.target.checked)} style={{ width: 18, height: 18 }} />Show archived</label>
         <label className="search-pill"><span className="sr-only">Filter experiments</span>
           <input type="search" placeholder="Filter by code, strain, name, date" value={filter} onChange={(x) => setFilter(x.target.value)} /></label>
       </div>
@@ -234,7 +239,8 @@ function Step1({ sess, body, save, all, flags }: { sess: SessionInfo; body: Sess
                 <tr key={e.id}>
                   <td><input type="checkbox" checked={selected.has(e.id)} aria-label={`Include ${e.code}`} style={{ width: 20, height: 20 }}
                     onChange={() => setMember(e.id, selected.has(e.id) ? null : (sess.conditions[0] ?? "A"))} /></td>
-                  <td><Link to={`/analysis/experiments/${e.id}`} className="mono" style={{ fontWeight: 600 }}>{e.code}</Link> · {e.name}</td>
+                  <td><Link to={`/analysis/experiments/${e.id}`} className="mono" style={{ fontWeight: 600 }}>{e.code}</Link> · {e.name}
+                    <span className="row" style={{ gap: 4, display: "inline-flex", marginLeft: 6 }}><ExpTags e={e} /></span></td>
                   <td className="mono">{e.started_at ? e.started_at.slice(0, 10) : "—"}</td>
                   <td className="mono">{e.strain || "—"}</td>
                   <td className="mono">{e.reactor_id}</td>

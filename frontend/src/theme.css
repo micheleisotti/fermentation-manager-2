@@ -239,3 +239,13 @@ input.cond-add { border-style: solid; color: var(--ink); width: 180px; }
 .user-btn-name { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .user-menu { top: auto; bottom: 0; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) { .user-btn-wrap { display: none; } }
+
+/* tags, choices, library */
+.tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.tag.analysed { background: #dff1ea; color: #1f5f4c; }
+.tag.archived { background: #e4e5e8; color: #54565a; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--outline-variant); border-radius: 12px; cursor: pointer; }
+.choice.on { border-color: var(--primary); background: var(--primary-container); }
+.choice input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.lib-tabs { height: 40px; border-radius: 20px; align-self: flex-start; flex-wrap: wrap; height: auto; }
+.lib-tabs button { height: 38px; padding: 0 18px; font-size: 14px; }

@@ -20,6 +20,7 @@ class NamedOut(ORM):
     name: str
     description: str
     archived: bool
+    n_used: int = 0
 
 
 class VariableIn(BaseModel):
@@ -33,6 +34,26 @@ class VariableOut(ORM):
     name: str
     unit: str
     category: str
+    archived: bool = False
+    n_measurements: int = 0
+
+
+class VariablePatch(BaseModel):
+    name: Optional[str] = None
+    unit: Optional[str] = None
+    category: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class NamedPatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class EndIn(BaseModel):
+    outcome: str = "completed"     # "completed" | "aborted"
+    note: str = ""
 
 
 class ProfileIn(BaseModel):
@@ -90,6 +111,7 @@ class ExperimentPatch(BaseModel):
     reactor_id: Optional[str] = None
     channels: Optional[list[str]] = None
     notes: Optional[str] = None
+    archived: Optional[bool] = None
 
 
 class ExperimentOut(ORM):
@@ -112,6 +134,10 @@ class ExperimentOut(ORM):
     ended_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    archived: Optional[bool] = False
+    end_note: Optional[str] = None
+    author: str = ""
+    n_sessions: int = 0
 
 
 class ParallelIn(BaseModel):

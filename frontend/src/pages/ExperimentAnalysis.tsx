@@ -208,7 +208,9 @@ function pm(v: number | undefined | null, se: number | undefined | null, d: numb
 }
 
 function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string; setModel: (m: string) => void }) {
-  const vars = Object.keys(a.fits);
+  const vars = Object.keys(a.fits).filter((k) => !a.fits[k].skipped);
+  const skipped = Object.keys(a.fits).filter((k) => a.fits[k].skipped);
+  const products = vars.filter((k) => a.manual[k]?.category === "product");
   const rows: { p: string; u: string; v: (k: string) => string }[] = [
     { p: "Lag time λ", u: "(h)", v: (k) => pm(a.fits[k].params?.lag_h, a.fits[k].params?.lag_se, 2) },
     { p: "μmax", u: "(h⁻¹)", v: (k) => pm(a.fits[k].params?.mu_max_per_h, a.fits[k].params?.mu_max_se, 3) },
@@ -246,7 +248,7 @@ function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string
       {vars.length === 0 ? <span className="muted">No manual measurements: nothing to fit.</span> : (
         <div className="table-wrap">
           <table className="data">
-            <thead><tr><th>Parameter</th>{vars.map((k) => <th key={k} className="num">on {k}</th>)}</tr></thead>
+            <thead><tr><th>Parameter</th>{vars.map((k) => <th key={k} className="num">on {k}{a.manual[k]?.category === "product" ? " (product)" : ""}</th>)}</tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.p}><td>{r.p} <span className="muted">{r.u}</span></td>
@@ -261,7 +263,9 @@ function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string
           {vars.filter((k) => a.fits[k].error).map((k) => (
             <div key={k} className="small" style={{ color: "#8a5a00", marginTop: 6 }}><b>{k}:</b> {a.fits[k].error}</div>
           ))}
-          <div className="small muted" style={{ marginTop: 6 }}>Fitted on y = ln(X/X₀), X₀ = first measurement; ± = standard error of the fit.</div>
+          <div className="small muted" style={{ marginTop: 6 }}>Fitted on y = ln(X/X₀), X₀ = first measurement; ± = standard error of the fit.
+            {products.length > 0 && <> For product variables ({products.join(", ")}) λ and μmax describe accumulation (specific accumulation rate), not growth.</>}
+            {skipped.length > 0 && <> Not fitted (substrate/other role): {skipped.join(", ")}.</>}</div>
         </div>
       )}
       {bd ? (
@@ -369,7 +373,7 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
 export function AnalysisHome() {
   const list = usePolling(() => api.experiments(), 60000);
   const sessions = usePolling(api.sessions, 60000);
-  const done = (list.data ?? []).filter((x) => x.status !== "planned")
+  const done = (list.data ?? []).filter((x) => x.status !== "planned" && !x.archived)
     .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
   return (
     <>
