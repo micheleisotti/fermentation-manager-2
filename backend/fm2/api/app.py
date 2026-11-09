@@ -38,6 +38,8 @@ from ..models import (
     PhControlMode, SessionMember, SetpointCommand, Variable, VariableCategory,
 )
 from ..services import commands
+from .. import users as users_mod
+from ..models import GUEST_NAME, User
 from . import schemas as S
 
 
@@ -55,6 +57,8 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
         log.info("database: added column %s", c)
     sessions = make_session_factory(engine)
     with session_scope(sessions) as s:
+        if not s.scalar(select(User.id).where(User.name == GUEST_NAME)):
+            s.add(User(name=GUEST_NAME))
         if not s.scalar(select(func.count()).select_from(Variable)):
             s.add_all(Variable(name=n, unit=u, category=c) for n, u, c in DEFAULT_VARIABLES)
 
@@ -84,6 +88,8 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
     app = FastAPI(title="Fermentation Manager", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.sessions, app.state.acq, app.state.clock = settings, sessions, acq, clock
     app.state.app_settings, app.state.notifier, app.state.backups = app_settings, notifier, backups
+    app.state.auth_secret = users_mod.load_secret(db_file.parent / "auth-secret.txt")
+    app.state.pin_throttle = users_mod.Throttle()
     app.include_router(router, prefix="/api")
     _mount_frontend(app, settings)
     return app
@@ -150,6 +156,26 @@ def _404(obj, what="Not found"):
 def _next_code(db: Session, model, prefix: str) -> str:
     n = (db.scalar(select(func.max(model.id))) or 0) + 1
     return f"{prefix}-{n:03d}"
+
+
+def current_user(request: Request, db: Session) -> Optional[User]:
+    """The signed-in user from the X-FM2-Token header (None = not signed in)."""
+    tok = request.headers.get("x-fm2-token", "")
+    parsed = users_mod.parse_token(request.app.state.auth_secret, tok) if tok else None
+    if not parsed:
+        return None
+    u = db.get(User, parsed[0])
+    return u if u and not u.archived and u.token_version == parsed[1] else None
+
+
+def who(request: Request, db: Session) -> str:
+    """Name recorded on data: the signed-in user, or Guest."""
+    u = current_user(request, db)
+    return u.name if u else GUEST_NAME
+
+
+def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None) -> None:
+    db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity="info", message=message, t_h=t_h))
 
 
 def channels_of(e: Experiment) -> list[str]:
@@ -248,8 +274,9 @@ def _profile_out(p: ControllerProfile) -> S.ProfileOut:
 
 
 @router.post("/profiles", response_model=S.ProfileOut, status_code=201)
-def create_profile(body: S.ProfileIn, db: Session = Depends(get_db)):
+def create_profile(body: S.ProfileIn, request: Request, db: Session = Depends(get_db)):
     data = body.model_dump()
+    data["author"] = who(request, db)
     if data["ph_control_mode"]:
         data["ph_control_mode"] = PhControlMode(data["ph_control_mode"])
     p = ControllerProfile(**data)
@@ -297,6 +324,7 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
     data = body.model_dump()
     data["planned_date"] = data["planned_date"] or now_of(request).date().isoformat()
     data["channels"] = _check_channels(data.get("channels"))
+    data["author"] = who(request, db)
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
     db.add(e)
     db.flush()
@@ -365,7 +393,8 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
             results.append({"parameter": param, "status": status, "message": str(ex)})
             continue
         db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=param, old_value=cur,
-                               requested_value=value, readback_value=rb, status=status, origin="profile"))
+                               requested_value=value, readback_value=rb, status=status, origin="profile",
+                               author=who(request, db)))
         results.append({"parameter": param, "status": status, "readback": rb})
     for param, lo, hi in (("ph", prof.ph_low_limit, prof.ph_high_limit),
                           ("temperature", prof.temperature_low_limit, prof.temperature_high_limit)):
@@ -376,7 +405,7 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
                 db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=r.parameter,
                                        old_value=r.old_value, requested_value=r.requested_value,
                                        readback_value=r.readback_value, status=r.status, message=r.message,
-                                       origin="profile"))
+                                       origin="profile", author=who(request, db)))
                 results.append({"parameter": r.parameter, "status": r.status, "readback": r.readback_value,
                                 **({"message": r.message} if r.status != "confirmed" else {})})
         except commands.CommandRejected as ex:
@@ -452,6 +481,7 @@ def start_experiment(exp_id: int, request: Request, db: Session = Depends(get_db
     if hasattr(driver, "on_experiment_start"):
         driver.on_experiment_start()  # simulator only: fresh culture
     e.status, e.started_at = ExperimentStatus.fermenting, now_of(request)
+    _event(db, e, "started", f"{e.code} started by {who(request, db)}", 0.0)
     if e.profile:
         p = e.profile
         e.plan_snapshot = {"profile": p.name, "ph_setpoint": p.ph_setpoint,
@@ -472,6 +502,9 @@ def _close(exp_id: int, request: Request, db: Session, status: ExperimentStatus)
     if e.status != ExperimentStatus.fermenting:
         raise HTTPException(409, "Experiment is not fermenting")
     e.status, e.ended_at = status, now_of(request)
+    t_h = (_as_utc(e.ended_at) - _as_utc(e.started_at)).total_seconds() / 3600 if e.started_at else None
+    _event(db, e, "ended" if status == ExperimentStatus.completed else "aborted",
+           f"{e.code} {'ended (end of production)' if status == ExperimentStatus.completed else 'aborted'} by {who(request, db)}", t_h)
     return _exp_out(e)
 
 
@@ -568,7 +601,7 @@ def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Se
     var = _404(db.get(Variable, body.variable_id), "Unknown variable")
     at = body.sampled_at or now_of(request)
     m = ManualMeasurement(experiment_id=e.id, variable_id=var.id, sampled_at=at, t_h=_t_h(e, at),
-                          value=body.value, unit=body.unit or var.unit, note=body.note, author=body.author)
+                          value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db))
     db.add(m)
     db.flush()
     db.refresh(m)
@@ -576,7 +609,7 @@ def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Se
 
 
 @router.patch("/measurements/{mid}", response_model=S.MeasurementOut)
-def edit_measurement(mid: int, body: S.MeasurementPatch, db: Session = Depends(get_db)):
+def edit_measurement(mid: int, body: S.MeasurementPatch, request: Request, db: Session = Depends(get_db)):
     m = _404(db.get(ManualMeasurement, mid))
     old = {"value": m.value, "sampled_at": m.sampled_at.isoformat(), "unit": m.unit, "note": m.note}
     data = body.model_dump(exclude_unset=True, exclude={"author"})
@@ -585,7 +618,7 @@ def edit_measurement(mid: int, body: S.MeasurementPatch, db: Session = Depends(g
     if "sampled_at" in data:
         m.t_h = _t_h(db.get(Experiment, m.experiment_id), m.sampled_at)
     new = {"value": m.value, "sampled_at": _as_utc(m.sampled_at).isoformat(), "unit": m.unit, "note": m.note}
-    db.add(ManualMeasurementEdit(measurement_id=m.id, old=old, new=new, author=body.author))
+    db.add(ManualMeasurementEdit(measurement_id=m.id, old=old, new=new, author=who(request, db)))
     return _meas_out(m)
 
 
@@ -628,13 +661,13 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     except commands.CommandRejected as ex:
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id,
                                parameter=body.parameter, requested_value=body.value, status="rejected",
-                               message=str(ex), origin=body.origin, author=body.author))
+                               message=str(ex), origin=body.origin, author=who(request, db)))
         db.commit()
         raise HTTPException(422, str(ex))
     db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=res.parameter,
                            old_value=res.old_value, requested_value=res.requested_value,
                            readback_value=res.readback_value, status=res.status, message=res.message,
-                           origin=body.origin, author=body.author))
+                           origin=body.origin, author=who(request, db)))
     return res.__dict__
 
 
@@ -659,7 +692,7 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=r.parameter,
                                old_value=r.old_value, requested_value=r.requested_value,
                                readback_value=r.readback_value, status=r.status, message=r.message,
-                               origin=body.origin, author=body.author))
+                               origin=body.origin, author=who(request, db)))
     return [r.__dict__ for r in results]
 
 
@@ -688,6 +721,19 @@ def _manual_series(db: Session, exp_id: int, variable: str) -> tuple[np.ndarray,
          .where(ManualMeasurement.experiment_id == exp_id, Variable.name == variable).order_by(ManualMeasurement.t_h))
     rows = db.execute(q).all()
     return np.array([r[0] for r in rows], float), np.array([r[1] for r in rows], float)
+
+
+def _json_safe(x):
+    """NaN/inf (e.g. an undefined SD or a degenerate fit) become null: JSON has no NaN."""
+    if isinstance(x, float):
+        return x if np.isfinite(x) else None
+    if isinstance(x, (np.floating, np.integer)):
+        return _json_safe(x.item())
+    if isinstance(x, dict):
+        return {k: _json_safe(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_json_safe(v) for v in x]
+    return x
 
 
 def _fit(db: Session, exp_id: int, variable: str, model: str = "gompertz"):
@@ -789,7 +835,7 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
     })
     if "ph" not in ch:
         res["base_dosing"] = None
-    return res
+    return _json_safe(res)
 
 
 PANEL_COLORS = {"OD600": "#1d3786", "AFU": "#7a4fa0", "ph": "#1d3786", "base_rate": "#1f7a63",
@@ -833,62 +879,320 @@ def experiment_figure(exp_id: int, fmt: str, vars: str = "OD600,AFU,ph,base_rate
                              headers={"Content-Disposition": f'attachment; filename="{e.code}-time-course.{fmt}"'})
 
 
-@router.post("/analysis-sessions", status_code=201)
-def create_session(body: S.SessionIn, db: Session = Depends(get_db)):
-    sess = AnalysisSession(code=_next_code(db, AnalysisSession, "AS"), name=body.name,
-                           fit_variable=body.fit_variable, author=body.author)
-    for eid, cond in body.members.items():
+SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model fit on the session's variable
+    ("lag_h", "Lag time λ", "h", "fit"),
+    ("mu_max_per_h", "Maximum specific growth rate μmax", "h⁻¹", "fit"),
+    ("doubling_time_h", "Doubling time at μmax", "h", "fit"),
+    ("t_mu_max_h", "Time at μmax", "h", "fit"),
+    ("X_max", "Predicted maximum X₀·e^A", "", "fit"),
+    ("A_ln", "Asymptote A", "ln X/X₀", "fit"),
+    ("total_ml", "Total base", "mL", "controller, cumulative at end"),
+    ("peak_rate_ml_min", "Peak base rate", "mL min⁻¹", "15-min bins"),
+    ("t_peak_h", "Time of peak base rate", "h", "15-min bins"),
+    ("t_half_total_h", "Time to 50 % of total base", "h", "controller, cumulative"),
+    ("last_hour_rate_ml_min", "Base rate in the last hour", "mL min⁻¹", "slowdown at end of run"),
+    ("base_per_final_od", "Total base per final OD600", "mL AU⁻¹", "acid produced per biomass, proxy"),
+]
+SESSION_CTRL_VARS = {"ph": ("pH", ""), "temperature": ("T", "°C"), "base_cumulative_ml": ("Base, cumulative", "mL"),
+                     "base_rate": ("Base rate", "mL min⁻¹"), "stirrer": ("Stirrer", "rpm"), "do2": ("dO2", "%")}
+
+
+def _check_session_body(db: Session, body: S.SessionIn) -> list[str]:
+    if not body.name.strip():
+        raise HTTPException(422, "Give the session a name.")
+    if body.model not in kinetics.MODELS:
+        raise HTTPException(422, f"Unknown model '{body.model}'")
+    conds = [c.strip() for c in (body.conditions or []) if c.strip()]
+    for c in body.members.values():
+        if c.strip() and c.strip() not in conds:
+            conds.append(c.strip())
+    if len(set(conds)) != len(conds):
+        raise HTTPException(422, "Condition names must be different.")
+    for eid in body.members:
         e = _404(db.get(Experiment, eid), f"Experiment {eid} not found")
         if e.status != ExperimentStatus.completed:
             raise HTTPException(422, f"{e.code} is not completed")
-        sess.members.append(SessionMember(experiment_id=eid, condition=cond))
+    return conds
+
+
+def _session_out(sess: AnalysisSession) -> dict:
+    conds = list(sess.conditions or [])
+    for m in sess.members:
+        if m.condition not in conds:
+            conds.append(m.condition)
+    return {"id": sess.id, "code": sess.code, "name": sess.name, "fit_variable": sess.fit_variable,
+            "model": sess.model if sess.model in kinetics.MODELS else "gompertz", "author": sess.author,
+            "created_at": sess.created_at, "updated_at": sess.updated_at, "conditions": conds,
+            "members": {m.experiment_id: m.condition for m in sess.members},
+            "n_by_condition": {c: sum(1 for m in sess.members if m.condition == c) for c in conds}}
+
+
+@router.get("/analysis-sessions")
+def list_sessions(db: Session = Depends(get_db)):
+    return [_session_out(x) for x in db.scalars(select(AnalysisSession).order_by(AnalysisSession.updated_at.desc()))]
+
+
+@router.post("/analysis-sessions", status_code=201)
+def create_session(body: S.SessionIn, request: Request, db: Session = Depends(get_db)):
+    conds = _check_session_body(db, body)
+    sess = AnalysisSession(code=_next_code(db, AnalysisSession, "AS"), name=body.name.strip(),
+                           fit_variable=body.fit_variable, model=body.model, author=who(request, db), conditions=conds)
+    for eid, cond in body.members.items():
+        if cond.strip():
+            sess.members.append(SessionMember(experiment_id=eid, condition=cond.strip()))
     db.add(sess)
     db.flush()
-    return {"id": sess.id, "code": sess.code}
+    return _session_out(sess)
+
+
+@router.get("/analysis-sessions/{sid}")
+def get_session(sid: int, db: Session = Depends(get_db)):
+    return _session_out(_404(db.get(AnalysisSession, sid)))
+
+
+@router.put("/analysis-sessions/{sid}")
+def update_session(sid: int, body: S.SessionIn, db: Session = Depends(get_db)):
+    sess = _404(db.get(AnalysisSession, sid))
+    conds = _check_session_body(db, body)
+    sess.name, sess.fit_variable, sess.model, sess.conditions = body.name.strip(), body.fit_variable, body.model, conds
+    sess.members.clear()
+    db.flush()
+    for eid, cond in body.members.items():
+        if cond.strip():
+            sess.members.append(SessionMember(experiment_id=eid, condition=cond.strip()))
+    sess.updated_at = _utcnow()
+    db.flush()
+    return _session_out(sess)
+
+
+@router.delete("/analysis-sessions/{sid}")
+def delete_session(sid: int, db: Session = Depends(get_db)):
+    sess = _404(db.get(AnalysisSession, sid))
+    code = sess.code
+    db.delete(sess)
+    db.flush()
+    return {"deleted": code}
+
+
+def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str) -> dict:
+    """Per-experiment parameters used in the comparison (None where not available)."""
+    f, err = _fit(db, e.id, fit_variable, model)
+    p = f.summary() if f else {}
+    df = _readings_df(db, e.id)
+    t_od, od = _manual_series(db, e.id, "OD600")
+    bd = {}
+    if "ph" in channels_of(e) and not df.empty:
+        bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
+                                   float(od[-1]) if len(od) else None).__dict__
+    vals = {k: (p.get(k) if src == "fit" else bd.get(k)) for k, _, _, src in SESSION_PARAMS}
+    return {"values": vals, "fit_error": err, "fit_warnings": p.get("warnings", [])}
+
+
+def _session_curve(db: Session, ids: list[int], variable: str, step_h: float) -> Optional[dict]:
+    """
+    Mean ± SD per condition on a fixed time grid.
+    Manual variables: each experiment interpolated on the grid, within the overlap of the replicates.
+    Controller variables: each experiment averaged per interval first, then mean ± SD across experiments
+    for intervals present in all of them.
+    """
+    if variable in SESSION_CTRL_VARS:
+        per = []
+        for eid in ids:
+            df = _readings_df(db, eid)
+            b = report.binned_series(df, step_h, [variable])
+            per.append({round(t, 6): v for t, v in zip(b["t"], b[variable]) if v is not None})
+        common = sorted(set.intersection(*(set(x) for x in per))) if per else []
+        if not common:
+            return None
+        Y = np.array([[x[t] for t in common] for x in per])
+        sd = Y.std(axis=0, ddof=1) if len(per) > 1 else np.full(len(common), np.nan)
+        return {"t": common, "mean": Y.mean(axis=0).tolist(), "sd": [None if np.isnan(v) else float(v) for v in sd],
+                "n": len(per), "warning": None if len(per) > 1 else "Only one experiment: no standard deviation."}
+    rc = stats.replicate_curve([_manual_series(db, eid, variable) for eid in ids], step_h=step_h)
+    if rc is None:
+        return None
+    return {"t": rc.t.tolist(), "mean": rc.mean.tolist(), "sd": [None if np.isnan(x) else float(x) for x in rc.sd.tolist()],
+            "n": rc.n, "warning": rc.warning}
+
+
+def _pooled_fit(db: Session, ids: list[int], variable: str, model: str) -> Optional[dict]:
+    """Model curve for a condition: one fit on the pooled readings of its replicates, each normalised to its own X0."""
+    ts, ys, x0s = [], [], []
+    for eid in ids:
+        t, y = _manual_series(db, eid, variable)
+        m = np.isfinite(y) & (y > 0)
+        t, y = t[m], y[m]
+        if len(t):
+            o = np.argsort(t)
+            t, y = t[o], y[o]
+            ts.append(t); ys.append(y / y[0]); x0s.append(y[0])
+    if not ts:
+        return None
+    try:
+        f = kinetics.fit_growth(np.concatenate(ts), np.concatenate(ys), model)
+    except ValueError:
+        return None
+    x0 = float(np.mean(x0s))
+    return {"t": f.t_fit.tolist(), "y": (np.asarray(f.X_fit) * x0).tolist()}
+
+
+def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: Optional[str] = None) -> dict:
+    sess = _404(db.get(AnalysisSession, sid))
+    out = _session_out(sess)
+    model, fv = out["model"], sess.fit_variable
+    variable = variable or fv
+    by_cond: dict[str, list[int]] = {c: [] for c in out["conditions"]}
+    for m in sess.members:
+        by_cond.setdefault(m.condition, []).append(m.experiment_id)
+    exps = {e.id: e for e in db.scalars(select(Experiment).where(Experiment.id.in_(out["members"].keys())))}
+    per_exp = {eid: _experiment_values(db, e, fv, model) for eid, e in exps.items()}
+    fv_unit = db.scalar(select(Variable.unit).where(Variable.name == fv)) or ""
+    comparisons = []
+    for key, label, unit, src in SESSION_PARAMS:
+        cmp = stats.compare_conditions({c: [per_exp[e]["values"][key] for e in ids]
+                                        for c, ids in by_cond.items() if ids})
+        comparisons.append({
+            "key": key, "label": label, "unit": fv_unit if key == "X_max" else unit,
+            "source": f"model fit on {fv}" if src == "fit" else src,
+            "test": cmp.test, "statistic": cmp.statistic, "p_value": cmp.p_value, "difference": cmp.difference,
+            "ci95": cmp.ci95, "posthoc": cmp.posthoc, "warning": cmp.warning,
+            "conditions": {c: x.__dict__ for c, x in cmp.conditions.items()}})
+    is_manual = variable not in SESSION_CTRL_VARS
+    curves = {}
+    for c, ids in by_cond.items():
+        if not ids:
+            continue
+        curve = _session_curve(db, ids, variable, step_h)
+        if curve is not None and is_manual:
+            curve["fit"] = _pooled_fit(db, ids, variable, model)
+        curves[c] = curve
+    runs: dict[str, dict] = {}
+    for e in exps.values():
+        if e.parallel_run:
+            r = runs.setdefault(e.parallel_run.code, {"parallel_run": e.parallel_run.code, "experiments": [],
+                                                      "date": e.started_at.date().isoformat() if e.started_at else None})
+            r["experiments"].append({"code": e.code, "condition": out["members"][e.id]})
+    flags = [dict(r, same_condition=len({x["condition"] for x in r["experiments"]}) == 1)
+             for r in runs.values() if len(r["experiments"]) > 1]
+    manual_vars = sorted({v.name for eid in exps for v in _measured_variables(db, eid)},
+                         key=lambda n: ({"OD600": 0, "AFU": 1}.get(n, 2), n))
+    units = {v.name: v.unit for v in db.scalars(select(Variable))}
+    var_opts = [{"key": n, "label": n, "unit": units.get(n, ""), "manual": True} for n in manual_vars]
+    var_opts += [{"key": k, "label": l, "unit": u, "manual": False} for k, (l, u) in SESSION_CTRL_VARS.items()
+                 if any(k in channels_of(e) or (k.startswith("base") and "ph" in channels_of(e)) for e in exps.values())]
+    experiments = [{"id": e.id, "code": e.code, "name": e.name, "strain": e.strain, "reactor_id": e.reactor_id,
+                    "date": e.started_at.date().isoformat() if e.started_at else None,
+                    "parallel_run": e.parallel_run.code if e.parallel_run else None,
+                    "condition": out["members"][e.id], **per_exp[e.id]} for e in exps.values()]
+    experiments.sort(key=lambda x: (out["conditions"].index(x["condition"]) if x["condition"] in out["conditions"] else 99,
+                                    x["code"]))
+    return {**out, "models": {k: v[0] for k, v in kinetics.MODELS.items()},
+            "conditions_n": {c: len(ids) for c, ids in by_cond.items()},
+            "comparisons": comparisons, "variable": variable, "variable_options": var_opts, "step_h": step_h,
+            "curves": curves, "parallel_run_flags": flags, "experiments": experiments}
 
 
 @router.get("/analysis-sessions/{sid}/results")
-def session_results(sid: int, db: Session = Depends(get_db), step_h: float = 2.0):
-    sess = _404(db.get(AnalysisSession, sid))
-    by_cond: dict[str, list[int]] = {}
-    for m in sess.members:
-        by_cond.setdefault(m.condition, []).append(m.experiment_id)
-    params = {eid: experiment_parameters(db, eid, sess.fit_variable) for ids in by_cond.values() for eid in ids}
+def session_results(sid: int, db: Session = Depends(get_db), step_h: float = 2.0, variable: Optional[str] = None):
+    if not (0.05 <= step_h <= 24):
+        raise HTTPException(422, "Interval out of range")
+    res = session_results_data(db, sid, step_h, variable)
+    # backwards-compatible shape: comparisons keyed by parameter, conditions -> n
+    res["comparisons_by_key"] = {c["key"]: c for c in res["comparisons"]}
+    return _json_safe(res)
 
-    def pick(eid: int, key: str):
-        p = params[eid]
-        if key in ("lag_h", "mu_max_per_h", "t_mu_max_h", "A_ln"):
-            return p["fit"][key] if p["fit"] else None
-        return p["base_dosing"][key] if p["base_dosing"] else None
 
-    keys = ["lag_h", "mu_max_per_h", "t_mu_max_h", "A_ln", "total_ml", "peak_rate_ml_min", "t_peak_h",
-            "t_half_total_h", "last_hour_rate_ml_min", "base_per_final_od"]
-    comparisons = {}
-    for k in keys:
-        cmp = stats.compare_conditions({c: [pick(e, k) for e in ids] for c, ids in by_cond.items()})
-        comparisons[k] = {"test": cmp.test, "statistic": cmp.statistic, "p_value": cmp.p_value,
-                          "difference": cmp.difference, "ci95": cmp.ci95, "posthoc": cmp.posthoc,
-                          "warning": cmp.warning,
-                          "conditions": {c: s.__dict__ for c, s in cmp.conditions.items()}}
-    curves = {}
-    for c, ids in by_cond.items():
-        rc = stats.replicate_curve([_manual_series(db, e, sess.fit_variable) for e in ids], step_h=step_h)
-        curves[c] = None if rc is None else {"t": rc.t.tolist(), "mean": rc.mean.tolist(),
-                                             "sd": [None if np.isnan(x) else x for x in rc.sd.tolist()],
-                                             "n": rc.n, "warning": rc.warning}
-    # Parallel-run flags: informational only, never used in statistics.
-    exps = {e.id: e for e in db.scalars(select(Experiment).where(Experiment.id.in_(params.keys())))}
-    runs: dict[str, list[str]] = {}
-    for e in exps.values():
-        if e.parallel_run:
-            runs.setdefault(e.parallel_run.code, []).append(e.code)
-    cond_of = {m.experiment_id: m.condition for m in sess.members}
-    flags = [{"parallel_run": r, "experiments": [{"code": code, "condition": cond_of[eid]}
-                                                for eid, e2 in exps.items() if (code := e2.code) in codes],
-              "same_condition": len({cond_of[eid] for eid, e2 in exps.items() if e2.code in codes}) == 1}
-             for r, codes in runs.items() if len(codes) > 1]
-    return {"code": sess.code, "conditions": {c: len(ids) for c, ids in by_cond.items()},
-            "comparisons": comparisons, "curves": curves, "parallel_run_flags": flags}
+SESSION_COLORS = ["#1d3786", "#c98a00", "#1f7a63", "#7a4fa0", "#b3261e", "#54565a"]
+SESSION_MARKERS = ["o", "^", "s", "D", "v", "P"]
+
+
+@router.get("/analysis-sessions/{sid}/figure.{fmt}")
+def session_figure(sid: int, fmt: str, variable: Optional[str] = None, step_h: float = 2.0, width_mm: float = 174,
+                   dpi: int = 300, theme: str = "grey", fit: bool = True, db: Session = Depends(get_db)):
+    if fmt not in report.FIG_FORMATS:
+        raise HTTPException(404, "Format not available")
+    if not (40 <= width_mm <= 500) or not (72 <= dpi <= 1200):
+        raise HTTPException(422, "Width must be 40-500 mm and resolution 72-1200 dpi")
+    res = session_results_data(db, sid, step_h, variable)
+    opt = next((o for o in res["variable_options"] if o["key"] == res["variable"]), None)
+    if opt is None:
+        raise HTTPException(422, f"No data for '{res['variable']}' in this session")
+    letters = "ABCDEFGHIJ"
+    series = []
+    for i, c in enumerate(res["conditions"]):
+        cv = res["curves"].get(c)
+        if not cv:
+            continue
+        series.append(report.ConditionSeries(f"{letters[i]} · {c} (n = {cv['n']})", SESSION_COLORS[i % 6],
+                                             SESSION_MARKERS[i % 6], cv["t"], cv["mean"], cv["sd"],
+                                             (cv.get("fit") if fit else None)))
+    ylabel = f"{opt['label']} ({opt['unit']})" if opt["unit"] else opt["label"]
+    try:
+        data = report.render_conditions(series, ylabel, fmt, width_mm, dpi, theme)
+    except ValueError as ex:
+        raise HTTPException(422, str(ex))
+    return StreamingResponse(io.BytesIO(data), media_type=report.FIG_FORMATS[fmt], headers={
+        "Content-Disposition": f'attachment; filename="{res["code"]}-{res["variable"]}.{fmt}"'})
+
+
+@router.get("/analysis-sessions/{sid}/export.{fmt}")
+def session_export(sid: int, fmt: str, step_h: float = 2.0, db: Session = Depends(get_db)):
+    """Experiments with conditions, per-experiment parameters, comparisons and mean ± SD curves of every variable."""
+    if fmt not in ("xlsx", "zip"):
+        raise HTTPException(404, "Format not available")
+    res = session_results_data(db, sid, step_h)
+    letters = "ABCDEFGHIJ"
+    label = {c: f"{letters[i]} · {c}" for i, c in enumerate(res["conditions"])}
+    tables: dict[str, pd.DataFrame] = {}
+    tables["Experiments"] = pd.DataFrame([{
+        "condition": label.get(x["condition"], x["condition"]), "code": x["code"], "name": x["name"],
+        "strain": x["strain"], "reactor": x["reactor_id"], "date": x["date"], "parallel_run": x["parallel_run"],
+        **{k: x["values"][k] for k, *_ in SESSION_PARAMS},
+        "fit_error": x["fit_error"], "fit_warnings": "; ".join(x["fit_warnings"])} for x in res["experiments"]])
+    rows = []
+    for c in res["comparisons"]:
+        r = {"parameter": c["label"], "unit": c["unit"], "source": c["source"]}
+        for cond in res["conditions"]:
+            s_ = c["conditions"].get(cond) or {}
+            r[f"{label[cond]} n"] = s_.get("n")
+            r[f"{label[cond]} mean"] = s_.get("mean")
+            r[f"{label[cond]} SD"] = s_.get("sd")
+        r.update({"test": c["test"], "statistic": c["statistic"], "p": c["p_value"], "difference": c["difference"],
+                  "CI95 low": c["ci95"][0] if c["ci95"] else None, "CI95 high": c["ci95"][1] if c["ci95"] else None,
+                  "post hoc (Tukey)": "; ".join(f"{p['a']}−{p['b']}: Δ={p['difference']:.4g}, p_adj={p['p_adj']:.3g}"
+                                              for p in c["posthoc"]),
+                  "note": c["warning"]})
+        rows.append(r)
+    tables["Comparisons"] = pd.DataFrame(rows)
+    crow = []
+    for opt in res["variable_options"]:
+        r2 = session_results_data(db, sid, step_h, opt["key"])
+        for cond, cv in r2["curves"].items():
+            for t, m, s_ in zip(cv["t"], cv["mean"], cv["sd"]) if cv else []:
+                crow.append({"variable": opt["label"], "unit": opt["unit"], "condition": label.get(cond, cond),
+                             "t_h": t, "mean": m, "SD": s_, "n": cv["n"]})
+    tables["Mean curves"] = pd.DataFrame(crow, columns=["variable", "unit", "condition", "t_h", "mean", "SD", "n"])
+    tables["Session"] = pd.DataFrame([{"field": k, "value": v} for k, v in {
+        "code": res["code"], "name": res["name"], "fit variable": res["fit_variable"],
+        "model": res["models"][res["model"]], "curve interval (h)": step_h,
+        "parallel runs": "; ".join(f"{f['parallel_run']}: " + ", ".join(f"{x['code']} ({x['condition']})"
+                                                                         for x in f["experiments"])
+                                   for f in res["parallel_run_flags"]) or None}.items()])
+    buf = io.BytesIO()
+    if fmt == "xlsx":
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            for name, df in tables.items():
+                df.to_excel(xw, sheet_name=name, index=False)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        import zipfile
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, df in tables.items():
+                z.writestr(f"{res['code']}_{name.lower().replace(' ', '_')}.csv", df.to_csv(index=False))
+        media = "application/zip"
+    buf.seek(0)
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{res["code"]}.{fmt}"'})
 
 
 # --- export -------------------------------------------------------------------------------
@@ -1003,6 +1307,85 @@ def export_data(exp_id: int, fmt: str, db: Session = Depends(get_db), resample_m
     buf.seek(0)
     return StreamingResponse(buf, media_type=media,
                              headers={"Content-Disposition": f'attachment; filename="{e.code}.{fmt}"'})
+
+
+# --- users (identity for signatures, optional PIN) ---------------------------------------------
+
+def _user_out(u: User) -> dict:
+    return {"id": u.id, "name": u.name, "has_pin": u.pin_hash is not None, "archived": u.archived,
+            "guest": u.name == GUEST_NAME}
+
+
+@router.get("/users")
+def list_users(db: Session = Depends(get_db), include_archived: bool = False):
+    q = select(User).order_by(User.name)
+    users = [u for u in db.scalars(q) if include_archived or not u.archived]
+    return sorted([_user_out(u) for u in users], key=lambda x: (x["guest"], x["name"].lower()))
+
+
+@router.post("/users", status_code=201)
+def create_user(body: S.UserIn, request: Request, db: Session = Depends(get_db)):
+    name = body.name.strip()
+    if not name or len(name) > 60:
+        raise HTTPException(422, "Give a name (up to 60 characters).")
+    if db.scalar(select(User).where(func.lower(User.name) == name.lower())):
+        raise HTTPException(409, f"A user named {name} already exists.")
+    if body.pin and not users_mod.valid_pin(body.pin):
+        raise HTTPException(422, f"The PIN must be {users_mod.PIN_MIN}-{users_mod.PIN_MAX} digits.")
+    u = User(name=name, pin_hash=users_mod.hash_pin(body.pin) if body.pin else None)
+    db.add(u)
+    db.flush()
+    return {"user": _user_out(u), "token": users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)}
+
+
+@router.post("/auth/login")
+def login(body: S.LoginIn, request: Request, db: Session = Depends(get_db)):
+    u = db.get(User, body.user_id)
+    if u is None or u.archived:
+        raise HTTPException(404, "User not found")
+    th: users_mod.Throttle = request.app.state.pin_throttle
+    if u.pin_hash:
+        wait = th.locked_for(u.id)
+        if wait:
+            raise HTTPException(429, f"Too many wrong PINs: try again in {int(wait // 60) + 1} min.")
+        if not users_mod.check_pin(body.pin or "", u.pin_hash):
+            th.fail(u.id)
+            raise HTTPException(401, "Wrong PIN.")
+        th.ok(u.id)
+    return {"user": _user_out(u), "token": users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)}
+
+
+@router.get("/auth/me")
+def me(request: Request, db: Session = Depends(get_db)):
+    u = current_user(request, db)
+    return {"user": _user_out(u) if u else None}
+
+
+@router.put("/users/{uid}")
+def update_user(uid: int, body: S.UserPatch, request: Request, db: Session = Depends(get_db)):
+    """Rename, set/change/remove the PIN or archive. A user with a PIN can be changed only when signed in as them."""
+    u = _404(db.get(User, uid))
+    me_ = current_user(request, db)
+    if u.pin_hash and (me_ is None or me_.id != u.id):
+        raise HTTPException(403, f"Sign in as {u.name} to change this user.")
+    if u.name == GUEST_NAME and (body.name not in (None, GUEST_NAME) or body.pin or body.archived):
+        raise HTTPException(422, "Guest cannot be renamed, archived or given a PIN.")
+    token = None
+    if body.name is not None and body.name.strip() != u.name:
+        name = body.name.strip()
+        if not name or db.scalar(select(User).where(func.lower(User.name) == name.lower(), User.id != u.id)):
+            raise HTTPException(409, "Name empty or already used.")
+        u.name = name   # past records keep the name they were signed with
+    if body.pin is not None:
+        if body.pin and not users_mod.valid_pin(body.pin):
+            raise HTTPException(422, f"The PIN must be {users_mod.PIN_MIN}-{users_mod.PIN_MAX} digits.")
+        u.pin_hash = users_mod.hash_pin(body.pin) if body.pin else None
+        u.token_version += 1   # other devices signed in as this user must sign in again
+        token = users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)
+    if body.archived is not None:
+        u.archived = body.archived
+    db.flush()
+    return {"user": _user_out(u), "token": token}
 
 
 # --- settings, notifications, backup --------------------------------------------------------

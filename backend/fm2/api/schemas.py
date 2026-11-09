@@ -177,5 +177,23 @@ class EventOut(ORM):
 class SessionIn(BaseModel):
     name: str
     members: dict[int, str]   # experiment_id -> condition label
+    conditions: Optional[list[str]] = None   # ordered labels; default: order of first appearance in members
     fit_variable: str = "OD600"
+    model: str = "gompertz"
     author: str = ""
+
+
+class UserIn(BaseModel):
+    name: str
+    pin: Optional[str] = None
+
+
+class UserPatch(BaseModel):
+    name: Optional[str] = None
+    pin: Optional[str] = None        # "" removes the PIN
+    archived: Optional[bool] = None
+
+
+class LoginIn(BaseModel):
+    user_id: int
+    pin: Optional[str] = None

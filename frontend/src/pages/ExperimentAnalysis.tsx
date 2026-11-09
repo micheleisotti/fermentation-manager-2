@@ -276,9 +276,11 @@ function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string
         </div>
       ) : <span className="small muted">No base-dosing data (pH channel off or no controller readings).</span>}
       {partner && (
-        <button className="btn tonal" disabled title="Analysis sessions are the next screen to build" style={{ alignSelf: "flex-start" }}>
+        <Link className="btn tonal" style={{ alignSelf: "flex-start" }}
+          to={`/analysis/new?with=${a.experiment.id},${partner.id}&cond=${encodeURIComponent(a.experiment.code)},${encodeURIComponent(partner.code)}` +
+            `&name=${encodeURIComponent(`${a.experiment.code} vs ${partner.code} (${partner.parallel_run})`)}`}>
           Compare with {partner.code} (parallel run) in a new analysis session
-        </button>
+        </Link>
       )}
     </section>
   );
@@ -366,6 +368,7 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
 /** /analysis: completed experiments to open, and the place for analysis sessions. */
 export function AnalysisHome() {
   const list = usePolling(() => api.experiments(), 60000);
+  const sessions = usePolling(api.sessions, 60000);
   const done = (list.data ?? []).filter((x) => x.status !== "planned")
     .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
   return (
@@ -389,9 +392,27 @@ export function AnalysisHome() {
           </div>
         )}
       </section>
-      <section className="card">
-        <h2 style={{ fontSize: 18 }}>Analysis sessions</h2>
-        <span className="muted">Comparing experiments by condition (Welch t-test, ANOVA + Tukey) is the next screen to build.</span>
+      <section className="card" aria-labelledby="sess">
+        <div className="row between">
+          <h2 id="sess" style={{ fontSize: 18 }}>Analysis sessions</h2>
+          <Link className="btn filled" to="/analysis/new"><Icon name="plus" size={18} />New session</Link>
+        </div>
+        <span className="small muted">Compare completed experiments grouped by condition: mean ± SD, Welch's t-test (2 conditions) or ANOVA + Tukey (3 or more).</span>
+        {(sessions.data ?? []).length === 0 ? <span className="muted">No sessions yet.</span> : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead><tr><th>Code</th><th>Name</th><th>Conditions</th><th>Updated</th></tr></thead>
+              <tbody>{sessions.data!.map((x) => (
+                <tr key={x.id}>
+                  <td className="mono"><Link to={`/analysis/sessions/${x.id}`}>{x.code}</Link></td>
+                  <td>{x.name}</td>
+                  <td>{x.conditions.map((c) => `${c} (n = ${x.n_by_condition[c] ?? 0})`).join(" · ") || "—"}</td>
+                  <td>{new Date(x.updated_at).toLocaleString()}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
       </section>
     </>
   );

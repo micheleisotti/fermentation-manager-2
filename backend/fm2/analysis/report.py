@@ -167,3 +167,56 @@ def _style(ax, theme: str) -> None:
         ax.grid(True, color="white" if theme == "grey" else "#e5e5e5", lw=0.8)
         ax.set_axisbelow(True)
     ax.tick_params(length=2.5, width=0.5, colors="#4d4d4d")
+
+
+@dataclass
+class ConditionSeries:
+    label: str
+    color: str
+    marker: str
+    t: list
+    mean: list
+    sd: list
+    fit: Optional[dict] = None   # {"t", "y"}
+
+
+def render_conditions(series: list[ConditionSeries], ylabel: str, fmt: str = "png", width_mm: float = 174,
+                      dpi: int = 300, theme: str = "grey", xlabel: str = "Time since start (h)") -> bytes:
+    """One panel: mean ± SD per condition (points with error bars, slightly dodged), optional model line, legend right."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if fmt not in FIG_FORMATS:
+        raise ValueError(f"Unknown format '{fmt}'")
+    if theme not in THEMES:
+        raise ValueError(f"Unknown theme '{theme}'")
+    if not series:
+        raise ValueError("No data to draw")
+    w_in = width_mm / 25.4
+    rc = {"font.family": "DejaVu Sans", "font.size": 8, "axes.labelsize": 9, "xtick.labelsize": 8,
+          "ytick.labelsize": 8, "legend.fontsize": 8, "svg.fonttype": "none", "pdf.fonttype": 42}
+    with plt.rc_context(rc):
+        fig, ax = plt.subplots(figsize=(w_in, w_in * 0.5))
+        _style(ax, theme)
+        span = max((max(s.t) for s in series if s.t), default=1)
+        for i, s in enumerate(series):
+            dx = (i - (len(series) - 1) / 2) * span * 0.006
+            t = np.asarray(s.t, float) + dx
+            if s.fit:
+                ax.plot(s.fit["t"], s.fit["y"], color=s.color, lw=0.9)
+            sd = [0 if v is None else v for v in s.sd]
+            if any(sd):
+                ax.errorbar(t, s.mean, yerr=sd, fmt="none", ecolor=s.color, elinewidth=0.8, capsize=2.5)
+            ax.plot(t, s.mean, s.marker, color=s.color, ms=4, label=s.label,
+                    linestyle="none" if s.fit else "-", lw=0.8)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_xlim(left=0)
+        ax.legend(title="Condition", loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False,
+                  title_fontsize=8, alignment="left")
+        fig.tight_layout(pad=0.4)
+        buf = io.BytesIO()
+        fig.savefig(buf, format=fmt, dpi=dpi)
+        plt.close(fig)
+    return buf.getvalue()

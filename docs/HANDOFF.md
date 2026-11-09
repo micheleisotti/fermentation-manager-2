@@ -116,11 +116,38 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   loop on/off address per loop; then confirmation dialog, read-back, change log, remote disabled by
   default. Until then the driver never writes loop or actuator states.
 
+## Analysis sessions (9 Nov 2026)
+- Analysis › sessions (mockup M3Analysis): conditions are session-only labels (ordered: A, B, ...);
+  experiments with the same condition are replicates. Auto-saved on every change.
+- Comparison per parameter: mean ± SD, Welch's t-test with Δ and 95 % CI (2 conditions), one-way ANOVA +
+  Tukey HSD (3+); no test with n < 2. Parallel runs listed for information only.
+- Curves: manual variables interpolated per experiment on a 1/2/4 h grid within the replicates' common
+  range; controller variables averaged per interval then mean ± SD. Line = model fitted on the pooled
+  replicates (each normalised to its first point).
+- Fits now try several starting points and pick the best (pooled replicates with near-identical times
+  used to give a step-shaped fit).
+- Export: CSV zip / XLSX (experiments + per-experiment values, comparisons, mean curves of every
+  variable, session info); figure PNG/SVG/PDF.
+- Fixed: trend chart kept the previous variable's setpoint series (ECharts merge); phone full-screen
+  chart closed after a few seconds (effect re-run on every poll).
+
+## Users and desktop shortcut (9 Nov 2026)
+- Sign-in screen before the app: pick a user (optional 4–8 digit PIN) or Guest; remembered per
+  browser/device until "Switch user" (rail, bottom; Settings › Users on phones).
+- Identity only, no roles. The server signs a token (HMAC, secret in `data\auth-secret.txt`) and writes
+  the user on experiments, profiles, measurements and edits, setpoint/limit/profile commands, sessions,
+  and Start/End events. The `author` sent by a browser is ignored.
+- A user with a PIN can be renamed/archived/PIN-changed only when signed in as them; a PIN change
+  signs out their other devices. 5 wrong PINs → 5 min lock. Forgotten PIN (admin shell):
+  `.venv\Scripts\python -m fm2.users reset-pin "Name" --data-dir C:\ProgramData\FermentationManager\data`.
+- Desktop/Start-menu shortcut for all Windows users: `deploy\windows\create-shortcut.ps1` (admin, once);
+  opens http://localhost:8000 in an Edge/Chrome app window with the FM icon (`fm2.ico`).
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.
 3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
 ## Still to build in the UI
-Analysis sessions, app push notifications (need HTTPS:
+App push notifications (need HTTPS:
 `tailscale serve`) and PWA install, phone layout for planning, dark / dimmed theme (Settings, not urgent).

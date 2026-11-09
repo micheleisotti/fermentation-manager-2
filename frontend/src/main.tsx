@@ -9,12 +9,14 @@ import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import "./theme.css";
 import { Shell } from "./components/Shell";
+import { UserGate } from "./components/UserGate";
 import { Home } from "./pages/Home";
 import { ExperimentPage } from "./pages/ExperimentPage";
 import { Planning } from "./pages/Planning";
 import { Profiles } from "./pages/Profiles";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AnalysisHome, ExperimentAnalysisPage } from "./pages/ExperimentAnalysis";
+import { NewSession, SessionPage } from "./pages/AnalysisSession";
 
 function ComingNext({ title, text }: { title: string; text: string }) {
   return (
@@ -28,6 +30,7 @@ function ComingNext({ title, text }: { title: string; text: string }) {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
+      <UserGate>
       <Shell>
         <Routes>
           <Route path="/" element={<Home />} />
@@ -36,12 +39,15 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/experiments/:id" element={<ExperimentPage />} />
           <Route path="/analysis" element={<AnalysisHome />} />
           <Route path="/analysis/experiments/:id" element={<ExperimentAnalysisPage />} />
-          <Route path="/analysis/*" element={<ComingNext title="Analysis sessions" text="Comparing experiments by condition is the next screen to build." />} />
+          <Route path="/analysis/new" element={<NewSession />} />
+          <Route path="/analysis/sessions/:id" element={<SessionPage />} />
+          <Route path="/analysis/*" element={<Navigate to="/analysis" replace />} />
           <Route path="/profiles/*" element={<Profiles />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Shell>
+      </UserGate>
     </BrowserRouter>
   </StrictMode>,
 );
