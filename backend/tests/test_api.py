@@ -125,3 +125,19 @@ def test_silent_controller_alert(env):
     ev = c.get(f"/api/experiments/{e['id']}/events").json()
     assert any(x["kind"] == "controller_silent" for x in ev)
     assert c.get("/api/reactors/live").json()[0]["online"] is False
+
+
+def test_delete_profile(env):
+    c, clock, app, drivers = env
+    p1 = c.post("/api/profiles", json={"name": "to delete", "ph_setpoint": 6.0}).json()
+    p2 = c.post("/api/profiles", json={"name": "in use", "ph_setpoint": 6.2}).json()
+    e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "profile_id": p2["id"]}).json()
+    assert c.delete(f"/api/profiles/{p1['id']}").status_code == 200
+    r = c.delete(f"/api/profiles/{p2['id']}")                 # planned experiment uses it
+    assert r.status_code == 409 and e["code"] in r.json()["detail"]
+    assert c.post(f"/api/experiments/{e['id']}/start").status_code == 200
+    r = c.delete(f"/api/profiles/{p2['id']}")                 # started: keeps its plan snapshot
+    assert r.status_code == 200 and r.json()["unlinked_experiments"] == [e["code"]]
+    assert [p["name"] for p in c.get("/api/profiles").json()] == []
+    assert c.get(f"/api/experiments/{e['id']}").status_code == 200
+    assert c.delete("/api/profiles/9999").status_code == 404

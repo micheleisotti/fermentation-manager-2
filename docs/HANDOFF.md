@@ -22,9 +22,16 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   only around each write and logs out, and **never claims** a login held on the display/web
   UI (the command then fails, nothing is written). Password in
   `C:\ProgramData\FermentationManager\ez2-password.txt` (ACL: service + admins), never in git.
-  pH control mode/PID writes: not implemented (set on the controller).
+  **pH control from the profile** (planning only, before Start): PID loads P, I, D, dead band,
+  cycle time; Adaptive loads the same (P/I/D as starting values the controller then adapts) plus settling time.
+  External control is never written. Profiles can be deleted (refused while a planned
+  experiment uses them; started experiments keep their plan snapshot).
 - Reactor names: **R1-sx = 192.0.2.42, R2-dx = 192.0.2.41** (PC Ethernet 192.0.2.10/24, no gateway).
 - Home shows every reactor: running experiment card, or "Idle · not recording" card with live values.
+- **Phone layout** of a fermentation (mockups M3Phone/M3PhoneChart), used on narrow screens and on
+  landscape phones: reactor tabs, 4 key values, chart presets, collapsible events / add measurement /
+  setpoints (bottom sheet), full-screen landscape chart (axes, 1 h / 6 h / All with full-resolution
+  data for the window, overlays, pinch-zoom, tap for values). Desktop unchanged.
 - Demo: `FM2_SIM_SPEED=300 FM2_SAMPLING_INTERVAL_S=2 fm2-server` + `python scripts/demo_seed.py`.
 - Approved mockups (Material 3, project palette): a Claude Design canvas
   "Fermentation Manager 2 — mockup" in Michele's artifacts.
@@ -73,12 +80,10 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   `pip install -e .` if dependencies changed, `npm.cmd run build` in `frontend`, `Restart-Service fm2` (admin).
 
 ## Next steps
-1. pH control mode/PID from planning (before Start), same login rules; then UI for remote
-   setpoint changes on the phone layout.
+1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Backup job, consultation mode on the laptop.
 3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
 ## Still to build in the UI
-Experiment analysis & export, analysis sessions, settings, dedicated phone layout
-(collapsible panels, full-screen landscape chart), push notifications (need HTTPS:
-`tailscale serve`), PWA install, extra channels.
+Experiment analysis & export, analysis sessions, settings, push notifications (need HTTPS:
+`tailscale serve`), PWA install, extra channels, phone layout for planning.

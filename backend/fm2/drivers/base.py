@@ -34,7 +34,14 @@ class DriverCapabilities:
 @dataclass(frozen=True)
 class PhControl:
     mode: Optional[str] = None            # "adaptive" | "pid"
-    pid: Optional[dict] = None            # names to be confirmed on the real controller
+    # pH loop parameters: P, I, D, deadband, cycle_time [s], settling_time [s] (ez2-Control names)
+    pid: Optional[dict] = None
+
+
+# Parameters a profile loads for each pH control mode. In Adaptive, P/I/D are the starting
+# values the controller then adapts (decision 9 Nov 2026: load them in Adaptive too).
+PH_MODE_PARAMS = {"pid": ("P", "I", "D", "deadband", "cycle_time"),
+                  "adaptive": ("P", "I", "D", "deadband", "cycle_time", "settling_time")}
 
 
 @dataclass(frozen=True)

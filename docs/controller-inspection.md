@@ -58,6 +58,13 @@ briefly showed 1.56 and then 1.61: display refresh lag, the network value is the
 
 Pump activation % = `2.12.29 / 2.4.29 × 100`.
 
+## Display refresh (observed 9 Nov 2026)
+The controller's own display does not refresh an open page when a value changes remotely
+(setpoint/loop parameters written by FM2, or the dose counter after a pump stop): it shows
+the old value until the page is left and re-entered. The network value is the true one
+(verified: pH SP 6.30 → 6.20 and cycle time 10 → 15 loaded from a profile, display showed
+the old SP until the page was reopened).
+
 ## Differences between the units (read, not configured by FM2)
 - Temperature loop: R2 Adaptive, R1 PID (P 25.2 / I 3053.5 / D 28.3).
 - Stirrer alarm limits: R2 20–500 rpm, R1 200–900 rpm.
@@ -66,7 +73,7 @@ Pump activation % = `2.12.29 / 2.4.29 × 100`.
 ## Still open
 - [ ] Step size of the base counter under automatic pH control (pulses every 10 s):
       visible at the first real fermentation.
-- [ ] Setpoint writes: implemented (allow-list, controller range/decimals check, wait for
-      read-back); **to be confirmed live** on the controller display, one at a time with Michele.
-- [ ] pH control mode / PID from planning: not implemented (controller only).
+- [x] Setpoint writes: confirmed live on R2-dx (pH SP).
+- [x] pH control type / loop parameters from a profile: confirmed live on R2-dx (cycle time 10 → 15).
+- [ ] Same checks on R1-sx (same firmware and addresses; not yet exercised).
 - [ ] Never automate actuator start/stop, dose counter reset or calibration.

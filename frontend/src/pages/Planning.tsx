@@ -136,11 +136,15 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
     const c = check.data;
     return [
       { ok: !!existing && !dirty, text: existing ? (dirty ? "Unsaved changes" : "Plan saved") : "Plan not saved yet" },
-      { ok: !!c?.reachable, text: c?.reachable ? `Controller ${d.reactor_id} reachable` : `Controller ${d.reactor_id} not reachable` },
+      !existing
+        ? { ok: false, warn: true, text: `Controller ${d.reactor_id}: checked after the plan is saved` }
+        : !c
+          ? { ok: false, warn: true, text: check.error ? `Controller ${d.reactor_id}: check failed (${check.error})` : `Checking controller ${d.reactor_id}…` }
+          : { ok: !!c.reachable, text: c.reachable ? `Controller ${d.reactor_id} reachable` : `Controller ${d.reactor_id} not reachable` },
       { ok: c?.reactor_free !== false, text: c?.reactor_free === false ? `${d.reactor_id} is recording another experiment` : `${d.reactor_id} free` },
       { ok: mismatches.length === 0, warn: true, text: mismatches.length ? `${mismatches.length} setting(s) differ from the controller` : "Controller matches the plan" },
     ];
-  }, [check.data, existing, dirty, d.reactor_id, mismatches.length]);
+  }, [check.data, check.error, existing, dirty, d.reactor_id, mismatches.length]);
   const blocking = ready.some((r) => !r.ok && !r.warn);
 
   return (
