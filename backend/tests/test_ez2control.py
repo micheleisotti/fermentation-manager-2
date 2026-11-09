@@ -1,12 +1,14 @@
 """ez2-Control driver against a fake controller speaking the same WebSocket protocol."""
 
+import base64
 import threading
 
 import pytest
 from websockets.sync.server import serve
 
 from fm2.drivers import DriverError, make_driver
-from fm2.drivers.ez2control import READ_MAP, build_read_request, parse_frame, to_float
+from fm2.drivers.ez2control import (READ_MAP, SETPOINT_ADDRESSES, build_read_request, build_write_request,
+                                    parse_frame, to_float)
 
 # Values read from R2-dx on 2026-11-09 (no culture, probes disconnected), plus a pump run.
 R2_VALUES = {
@@ -16,6 +18,10 @@ R2_VALUES = {
     "1.15.13": "0", "1.13.13": "400",
     "2.1.29": "Alkali", "2.13.29": "1.61", "2.12.29": "4.80", "2.4.29": "4.80",
     "1.15.3": "NO CONT", "1.4.3": "1.0E+05",
+    # sensor range (max, min) and display decimals, used to validate writes
+    "1.6.0": "14.00", "1.7.0": "0.00", "1.58.0": "2",
+    "1.6.2": "60.0", "1.7.2": "0.0", "1.58.2": "1",
+    "1.6.13": "2000", "1.7.13": "0", "1.58.13": "0",
 }
 
 
@@ -24,26 +30,55 @@ class FakeController:
     With drop_after_answer=True it kills the TCP connection after each answer without a
     close frame, like the real controller does with idle connections."""
 
-    def __init__(self, values, drop_after_answer=False):
+    def __init__(self, values, drop_after_answer=False, password="fake-test-pw"):
         self.values = dict(values)
+        self.password = password
+        self.holder = None          # connection currently logged in (one login at a time)
+        self.other_user_logged_in = False
         self.drop_after_answer = drop_after_answer
         self.connections = 0
         self.requests: list[str] = []
+        self.writes: list[tuple[str, str]] = []
+        self.ignored_writes: list[tuple[str, str]] = []
+        self.logins: list[str] = []
         self.server = serve(self._handler, "127.0.0.1", 0)
         self.port = self.server.socket.getsockname()[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def _handler(self, ws):
         self.connections += 1
+        me = object()
+        level = lambda: 2 if self.holder is me else 0  # noqa: E731
         for msg in ws:
             text = msg.decode("ascii") if isinstance(msg, bytes) else msg
             lines = [l for l in text.split("\r") if l]
             self.requests.extend(lines)
             answers = []
             for l in lines:
-                assert l.startswith("J") and l.endswith("S"), f"non-read request sent: {l!r}"
+                assert l.startswith("J"), f"malformed request: {l!r}"
+                if "s" in l:                       # write: J<addr>s<value>
+                    addr, val = l[1:].split("s", 1)
+                    if addr == "0.11":             # login / logout
+                        self.logins.append(val.split("|")[0])
+                        lvl, _user, token = val.split("|")
+                        if lvl == "0":
+                            if self.holder is me:
+                                self.holder = None
+                        elif (not self.other_user_logged_in and self.holder is None
+                              and base64.b64decode(token).decode() == self.password):
+                            self.holder = me
+                        continue
+                    if level() >= 1:               # writes need a login on this connection
+                        self.writes.append((addr, val))
+                        self.values[addr] = val
+                    else:
+                        self.ignored_writes.append((addr, val))
+                    continue
+                assert l.endswith("S"), f"unexpected request: {l!r}"
                 addr = l[1:-1]
-                if addr in self.values:
+                if addr == "0.11":
+                    answers.append(f"J0.11A{level()}|{0 if level() else -1}|\r")
+                elif addr in self.values:
                     answers.append(f"J{addr}A{self.values[addr]}\r")
             half = len(answers) // 2
             for chunk in (answers[:half], answers[half:]):
@@ -55,6 +90,14 @@ class FakeController:
 
     def stop(self):
         self.server.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def password_file(tmp_path, monkeypatch):
+    f = tmp_path / "ez2-password.txt"
+    f.write_text("fake-test-pw\n")
+    monkeypatch.setenv("FM2_EZ2_PASSWORD_FILE", str(f))
+    return f
 
 
 @pytest.fixture
@@ -88,15 +131,66 @@ def test_read_snapshot(fake):
     drv.close()
 
 
-def test_never_writes(fake):
+def test_read_never_writes(fake):
     drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
     drv.read()
-    with pytest.raises(DriverError):
-        drv.write_setpoint("ph", 6.5)
-    with pytest.raises(DriverError):
-        drv.write_ph_control(None)
-    assert fake.requests and all(r.endswith("S") for r in fake.requests)
+    drv.read()
+    assert fake.requests and all(r.endswith("S") and "s" not in r for r in fake.requests)
     assert set(r[1:-1] for r in fake.requests) == set(READ_MAP.values())
+    assert fake.writes == []
+    with pytest.raises(DriverError):
+        drv.write_ph_control(None)          # pH mode/PID stay controller-only for now
+    assert fake.writes == []
+    drv.close()
+
+
+def test_write_setpoints(fake):
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    drv.write_setpoint("ph", 6.3)
+    drv.write_setpoint("temperature", 30)
+    drv.write_setpoint("stirrer", 250)
+    assert fake.writes == [("1.13.0", "6.30"), ("1.13.2", "30.0"), ("1.13.13", "250")]
+    assert fake.logins == ["2", "0"] * 3      # login + logout around every write
+    assert fake.holder is None                 # nobody left logged in
+    snap = drv.read()
+    assert (snap.ph_setpoint, snap.temperature_setpoint, snap.stirrer_setpoint) == (6.3, 30.0, 250.0)
+    drv.close()
+
+
+@pytest.mark.parametrize("parameter,value", [
+    ("ph", 14.5),            # above the controller's range
+    ("temperature", -1),     # below
+    ("ph", 6.255),           # more decimals than the controller accepts
+    ("stirrer", 250.5),
+    ("ph", float("nan")),
+    ("foam", 1.0),           # not a setpoint we may write
+])
+def test_write_rejected_without_sending(fake, parameter, value):
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError):
+        drv.write_setpoint(parameter, value)
+    assert fake.writes == []
+    drv.close()
+
+
+def test_write_request_allowlist():
+    assert SETPOINT_ADDRESSES == {"1.13.0", "1.13.2", "1.13.13"}
+    assert build_write_request("1.13.0", "6.30") == b"J1.13.0s6.30\r"
+    for addr in ("2.13.29", "2.24.29", "1.30.0", "3.0.0", "1.14.0"):   # dose counter, actuator, calibration, PID, loop on
+        with pytest.raises(DriverError):
+            build_write_request(addr, "0")
+    with pytest.raises(DriverError):
+        build_write_request("1.13.0", "6.3\rJ2.13.29s0")      # no injection of a second command
+
+
+def test_setpoint_command_end_to_end(fake):
+    """services/commands.py with the real driver: validate, write, read back, confirm."""
+    from fm2.config import settings
+    from fm2.services.commands import write_setpoint as command
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    res = command(drv, "ph", 6.5, settings.setpoint_ranges)
+    assert res.status == "confirmed" and res.old_value == 6.2 and res.readback_value == 6.5
+    assert fake.writes == [("1.13.0", "6.50")]
     drv.close()
 
 
@@ -136,3 +230,40 @@ def test_reconnects_when_controller_drops_idle_connection():
         drv.close()
     finally:
         f.stop()
+
+
+def test_write_refused_when_someone_else_is_logged_in(fake):
+    fake.other_user_logged_in = True           # e.g. Engineer logged in on the display
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError, match="login refused"):
+        drv.write_setpoint("ph", 6.3)
+    assert fake.writes == [] and fake.ignored_writes == []   # setpoint never even sent
+    assert fake.values["1.13.0"] == "6.20"
+    drv.close()
+
+
+def test_write_refused_with_wrong_password(fake, password_file):
+    password_file.write_text("1234\n")
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError, match="login refused"):
+        drv.write_setpoint("ph", 6.3)
+    assert fake.writes == [] and fake.ignored_writes == []
+    drv.close()
+
+
+def test_no_password_no_write(fake, monkeypatch, tmp_path):
+    monkeypatch.setenv("FM2_EZ2_PASSWORD_FILE", str(tmp_path / "missing.txt"))
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError, match="no controller password"):
+        drv.write_setpoint("ph", 6.3)
+    assert fake.logins == [] and fake.writes == []
+    drv.close()
+
+
+def test_login_request_format():
+    from fm2.drivers.ez2control import LOGOUT_REQUEST, build_login_request
+    assert build_login_request(2, 0, "fake-test-pw") == b"J0.11s2|0|" + base64.b64encode(b"fake-test-pw") + b"\r"
+    assert LOGOUT_REQUEST == b"J0.11s0|0|\r"
+    for bad in (0, 3):                          # never View (pointless) nor Service
+        with pytest.raises(DriverError):
+            build_login_request(bad, 0, "x")

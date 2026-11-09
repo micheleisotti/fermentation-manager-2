@@ -15,9 +15,14 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 ## State of the code (github.com/micheleisotti/fermentation-manager-2)
 - `main`: backend core, React UI (Home, Fermentation, Planning, Profiles).
 - Backend: FastAPI + SQLite (WAL) + acquisition thread + alert engine + analysis; 30 pytest tests.
-- **ez2-Control driver: read-only, working on both real controllers** (WebSocket protocol,
-  address map and verification in `docs/controller-inspection.md`). Writes not implemented:
-  setpoint commands are rejected with "read-only for now".
+- **ez2-Control driver working on both real controllers** (WebSocket protocol, address map and
+  verification in `docs/controller-inspection.md`): reads everything needed; **writes pH / T /
+  stirrer setpoints** (allow-list of 3 addresses, controller range/decimals check, read-back),
+  confirmed live on R2-dx. Writes need a controller login: the driver logs in (Engineer)
+  only around each write and logs out, and **never claims** a login held on the display/web
+  UI (the command then fails, nothing is written). Password in
+  `C:\ProgramData\FermentationManager\ez2-password.txt` (ACL: service + admins), never in git.
+  pH control mode/PID writes: not implemented (set on the controller).
 - Reactor names: **R1-sx = 192.0.2.42, R2-dx = 192.0.2.41** (PC Ethernet 192.0.2.10/24, no gateway).
 - Home shows every reactor: running experiment card, or "Idle · not recording" card with live values.
 - Demo: `FM2_SIM_SPEED=300 FM2_SAMPLING_INTERVAL_S=2 fm2-server` + `python scripts/demo_seed.py`.
@@ -68,7 +73,8 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   `pip install -e .` if dependencies changed, `npm.cmd run build` in `frontend`, `Restart-Service fm2` (admin).
 
 ## Next steps
-1. Setpoint writes with read-back (one at a time with Michele), then pH mode/PID from planning.
+1. pH control mode/PID from planning (before Start), same login rules; then UI for remote
+   setpoint changes on the phone layout.
 2. Backup job, consultation mode on the laptop.
 3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
