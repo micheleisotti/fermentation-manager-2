@@ -36,9 +36,19 @@ def test_settings_defaults_validation_and_live_apply(env):
     # remote changes can be switched off
     ok["allow_remote_setpoints"] = False
     c.put("/api/settings/remote", json=ok)
-    assert c.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "remote"}).status_code == 403
-    assert c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 5.7, "origin": "remote"}).status_code == 403
-    assert c.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "local"}).status_code == 200
+    # remote vs local is decided from the connection (Tailscale address), not from what the browser says
+    rc = TestClient(app, client=("100.101.102.103", 50000))
+    assert rc.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "local"}).status_code == 403
+    assert rc.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 5.7}).status_code == 403
+    assert c.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "remote"}).status_code == 200
+    # remote and backup settings can be changed only on the lab PC
+    ok["allow_remote_setpoints"] = True
+    assert rc.put("/api/settings/remote", json=ok).status_code == 403
+    assert rc.put("/api/settings/backup", json=c.get("/api/settings").json()["backup"]).status_code == 403
+    assert rc.get("/api/system").json()["client_local"] is False and c.get("/api/system").json()["client_local"] is True
+    c.put("/api/settings/remote", json=ok)
+    r = rc.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.0}).json()
+    assert r["status"] == "confirmed"
     # alert thresholds apply to running experiments
     a = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1"}).json()
     c.post(f"/api/experiments/{a['id']}/start")

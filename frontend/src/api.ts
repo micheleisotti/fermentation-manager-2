@@ -189,7 +189,7 @@ export interface AppSettings {
 }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
-export interface SystemInfo { version: string; data_dir: string; sampling_interval_s: number; experiments: number;
+export interface SystemInfo { version: string; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;
   reactors: { reactor_id: string; driver: string; address: string; online: boolean; capabilities: Record<string, boolean> }[] }
 export interface SystemStatus {
   server: { host: string; started_at: string; uptime_s: number; version: string };

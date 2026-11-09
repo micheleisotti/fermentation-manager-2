@@ -6,6 +6,7 @@ FastAPI application. One service process hosts the API, the acquisition thread a
 from __future__ import annotations
 
 import io
+import ipaddress
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -654,25 +655,46 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
                                              Experiment.status == ExperimentStatus.fermenting))
     alert_state = acq.alert_state_for(exp.id, reactor_id) if exp else None
-    _check_remote(request, body.origin)
+    _check_remote(request)
     try:
         res = commands.write_setpoint(driver, body.parameter, body.value,
                                       request.app.state.app_settings.setpoint_ranges(), alert_state)
     except commands.CommandRejected as ex:
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id,
                                parameter=body.parameter, requested_value=body.value, status="rejected",
-                               message=str(ex), origin=body.origin, author=who(request, db)))
+                               message=str(ex), origin=origin_of(request), author=who(request, db)))
         db.commit()
         raise HTTPException(422, str(ex))
     db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=res.parameter,
                            old_value=res.old_value, requested_value=res.requested_value,
                            readback_value=res.readback_value, status=res.status, message=res.message,
-                           origin=body.origin, author=who(request, db)))
+                           origin=origin_of(request), author=who(request, db)))
     return res.__dict__
 
 
-def _check_remote(request: Request, origin: str) -> None:
-    if origin == "remote" and not request.app.state.app_settings.get("remote")["allow_remote_setpoints"]:
+def is_local(request: Request) -> bool:
+    """
+    True for requests from the lab PC itself (loopback). Decided from the connection, never from
+    what the browser declares. "testclient" is Starlette's test client (not a network address).
+    """
+    host = request.client.host if request.client else ""
+    if host == "testclient":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
+def origin_of(request: Request) -> str:
+    return "local" if is_local(request) else "remote"
+
+
+LOCAL_ONLY_SECTIONS = ("remote", "backup")
+
+
+def _check_remote(request: Request, _declared: str = "") -> None:
+    if not is_local(request) and not request.app.state.app_settings.get("remote")["allow_remote_setpoints"]:
         raise HTTPException(403, "Changes from remote devices are switched off (Settings › Remote access).")
 
 
@@ -683,7 +705,7 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
     driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
     exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
                                              Experiment.status == ExperimentStatus.fermenting))
-    _check_remote(request, body.origin)
+    _check_remote(request)
     try:
         results = commands.write_limits(driver, body.parameter, body.low, body.high)
     except commands.CommandRejected as ex:
@@ -692,7 +714,7 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=r.parameter,
                                old_value=r.old_value, requested_value=r.requested_value,
                                readback_value=r.readback_value, status=r.status, message=r.message,
-                               origin=body.origin, author=who(request, db)))
+                               origin=origin_of(request), author=who(request, db)))
     return [r.__dict__ for r in results]
 
 
@@ -1397,6 +1419,8 @@ def get_settings(request: Request):
 
 @router.put("/settings/{section}")
 def put_settings(section: str, body: dict, request: Request):
+    if section in LOCAL_ONLY_SECTIONS and not is_local(request):
+        raise HTTPException(403, "This section can be changed only on the lab PC.")
     try:
         request.app.state.app_settings.put(section, body)
     except SettingsError as ex:
@@ -1433,7 +1457,7 @@ def system_info(request: Request, db: Session = Depends(get_db)):
     st: Settings = request.app.state.settings
     acq: Acquisition = request.app.state.acq
     return {
-        "version": __version__, "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
+        "version": __version__, "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
         "experiments": db.scalar(select(func.count()).select_from(Experiment)),
         "reactors": [{"reactor_id": r.reactor_id, "driver": r.driver, "address": r.address,
                       "online": acq.live[r.reactor_id].last_error is None and acq.live[r.reactor_id].last_ok is not None,

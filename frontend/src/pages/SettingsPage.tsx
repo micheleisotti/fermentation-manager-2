@@ -175,6 +175,7 @@ export function SettingsPage() {
   if (all.error) return <div className="banner alert">Settings not available: {all.error}</div>;
   if (!all.data || !remote.v || !alerts.v || !notif.v || !bk.v) return <div className="muted">Loading…</div>;
   const r = remote.v, a = alerts.v, n = notif.v, b = bk.v;
+  const local = sys.data?.client_local ?? false;
   const st: BackupStatus | undefined = backup.data;
 
   const CAPS: [string, string][] = [["read_values", "Read values"], ["read_limits", "Read process limits"],
@@ -237,6 +238,8 @@ export function SettingsPage() {
           </Section>
 
           <Section id="remote" title="Remote access" sub="Through the private network (Tailscale): nothing is exposed to the public internet.">
+            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
+            <fieldset className="plain" disabled={!local}>
             <div className="row between" style={{ flexWrap: "nowrap", gap: 16 }}>
               <span className="stack" style={{ gap: 0 }}>Allow setpoint and limit changes from remote devices
                 <span className="xs muted">Always with confirmation, read-back from the controller and a log entry</span></span>
@@ -261,7 +264,8 @@ export function SettingsPage() {
               </table>
             </div>
             <span className="xs muted">The controller's own sensor ranges always apply on top.</span>
-            {remote.footer}
+            {local && remote.footer}
+            </fieldset>
           </Section>
 
           <Section id="alerts" title="Notifications" sub="Every event is always stored and shown in the app; here you choose which ones are also sent to your phone.">
@@ -332,6 +336,8 @@ export function SettingsPage() {
               <DataValue value={String(st?.backups_present ?? 0)} label="Backups in the destination" />
             </div>
             {st?.last_error && <div className="banner alert" role="alert"><Icon name="warn" color="#b30020" size={20} /><span>{st.last_error}</span></div>}
+            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
+            <fieldset className="plain" disabled={!local}>
             <div className="row" style={{ gap: 12 }}>
               <label className="field" style={{ flex: "2 1 260px" }}>Local data folder<input className="mono" value={sys.data?.data_dir ?? ""} readOnly /></label>
               <label className="field" style={{ flex: "2 1 260px" }}>Backup destination (folder on this PC or network share)
@@ -362,6 +368,7 @@ export function SettingsPage() {
               }}>{busy ? "Backing up…" : "Back up now"}</button>
               {bkMsg && <span className={`banner ${bkMsg.kind} small`} style={{ padding: "6px 12px" }}>{bkMsg.text}</span>}
             </div>
+            </fieldset>
             <span className="xs muted">Backups are consistent copies made while recording continues. Do not point the destination at the live data folder, and never open the live database from a synced folder.
               Restore from a backup is done with the service stopped (procedure in the docs).</span>
           </Section>
