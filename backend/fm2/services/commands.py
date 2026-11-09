@@ -106,3 +106,45 @@ def ph_control_differences(plan: PhControl, ctrl: PhControl, tol: float = 1e-6) 
         if got.get(k) is None or abs(got[k] - v) > tol:
             out.append(f"{k} {got.get(k)!r} instead of {v:g}")
     return out
+
+
+LIMIT_FIELDS = {"ph": ("ph_low_limit", "ph_high_limit"),
+                "temperature": ("temperature_low_limit", "temperature_high_limit")}
+
+
+def write_limits(driver: ControllerDriver, parameter: str, low: Optional[float], high: Optional[float],
+                 tolerance: float = 1e-6) -> list[CommandResult]:
+    """Change process (alarm) limits of pH or temperature; one CommandResult per limit changed."""
+    if parameter not in LIMIT_FIELDS:
+        raise CommandRejected(f"Process limits can be changed for pH and temperature only, not '{parameter}'")
+    if low is None and high is None:
+        raise CommandRejected("Give a low and/or a high limit")
+    if low is not None and high is not None and low >= high:
+        raise CommandRejected(f"Low limit {low:g} must be below high limit {high:g}")
+    f_lo, f_hi = LIMIT_FIELDS[parameter]
+    try:
+        before = driver.read()
+    except DriverError as e:
+        return [CommandResult(f_lo if low is not None else f_hi, None, low if low is not None else high,
+                              None, "error", f"Controller not reachable: {e}")]
+    wanted = [(f, v, getattr(before, f)) for f, v in ((f_lo, low), (f_hi, high)) if v is not None]
+    sp = before.setpoint(parameter)
+    lo_after = low if low is not None else getattr(before, f_lo)
+    hi_after = high if high is not None else getattr(before, f_hi)
+    warnings: tuple[str, ...] = ()
+    if sp is not None and lo_after is not None and hi_after is not None and not (lo_after <= sp <= hi_after):
+        warnings = (f"The current setpoint {sp:g} is outside the new limits {lo_after:g}–{hi_after:g}: "
+                    "an out-of-limits alert will follow.",)
+    try:
+        driver.write_limits(parameter, low, high)
+        after = driver.read()
+    except DriverError as e:
+        return [CommandResult(f, old, v, None, "error", f"Write failed: {e}", warnings) for f, v, old in wanted]
+    out = []
+    for f, v, old in wanted:
+        rb = getattr(after, f)
+        ok = rb is not None and abs(rb - v) <= tolerance
+        out.append(CommandResult(f, old, v, rb, "confirmed" if ok else "mismatch",
+                                 "Limit confirmed by the controller" if ok else f"Controller reports {rb!r} instead of {v:g}",
+                                 warnings))
+    return out

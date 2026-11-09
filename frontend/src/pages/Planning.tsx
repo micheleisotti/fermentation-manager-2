@@ -47,7 +47,7 @@ const GROUP: Record<string, string> = {
   ph_setpoint: "pH controller", ph_control_mode: "pH controller", ph_pid: "pH controller", ph_limits: "pH controller",
   temperature_setpoint: "Temperature controller", temperature_limits: "Temperature controller", stirrer_setpoint: "Stirrer",
 };
-const show = (v: unknown) => v === null || v === undefined ? "—" : Array.isArray(v) ? v.join("–")
+const show = (v: unknown) => v === null || v === undefined ? "—" : Array.isArray(v) ? v.map((x) => x ?? "·").join("–")
   : typeof v === "object" ? Object.entries(v as Record<string, number>).map(([k, x]) => `${k} ${x}`).join(" / ") : String(v);
 
 function PlanCheckTable({ rows }: { rows: PlanCheckRow[] }) {
@@ -225,7 +225,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
             {existing && profile && mismatches.length > 0 && (
               <div className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
                 <span><b>{pidDiffers ? "pH control differs." : "Setpoints differ."}</b> {pidDiffers && "The controller may have been left in another mode by a previous user. "}
-                  Loading the profile writes setpoints, pH control mode and PID to the controller, then reads them back.</span>
+                  Loading the profile writes setpoints, process limits, pH control mode and loop parameters to the controller, then reads them back.</span>
               </div>
             )}
             <div className="row">
@@ -239,7 +239,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                   check.refresh();
                 } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
               }}>Load profile to controller</button>
-              <span className="xs muted">Process limits are read only; actuator settings stay on the controller. PID can be loaded only here, before Start.</span>
+              <span className="xs muted">Limits left empty in the profile stay as they are on the controller; actuators, interlocks and calibration stay on the controller. pH control mode and loop parameters can be loaded only here, before Start.</span>
             </div>
           </section>
 

@@ -23,7 +23,9 @@ from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
 from ..analysis import base_dosing, kinetics, stats
 from ..config import Settings
-from ..db import make_engine, make_session_factory, session_scope
+import logging
+
+from ..db import add_missing_columns, make_engine, make_session_factory, session_scope
 from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
 from ..models import (
     DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event,
@@ -43,6 +45,8 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
                db_path=None) -> FastAPI:
     engine = make_engine(db_path or settings.db_path)
     Base.metadata.create_all(engine)
+    for c in add_missing_columns(engine, Base):
+        log.info("database: added column %s", c)
     sessions = make_session_factory(engine)
     with session_scope(sessions) as s:
         if not s.scalar(select(func.count()).select_from(Variable)):
@@ -75,7 +79,18 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
     index = dist / "index.html"
     if not index.exists():
         return
-    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+    class HashedAssets(StaticFiles):
+        """Build outputs have content hashes in their names: safe to cache for a long time."""
+        async def get_response(self, path, scope):
+            r = await super().get_response(path, scope)
+            if r.status_code == 200:
+                r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return r
+
+    app.mount("/assets", HashedAssets(directory=dist / "assets"), name="assets")
+    # index.html (and the other un-hashed files) must be revalidated on every load, otherwise phones
+    # keep showing the previous build after an update.
+    no_cache = {"Cache-Control": "no-cache"}
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
@@ -83,8 +98,8 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
             raise HTTPException(404)
         f = (dist / path).resolve()
         if path and f.is_file() and dist.resolve() in f.parents:
-            return FileResponse(f)
-        return FileResponse(index)
+            return FileResponse(f, headers=no_cache)
+        return FileResponse(index, headers=no_cache)
 
 
 # --- dependencies ---------------------------------------------------------------------
@@ -104,6 +119,8 @@ def get_db(request: Request):
 def now_of(request: Request) -> datetime:
     return request.app.state.clock()
 
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -316,6 +333,20 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
         db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=param, old_value=cur,
                                requested_value=value, readback_value=rb, status=status, origin="profile"))
         results.append({"parameter": param, "status": status, "readback": rb})
+    for param, lo, hi in (("ph", prof.ph_low_limit, prof.ph_high_limit),
+                          ("temperature", prof.temperature_low_limit, prof.temperature_high_limit)):
+        if lo is None and hi is None:
+            continue
+        try:
+            for r in commands.write_limits(driver, param, lo, hi):
+                db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=r.parameter,
+                                       old_value=r.old_value, requested_value=r.requested_value,
+                                       readback_value=r.readback_value, status=r.status, message=r.message,
+                                       origin="profile"))
+                results.append({"parameter": r.parameter, "status": r.status, "readback": r.readback_value,
+                                **({"message": r.message} if r.status != "confirmed" else {})})
+        except commands.CommandRejected as ex:
+            results.append({"parameter": f"{param}_limits", "status": "error", "message": str(ex)})
     if prof.ph_control_mode:
         try:
             commands.load_ph_control(driver, PhControl(prof.ph_control_mode.value, prof.ph_pid), e.status.value)
@@ -354,11 +385,14 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
                 rows.append({"parameter": "ph_pid", "plan": applicable,
                              "controller": {k: (snap.ph_control.pid or {}).get(k) for k in applicable},
                              "match": not param_diffs})
-    rows.append({"parameter": "ph_limits", "plan": None, "controller": [snap.ph_low_limit, snap.ph_high_limit],
-                 "match": True, "read_only": True})
-    rows.append({"parameter": "temperature_limits", "plan": None,
-                 "controller": [snap.temperature_low_limit, snap.temperature_high_limit], "match": True,
-                 "read_only": True})
+    for param in ("ph", "temperature"):
+        ctrl = [getattr(snap, f"{param}_low_limit"), getattr(snap, f"{param}_high_limit")]
+        plan = [getattr(p, f"{param}_low_limit"), getattr(p, f"{param}_high_limit")] if p else [None, None]
+        if plan == [None, None]:     # profile leaves the limits as they are on the controller
+            rows.append({"parameter": f"{param}_limits", "plan": None, "controller": ctrl, "match": True, "read_only": True})
+        else:
+            match = all(pv is None or (cv is not None and abs(cv - pv) < 1e-6) for pv, cv in zip(plan, ctrl))
+            rows.append({"parameter": f"{param}_limits", "plan": plan, "controller": ctrl, "match": match})
     busy = db.scalar(select(Experiment).where(Experiment.reactor_id == e.reactor_id,
                                               Experiment.status == ExperimentStatus.fermenting,
                                               Experiment.id != e.id))
@@ -384,7 +418,9 @@ def start_experiment(exp_id: int, request: Request, db: Session = Depends(get_db
         e.plan_snapshot = {"profile": p.name, "ph_setpoint": p.ph_setpoint,
                            "temperature_setpoint": p.temperature_setpoint, "stirrer_setpoint": p.stirrer_setpoint,
                            "ph_control_mode": p.ph_control_mode.value if p.ph_control_mode else None,
-                           "ph_pid": p.ph_pid}
+                           "ph_pid": p.ph_pid,
+                           "ph_limits": [p.ph_low_limit, p.ph_high_limit],
+                           "temperature_limits": [p.temperature_low_limit, p.temperature_high_limit]}
     db.flush()
     db.commit()
     acq.poll_once()  # first reading at t = 0 (and immediate "at Start" alerts)
@@ -552,6 +588,25 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
                            readback_value=res.readback_value, status=res.status, message=res.message,
                            origin=body.origin, author=body.author))
     return res.__dict__
+
+
+@router.post("/reactors/{reactor_id}/limits")
+def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Session = Depends(get_db)):
+    """Change the process (alarm) limits of pH or temperature, with read-back; logged per limit."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
+                                             Experiment.status == ExperimentStatus.fermenting))
+    try:
+        results = commands.write_limits(driver, body.parameter, body.low, body.high)
+    except commands.CommandRejected as ex:
+        raise HTTPException(422, str(ex))
+    for r in results:
+        db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=r.parameter,
+                               old_value=r.old_value, requested_value=r.requested_value,
+                               readback_value=r.readback_value, status=r.status, message=r.message,
+                               origin=body.origin, author=body.author))
+    return [r.__dict__ for r in results]
 
 
 @router.get("/experiments/{exp_id}/setpoint-log")

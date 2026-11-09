@@ -89,7 +89,13 @@ SETTLING_TIME_RANGE = (1.0, 86400.0)   # the controller exposes no min/max for i
 # Only PID (0) and Adaptive (1). External (2) would re-purpose the pumps: never written.
 WRITABLE_PH_MODES = {"pid": "0", "adaptive": "1"}
 
-WRITABLE_ADDRESSES = SETPOINT_ADDRESSES | {PH_TYPE_ADDRESS} | frozenset(PH_PID_ADDRESSES.values())
+# Process (alarm) limits: 1.4 = high, 1.5 = low. They only raise alarms/notifications;
+# the interlock limits that act on actuators (1.20 / 1.21) are NOT writable.
+LIMIT_SENSORS = {"ph": PH, "temperature": TEMPERATURE}
+LIMIT_ADDRESSES = frozenset(f"1.{k}.{s}" for s in LIMIT_SENSORS.values() for k in (4, 5))
+
+WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | {PH_TYPE_ADDRESS} | frozenset(PH_PID_ADDRESSES.values())
+                      | LIMIT_ADDRESSES)
 
 
 def build_write_request(address: str, text: str) -> bytes:
@@ -194,7 +200,7 @@ class Ez2ControlDriver(ControllerDriver):
     """Reads one ez2-Control over its WebSocket. Keeps one connection open, reconnects on failure."""
 
     capabilities = DriverCapabilities(read_values=True, read_limits=True,
-                                      write_setpoints=True, write_ph_control=True)
+                                      write_setpoints=True, write_ph_control=True, write_limits=True)
 
     def __init__(self, reactor_id: str, address: str, timeout_s: float = 5.0,
                  connect: Optional[Callable] = None, clock: Optional[Callable[[], datetime]] = None,
@@ -385,6 +391,48 @@ class Ez2ControlDriver(ControllerDriver):
                 raise DriverError(f"{parameter} {value:g} outside the controller's range {lo:g}–{hi:g}")
             text = _format(value, dec, parameter)
             self._logged_in_writes([(f"1.13.{sensor}", text, dec)])
+
+    def write_limits(self, parameter: str, low: Optional[float], high: Optional[float]) -> None:
+        """
+        Write the process (alarm) limits of pH or temperature, in one login session. Checked
+        against the sensor range and display decimals; low must stay below high (also against
+        the limit left unchanged). Only limits that differ are written.
+        """
+        import math
+        if parameter not in LIMIT_SENSORS:
+            raise DriverError(f"process limits can be written for pH and temperature only, not {parameter!r}")
+        for v in (low, high):
+            if v is not None and (not isinstance(v, (int, float)) or not math.isfinite(v)):
+                raise DriverError(f"invalid limit {v!r}")
+        sensor = LIMIT_SENSORS[parameter]
+        a_hi, a_lo = f"1.4.{sensor}", f"1.5.{sensor}"
+        with self._lock:
+            cur = self._query({"hi": a_hi, "lo": a_lo, "max": f"1.6.{sensor}", "min": f"1.7.{sensor}",
+                               "decimals": f"1.58.{sensor}"})
+            rmin, rmax, dec = to_float(cur.get("min")), to_float(cur.get("max")), to_float(cur.get("decimals"))
+            cur_lo, cur_hi = to_float(cur.get("lo")), to_float(cur.get("hi"))
+            if None in (rmin, rmax, dec, cur_lo, cur_hi):
+                raise DriverError(f"{parameter}: cannot read the current limits/range, not writing")
+            dec = int(dec)
+            new_lo = cur_lo if low is None else low
+            new_hi = cur_hi if high is None else high
+            for name, v in (("low", new_lo), ("high", new_hi)):
+                if not (rmin <= v <= rmax):
+                    raise DriverError(f"{parameter} {name} limit {v:g} outside the sensor range {rmin:g}–{rmax:g}")
+            if new_lo >= new_hi:
+                raise DriverError(f"{parameter}: low limit {new_lo:g} must be below high limit {new_hi:g}")
+            writes = []
+            for addr, v, old in ((a_lo, low, cur_lo), (a_hi, high, cur_hi)):
+                if v is None:
+                    continue
+                text = _format(v, dec, f"{parameter} limit")
+                if abs(old - float(text)) >= 10 ** (-dec) / 2:
+                    writes.append((addr, text, dec))
+            # order matters when the range moves past the old one: never let low >= high in between
+            if len(writes) == 2 and new_lo >= cur_hi:
+                writes.reverse()
+            if writes:
+                self._logged_in_writes(writes)
 
     def write_ph_control(self, control: PhControl) -> None:
         """

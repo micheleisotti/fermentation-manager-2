@@ -20,7 +20,7 @@ const MODE_PARAMS: Record<string, ParamKey[]> = {
   adaptive: ["P", "I", "D", "deadband", "cycle_time", "settling_time"],
 };
 
-const EMPTY = { name: "", ph: "", t: "", stir: "", mode: "pid", notes: "",
+const EMPTY = { name: "", ph: "", t: "", stir: "", mode: "pid", notes: "", phLo: "", phHi: "", tLo: "", tHi: "",
   P: "", I: "", D: "", deadband: "", cycle_time: "", settling_time: "" };
 
 function showParams(p: Profile) {
@@ -39,6 +39,13 @@ function showParams(p: Profile) {
   );
 }
 
+function showLimits(p: Profile) {
+  const r = (lo: number | null, hi: number | null) => (lo == null && hi == null ? null : `${lo ?? "·"}–${hi ?? "·"}`);
+  const ph = r(p.ph_low_limit, p.ph_high_limit), t = r(p.temperature_low_limit, p.temperature_high_limit);
+  if (!ph && !t) return "—";
+  return <span className="stack" style={{ gap: 2 }}>{ph && <span><span className="muted">pH</span> {ph}</span>}{t && <span><span className="muted">T</span> {t} °C</span>}</span>;
+}
+
 export function Profiles() {
   const list = usePolling(api.profiles, 60000);
   const [f, setF] = useState(EMPTY);
@@ -54,7 +61,13 @@ export function Profiles() {
       return;
     }
     try {
+      const lim = [num(f.phLo), num(f.phHi), num(f.tLo), num(f.tHi)];
+      if (lim.some((v) => v !== null && Number.isNaN(v))) { setMsg({ kind: "alert", text: "Limits must be numbers." }); return; }
+      if ((lim[0] !== null && lim[1] !== null && lim[0] >= lim[1]) || (lim[2] !== null && lim[3] !== null && lim[2] >= lim[3])) {
+        setMsg({ kind: "alert", text: "Each low limit must be below its high limit." }); return;
+      }
       await api.createProfile({ name: f.name.trim(), ph_setpoint: num(f.ph), temperature_setpoint: num(f.t), stirrer_setpoint: num(f.stir),
+        ph_low_limit: lim[0], ph_high_limit: lim[1], temperature_low_limit: lim[2], temperature_high_limit: lim[3],
         ph_control_mode: f.mode || null, ph_pid: entries.length ? Object.fromEntries(entries) as Record<string, number> : null, notes: f.notes });
       setF(EMPTY);
       setMsg({ kind: "good", text: "Profile saved." }); list.refresh();
@@ -74,20 +87,22 @@ export function Profiles() {
   return (
     <>
       <h1>Controller profiles</h1>
-      <span className="muted small">A profile is a named set of setpoints and pH control settings, loaded onto a controller from the planning screen, before Start.</span>
+      <span className="muted small">A profile is a named set of setpoints, process limits and pH control settings, loaded onto a controller from the planning screen, before Start.</span>
       <div className="split">
         <div className="wide">
           <section className="card">
             <h2 style={{ fontSize: 18 }}>Saved profiles</h2>
             <div className="table-wrap">
-              <table className="data" style={{ minWidth: 700 }}>
-                <thead><tr><th>Name</th><th>pH</th><th>T (°C)</th><th>Stirrer (rpm)</th><th>pH control</th><th>Loop parameters</th><th aria-label="Actions" /></tr></thead>
+              <table className="data" style={{ minWidth: 760 }}>
+                <thead><tr><th>Name</th><th>pH</th><th>T (°C)</th><th>Stirrer (rpm)</th><th>Limits</th><th>pH control</th><th>Loop parameters</th><th aria-label="Actions" /></tr></thead>
                 <tbody>
                   {(list.data ?? []).map((p) => (
                     <tr key={p.id}>
                       <td style={{ fontWeight: 500 }}>{p.name}</td>
                       <td className="mono">{p.ph_setpoint ?? "—"}</td><td className="mono">{p.temperature_setpoint ?? "—"}</td>
-                      <td className="mono">{p.stirrer_setpoint ?? "—"}</td><td>{p.ph_control_mode ?? "—"}</td>
+                      <td className="mono">{p.stirrer_setpoint ?? "—"}</td>
+                      <td className="mono small" style={{ whiteSpace: "nowrap" }}>{showLimits(p)}</td>
+                      <td>{p.ph_control_mode ?? "—"}</td>
                       <td className="mono small">{showParams(p)}</td>
                       <td style={{ whiteSpace: "nowrap", textAlign: "right", width: 1 }}>
                         {confirmId === p.id ? (
@@ -101,7 +116,7 @@ export function Profiles() {
                       </td>
                     </tr>
                   ))}
-                  {(list.data ?? []).length === 0 && <tr><td colSpan={7} className="muted">No profiles yet.</td></tr>}
+                  {(list.data ?? []).length === 0 && <tr><td colSpan={8} className="muted">No profiles yet.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -116,6 +131,13 @@ export function Profiles() {
               <label className="field">pH setpoint<input inputMode="decimal" value={f.ph} onChange={set("ph")} /></label>
               <label className="field">T (°C)<input inputMode="decimal" value={f.t} onChange={set("t")} /></label>
               <label className="field">Stirrer (rpm)<input inputMode="decimal" value={f.stir} onChange={set("stir")} /></label>
+            </div>
+            <span className="xs muted">Process limits (alarm only; empty = leave the controller's value)</span>
+            <div className="row" style={{ flexWrap: "nowrap" }}>
+              <label className="field">pH low<input inputMode="decimal" value={f.phLo} onChange={set("phLo")} /></label>
+              <label className="field">pH high<input inputMode="decimal" value={f.phHi} onChange={set("phHi")} /></label>
+              <label className="field">T low (°C)<input inputMode="decimal" value={f.tLo} onChange={set("tLo")} /></label>
+              <label className="field">T high (°C)<input inputMode="decimal" value={f.tHi} onChange={set("tHi")} /></label>
             </div>
             <label className="field">pH control mode
               <select value={f.mode} onChange={set("mode")}><option value="pid">PID</option><option value="adaptive">Adaptive</option><option value="">Not set</option></select>

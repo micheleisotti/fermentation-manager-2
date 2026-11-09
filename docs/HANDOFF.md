@@ -42,13 +42,17 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   conditions/replicates are assigned per **analysis session**. Flag parallel-run pairs in
   sessions (info only, never affects statistics).
 - Controller data immutable; manual entries editable with audit log.
+- Experiments can be deleted when not recording (type the code to confirm; all data removed).
 - Setpoints (pH, T, stirrer) writable anytime incl. remote, with allowed range, max step,
   read-back and log. **pH control mode + PID only from planning (profile), before Start.**
   Actuators, dose counter reset, calibration: controller only.
 - Base: use the controller's **cumulative volume** as-is (dose monitoring calibrated on the
   controller; no re-computation, no smoothing — it is a staircase). Rate in mL/min computed
   per 15-min / 1-h bin; keep pump activation % too.
-- Process limits (pH, T) read from the controller, shown on charts; alerts:
+- Process limits (pH, T) read from the controller, shown on charts. **Writable since 9 Nov 2026**
+  (Michele's decision; they are alarm limits only, the interlock limits that act on actuators stay
+  controller-only): in the profile (loaded at planning) and during the run (phone/desktop, read back,
+  logged). Alerts:
   out-of-limits (immediately at Start, then after 3 min, once per excursion),
   setpoint reached (once per setpoint; "already at setpoint" at Start), controller silent,
   setpoint changed on controller, fermentation probably finished.

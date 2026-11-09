@@ -27,6 +27,8 @@ export interface Named { id: number; name: string; description: string; archived
 export interface Profile {
   id: number; name: string; ph_setpoint: number | null; temperature_setpoint: number | null; stirrer_setpoint: number | null;
   ph_control_mode: string | null; ph_pid: Record<string, number> | null; notes: string;
+  ph_low_limit: number | null; ph_high_limit: number | null;
+  temperature_low_limit: number | null; temperature_high_limit: number | null;
 }
 export interface PlanCheckRow { parameter: string; plan: unknown; controller: unknown; match: boolean; read_only?: boolean }
 export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[] }
@@ -82,6 +84,8 @@ export const api = {
   analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),
   setpoint: (reactor: string, parameter: string, value: number, origin = "local") =>
     req<CommandResult>(`/reactors/${reactor}/setpoints`, { method: "POST", body: JSON.stringify({ parameter, value, origin }) }),
+  limits: (reactor: string, parameter: string, low: number | null, high: number | null, origin = "local") =>
+    req<CommandResult[]>(`/reactors/${reactor}/limits`, { method: "POST", body: JSON.stringify({ parameter, low, high, origin }) }),
   setpointLog: (id: number) => req<{ at: string; parameter: string; old: number | null; new: number; readback: number | null; status: string; origin: string }[]>(`/experiments/${id}/setpoint-log`),
 };
 

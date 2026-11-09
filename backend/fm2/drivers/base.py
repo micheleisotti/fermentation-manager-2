@@ -7,8 +7,9 @@ driver will implement it once we have inspected what the controller exposes.
 
 Write operations are deliberately limited to what was agreed:
 - setpoints (pH, temperature, stirrer): any time, with read-back
+- process (alarm) limits of pH and temperature: any time, with read-back (decision 9 Nov 2026)
 - pH control mode and PID parameters: only from planning, before Start
-- actuators, dose counters, calibration: never (controller only)
+- actuators, dose counters, calibration, interlock limits: never (controller only)
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ class DriverCapabilities:
     read_limits: bool = False
     write_setpoints: bool = False
     write_ph_control: bool = False
+    write_limits: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,3 +86,10 @@ class ControllerDriver(ABC):
     @abstractmethod
     def write_ph_control(self, control: PhControl) -> None:
         """Write pH control mode and PID parameters (planning only). Raises DriverError."""
+
+    def write_limits(self, parameter: str, low: Optional[float], high: Optional[float]) -> None:
+        """
+        Write the process (alarm) limits of 'ph' or 'temperature'; None leaves a limit as it is.
+        Callers must read back. Raises DriverError. Interlock limits are never written.
+        """
+        raise DriverError("this controller driver cannot write process limits")

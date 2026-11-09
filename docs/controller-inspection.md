@@ -41,7 +41,8 @@ Ethernet adapter has the static address 192.0.2.10/24 **without a gateway**; Wi-
 |---|---|---|
 | Process value | `1.15.<s>` | `NO CONT` etc. → none |
 | Setpoint | `1.13.<s>` | |
-| Process (alarm) limit high / low | `1.4.<s>` / `1.5.<s>` | shown on charts, used by alerts |
+| Process (alarm) limit high / low | `1.4.<s>` / `1.5.<s>` | shown on charts, used by alerts; writable for pH and T |
+| Interlock limit high / low | `1.20.<s>` / `1.21.<s>` | act on actuators: **never written** |
 | Loop active | `1.14.<s>` | |
 | Control type | `1.19.<s>` | 0 PID, 1 Adaptive, 2 External, 3 Level, 4 Flow, 5 P-Adaptive, 6 TCUSP |
 | PID P / I / D | `3.0.<s>` / `3.3.<s>` / `3.6.<s>` | |

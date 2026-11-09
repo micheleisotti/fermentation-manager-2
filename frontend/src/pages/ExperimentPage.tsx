@@ -6,6 +6,7 @@ import { baseOption, trendsOption, TREND_VARS } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
 import { DeleteExperiment } from "../components/DeleteExperiment";
+import { LimitsDialog } from "../components/LimitsDialog";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 
@@ -74,6 +75,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const [showPartner, setShowPartner] = useState(true);
   const [showPartnerBase, setShowPartnerBase] = useState(false);
   const [dialog, setDialog] = useState<string | null>(null);
+  const [limitsDialog, setLimitsDialog] = useState<string | null>(null);
 
   const lv = TREND_VARS.find((v) => v.key === left)!;
   const rv = TREND_VARS.find((v) => v.key === right) ?? null;
@@ -172,11 +174,14 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               ].map((row) => (
                 <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
                   <DataValue value={row.v} unit={row.u} label={row.l} color={row.c} />
-                  <button className="btn tonal" onClick={() => setDialog(row.p)}>Edit</button>
+                  <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
+                    {row.p !== "stirrer" && <button className="btn text" onClick={() => setLimitsDialog(row.p)} aria-label={`Edit ${row.p} process limits`}>Limits</button>}
+                    <button className="btn tonal" onClick={() => setDialog(row.p)}>Edit</button>
+                  </span>
                 </div>
               ))}
               <span className="xs muted" style={{ padding: "4px 8px" }}>
-                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the profile at planning; limits, dose calibration and actuators stay on the controller.
+                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the profile at planning; dose calibration, interlocks and actuators stay on the controller.
               </span>
             </section>
           )}
@@ -208,6 +213,10 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
 
       <ManualVariables e={e} />
 
+      {limitsDialog && s && (
+        <LimitsDialog reactor={e.reactor_id} parameter={limitsDialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
+          onClose={(changed) => { setLimitsDialog(null); if (changed) { live.refresh(); log.refresh(); } }} />
+      )}
       {dialog && s && (
         <SetpointDialog reactor={e.reactor_id} parameter={dialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
           onClose={(changed) => { setDialog(null); if (changed) { live.refresh(); log.refresh(); } }} />
