@@ -4,6 +4,7 @@ export type Status = "planned" | "fermenting" | "completed" | "aborted";
 
 export interface Experiment {
   id: number; code: string; name: string; planned_date: string | null; strain: string;
+  medium_id: number | null; buffer_id: number | null; working_volume_ml: number | null;
   reactor_id: string; status: Status; profile_id: number | null;
   parallel_run_code: string | null; parallel_partner_codes: string[];
   notes: string; started_at: string | null; ended_at: string | null; updated_at: string;
@@ -21,6 +22,16 @@ export interface LiveReactor {
   snapshot: Snapshot | null; ph_control: { mode: string | null; pid: Record<string, number> | null } | null;
   experiment: { id: number; code: string; strain: string; t_h: number; parallel_run: string | null } | null;
 }
+
+export interface Named { id: number; name: string; description: string; archived: boolean }
+export interface Profile {
+  id: number; name: string; ph_setpoint: number | null; temperature_setpoint: number | null; stirrer_setpoint: number | null;
+  ph_control_mode: string | null; ph_pid: Record<string, number> | null; notes: string;
+}
+export interface PlanCheckRow { parameter: string; plan: unknown; controller: unknown; match: boolean; read_only?: boolean }
+export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[] }
+export type ExperimentDraft = { name: string; reactor_id: string; planned_date?: string | null; strain?: string;
+  medium_id?: number | null; buffer_id?: number | null; working_volume_ml?: number | null; profile_id?: number | null; notes?: string };
 
 export interface Readings { columns: string[]; rows: (number | null)[][] }
 export interface Measurement { id: number; variable_id: number; variable_name: string; sampled_at: string; t_h: number; value: number; unit: string; note: string; author: string }
@@ -43,8 +54,19 @@ export const api = {
   live: () => req<LiveReactor[]>("/reactors/live"),
   experiments: (status?: string) => req<Experiment[]>(`/experiments${status ? `?status=${status}` : ""}`),
   experiment: (id: number) => req<Experiment>(`/experiments/${id}`),
-  createExperiment: (body: Partial<Experiment> & { name: string; reactor_id: string }) =>
+  createExperiment: (body: ExperimentDraft) =>
     req<Experiment>("/experiments", { method: "POST", body: JSON.stringify(body) }),
+  patchExperiment: (id: number, body: Partial<ExperimentDraft>) =>
+    req<Experiment>(`/experiments/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  linkParallel: (id: number, partnerId: number) =>
+    req<Experiment>(`/experiments/${id}/parallel`, { method: "POST", body: JSON.stringify({ partner_id: partnerId }) }),
+  planCheck: (id: number) => req<PlanCheck>(`/experiments/${id}/plan-check`),
+  loadProfile: (id: number) => req<{ results: { parameter: string; status: string; message?: string }[] }>(`/experiments/${id}/load-profile`, { method: "POST" }),
+  media: () => req<Named[]>("/media"),
+  buffers: () => req<Named[]>("/buffers"),
+  createNamed: (kind: "media" | "buffers", name: string) => req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name }) }),
+  profiles: () => req<Profile[]>("/profiles"),
+  createProfile: (body: Omit<Profile, "id">) => req<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
   start: (id: number) => req<Experiment>(`/experiments/${id}/start`, { method: "POST" }),
   end: (id: number) => req<Experiment>(`/experiments/${id}/end`, { method: "POST" }),
   readings: (id: number, sinceH = 0) => req<Readings>(`/experiments/${id}/readings?since_h=${sinceH}`),

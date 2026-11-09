@@ -5,6 +5,7 @@ import { fmt, fmtDuration, usePolling } from "../hooks";
 import { baseOption, trendsOption, TREND_VARS } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
+import { Planning } from "./Planning";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -15,7 +16,7 @@ export function ExperimentPage() {
   const e = exp.data;
   const partner = (all.data ?? []).find((x) => e.parallel_partner_codes.includes(x.code));
   return e.status === "planned"
-    ? <PlannedView e={e} onChange={exp.refresh} />
+    ? <Planning key={e.id} existing={e} onChange={exp.refresh} />
     : <FermentationView e={e} partner={partner} onChange={exp.refresh} />;
 }
 
@@ -47,24 +48,6 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
           <StatusChip status={e.status} />
         </div>
       </header>
-    </>
-  );
-}
-
-function PlannedView({ e, onChange }: { e: Experiment; onChange: () => void }) {
-  const [err, setErr] = useState<string | null>(null);
-  return (
-    <>
-      <Header e={e} />
-      <div className="card" style={{ maxWidth: 560 }}>
-        <h2>Ready to start?</h2>
-        <span className="muted small">The full planning screen (profile check, media, parallel run) comes in the next step.
-          Recording starts with Start: t = 0 is that moment.</span>
-        {err && <div className="banner alert">{err}</div>}
-        <div className="row"><button className="btn filled" onClick={async () => {
-          try { await api.start(e.id); onChange(); } catch (x) { setErr((x as Error).message); }
-        }}><Icon name="play" size={18} />Start recording</button></div>
-      </div>
     </>
   );
 }
