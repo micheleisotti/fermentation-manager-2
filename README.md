@@ -70,8 +70,22 @@ Configuration is via environment variables (see `backend/fm2/config.py`):
 `FM2_DATA_DIR`, `FM2_SAMPLING_INTERVAL_S`, `FM2_R1_DRIVER` / `FM2_R2_DRIVER`
 (`simulator` | `ez2control`), `FM2_R1_ADDRESS` / `FM2_R2_ADDRESS`, `FM2_PORT`.
 
-With the simulator, `POST /api/experiments` then `POST /api/experiments/{id}/start`
-starts a simulated culture; open `/docs` for the interactive API.
+### Web interface
+
+```bash
+cd frontend && npm install && npm run build   # build once; fm2-server then serves it at http://localhost:8000
+npm run dev                                   # or: live-reload dev server on :5173 (proxies /api to :8000)
+```
+
+### Demo with simulated reactors
+
+```bash
+FM2_DATA_DIR=/tmp/fm2demo FM2_SIM_SPEED=300 FM2_SAMPLING_INTERVAL_S=2 fm2-server
+python scripts/demo_seed.py      # two experiments on R1/R2 as a parallel run, started
+```
+
+`FM2_SIM_SPEED=300` runs simulated time 300× faster (one real minute ≈ 5 h of culture);
+the API docs are at `/docs`.
 
 ## Repository layout
 
@@ -94,6 +108,7 @@ docs/                notes, including the controller inspection checklist
 
 1. ✅ Backend core: data model, simulator, acquisition, alerts, setpoint commands, analysis, XLSX export
 2. Web interface (React + TypeScript, Material 3 styling with the project palette), installable on phones
+   — in progress: Home and Fermentation screens done; Planning, Analysis, Settings next
 3. Push notifications (app push / ntfy / Telegram)
 4. ez2-Control driver on the bioreactor PC (read first, then writes)
 5. Deployment: Windows service at boot, Tailscale remote access, automatic backups

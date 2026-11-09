@@ -13,7 +13,8 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -64,7 +65,26 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
     app = FastAPI(title="Fermentation Manager", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.sessions, app.state.acq, app.state.clock = settings, sessions, acq, clock
     app.include_router(router, prefix="/api")
+    _mount_frontend(app, settings)
     return app
+
+
+def _mount_frontend(app: FastAPI, settings: Settings) -> None:
+    """Serve the built React app (frontend/dist) with a fallback to index.html for client-side routes."""
+    dist = settings.frontend_dist
+    index = dist / "index.html"
+    if not index.exists():
+        return
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(404)
+        f = (dist / path).resolve()
+        if path and f.is_file() and dist.resolve() in f.parents:
+            return FileResponse(f)
+        return FileResponse(index)
 
 
 # --- dependencies ---------------------------------------------------------------------

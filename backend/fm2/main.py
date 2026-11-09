@@ -12,7 +12,23 @@ from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-app = create_app(settings)
+def _clock():
+    """Real clock, or an accelerated one for demos (FM2_SIM_SPEED > 1, simulator only)."""
+    speed = float(os.environ.get("FM2_SIM_SPEED", "1"))
+    if speed == 1:
+        return None
+    from datetime import datetime, timezone
+    t0 = datetime.now(timezone.utc)
+    return lambda: t0 + (datetime.now(timezone.utc) - t0) * speed
+
+
+_c = _clock()
+if _c is None:
+    app = create_app(settings)
+else:
+    from .drivers import make_driver
+    app = create_app(settings, clock=_c,
+                     drivers={r.reactor_id: make_driver(r.driver, r.reactor_id, r.address, clock=_c) for r in settings.reactors})
 
 
 def run_server() -> None:
