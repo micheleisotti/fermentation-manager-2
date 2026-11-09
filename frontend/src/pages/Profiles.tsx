@@ -1,24 +1,74 @@
 import { useState } from "react";
-import { api } from "../api";
+import { api, type Profile } from "../api";
 import { usePolling } from "../hooks";
 
 const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
 
+/** pH loop parameters as named on the ez2-Control ("Controller setup" window). */
+const PARAMS = {
+  P: { label: "P", unit: "" },
+  I: { label: "I", unit: "" },
+  D: { label: "D", unit: "" },
+  deadband: { label: "Dead band", unit: "pH" },
+  cycle_time: { label: "Cycle time", unit: "s" },
+  settling_time: { label: "Settling time", unit: "s" },
+} as const;
+type ParamKey = keyof typeof PARAMS;
+/** Loaded for each mode; in Adaptive the controller tunes P/I/D itself. */
+const MODE_PARAMS: Record<string, ParamKey[]> = {
+  pid: ["P", "I", "D", "deadband", "cycle_time"],
+  adaptive: ["deadband", "cycle_time", "settling_time"],
+};
+
+const EMPTY = { name: "", ph: "", t: "", stir: "", mode: "pid", notes: "",
+  P: "", I: "", D: "", deadband: "", cycle_time: "", settling_time: "" };
+
+function showParams(p: Profile) {
+  if (!p.ph_pid) return "—";
+  const keys = MODE_PARAMS[p.ph_control_mode ?? ""] ?? (Object.keys(p.ph_pid) as ParamKey[]);
+  const items = keys.filter((k) => p.ph_pid![k] != null);
+  if (!items.length) return "—";
+  return (
+    <span className="stack" style={{ gap: 2 }}>
+      {items.map((k) => (
+        <span key={k} style={{ whiteSpace: "nowrap" }}>
+          <span className="muted">{PARAMS[k]?.label ?? k}</span> {p.ph_pid![k]}{PARAMS[k]?.unit === "s" ? " s" : ""}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function Profiles() {
   const list = usePolling(api.profiles, 60000);
-  const [f, setF] = useState({ name: "", ph: "", t: "", stir: "", mode: "pid", P: "", I: "", D: "", notes: "" });
+  const [f, setF] = useState(EMPTY);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [confirmId, setConfirmId] = useState<number | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const modeParams = MODE_PARAMS[f.mode] ?? [];
 
   async function create() {
-    const pid = f.mode === "pid" && (f.P || f.I || f.D)
-      ? Object.fromEntries((["P", "I", "D"] as const).filter((k) => f[k] !== "").map((k) => [k, Number(f[k])])) : null;
+    const entries = modeParams.filter((k) => f[k].trim() !== "").map((k) => [k, num(f[k])] as const);
+    if (entries.some(([, v]) => v === null || Number.isNaN(v))) {
+      setMsg({ kind: "alert", text: "Loop parameters must be numbers." });
+      return;
+    }
     try {
       await api.createProfile({ name: f.name.trim(), ph_setpoint: num(f.ph), temperature_setpoint: num(f.t), stirrer_setpoint: num(f.stir),
-        ph_control_mode: f.mode || null, ph_pid: pid, notes: f.notes });
-      setF({ name: "", ph: "", t: "", stir: "", mode: "pid", P: "", I: "", D: "", notes: "" });
+        ph_control_mode: f.mode || null, ph_pid: entries.length ? Object.fromEntries(entries) as Record<string, number> : null, notes: f.notes });
+      setF(EMPTY);
       setMsg({ kind: "good", text: "Profile saved." }); list.refresh();
     } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+  }
+
+  async function remove(p: Profile) {
+    try {
+      const r = await api.deleteProfile(p.id);
+      setMsg({ kind: "good", text: `Profile “${p.name}” deleted.` +
+        (r.unlinked_experiments.length ? ` Experiments ${r.unlinked_experiments.join(", ")} keep their own copy of the plan.` : "") });
+      list.refresh();
+    } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+    setConfirmId(null);
   }
 
   return (
@@ -30,21 +80,32 @@ export function Profiles() {
           <section className="card">
             <h2 style={{ fontSize: 18 }}>Saved profiles</h2>
             <div className="table-wrap">
-              <table className="data" style={{ minWidth: 640 }}>
-                <thead><tr><th>Name</th><th>pH</th><th>T (°C)</th><th>Stirrer (rpm)</th><th>pH control</th><th>PID</th></tr></thead>
+              <table className="data" style={{ minWidth: 700 }}>
+                <thead><tr><th>Name</th><th>pH</th><th>T (°C)</th><th>Stirrer (rpm)</th><th>pH control</th><th>Loop parameters</th><th aria-label="Actions" /></tr></thead>
                 <tbody>
                   {(list.data ?? []).map((p) => (
                     <tr key={p.id}>
                       <td style={{ fontWeight: 500 }}>{p.name}</td>
                       <td className="mono">{p.ph_setpoint ?? "—"}</td><td className="mono">{p.temperature_setpoint ?? "—"}</td>
                       <td className="mono">{p.stirrer_setpoint ?? "—"}</td><td>{p.ph_control_mode ?? "—"}</td>
-                      <td className="mono small">{p.ph_pid ? Object.entries(p.ph_pid).map(([k, v]) => `${k} ${v}`).join(" · ") : "—"}</td>
+                      <td className="mono small">{showParams(p)}</td>
+                      <td style={{ whiteSpace: "nowrap", textAlign: "right", width: 1 }}>
+                        {confirmId === p.id ? (
+                          <>
+                            <button className="btn text" onClick={() => setConfirmId(null)}>Cancel</button>
+                            <button className="btn filled" onClick={() => remove(p)} aria-label={`Confirm deleting profile ${p.name}`}>Delete</button>
+                          </>
+                        ) : (
+                          <button className="btn text" onClick={() => { setConfirmId(p.id); setMsg(null); }} aria-label={`Delete profile ${p.name}`}>Delete</button>
+                        )}
+                      </td>
                     </tr>
                   ))}
-                  {(list.data ?? []).length === 0 && <tr><td colSpan={6} className="muted">No profiles yet.</td></tr>}
+                  {(list.data ?? []).length === 0 && <tr><td colSpan={7} className="muted">No profiles yet.</td></tr>}
                 </tbody>
               </table>
             </div>
+            {msg && <div className={`banner ${msg.kind}`} role="status">{msg.text}</div>}
           </section>
         </div>
         <aside className="side">
@@ -59,14 +120,22 @@ export function Profiles() {
             <label className="field">pH control mode
               <select value={f.mode} onChange={set("mode")}><option value="pid">PID</option><option value="adaptive">Adaptive</option><option value="">Not set</option></select>
             </label>
-            {f.mode === "pid" && (
-              <div className="row" style={{ flexWrap: "nowrap" }}>
-                {(["P", "I", "D"] as const).map((k) => <label key={k} className="field">{k}<input inputMode="decimal" value={f[k]} onChange={set(k)} /></label>)}
+            {modeParams.length > 0 && (
+              <div className="row" style={{ flexWrap: "wrap" }}>
+                {modeParams.map((k) => (
+                  <label key={k} className="field" style={{ flex: "1 1 30%", minWidth: 90 }}>
+                    {PARAMS[k].label}{PARAMS[k].unit === "s" ? " (s)" : ""}
+                    <input inputMode="decimal" value={f[k]} onChange={set(k)} />
+                  </label>
+                ))}
               </div>
             )}
-            <span className="xs muted">PID parameter names will be aligned with the ez2-Control once inspected.</span>
+            <span className="xs muted">
+              {f.mode === "adaptive"
+                ? "In Adaptive the controller tunes P, I and D itself: only dead band, cycle time and settling time are loaded."
+                : f.mode === "pid" ? "Empty fields are left as they are on the controller. Values are checked against the controller's own limits when loaded." : ""}
+            </span>
             <label className="field">Notes<textarea rows={3} value={f.notes} onChange={set("notes")} /></label>
-            {msg && <div className={`banner ${msg.kind}`}>{msg.text}</div>}
             <button className="btn filled" disabled={!f.name.trim()} onClick={create}>Save profile</button>
           </section>
         </aside>

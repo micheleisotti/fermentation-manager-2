@@ -24,12 +24,15 @@ R2_VALUES = {
     "1.6.13": "2000", "1.7.13": "0", "1.58.13": "0",
     # pH PID term ranges (max, min) — fake values for the tests
     "3.1.0": "1000.00", "3.2.0": "0.00", "3.4.0": "10000.00", "3.5.0": "0.00", "3.7.0": "1000.00", "3.8.0": "0.00",
+    # pH loop: dead band, cycle time [s], settling time [s] (read on R2), and fake ranges
+    "3.9.0": "0.10", "3.12.0": "10", "3.71.0": "300",
+    "3.10.0": "2.00", "3.11.0": "0.00", "3.13.0": "3600", "3.14.0": "1",
 }
 
 
 class FakeController:
     """Answers J<addr>S requests; records every request; splits answers over two frames.
-    With drop_after_answer=True it kills the TCP connection after each answer without a
+    With drop_after_answer=True it kills the TCP connection shortly after each answer without a
     close frame, like the real controller does with idle connections."""
 
     def __init__(self, values, drop_after_answer=False, password="fake-test-pw"):
@@ -87,7 +90,11 @@ class FakeController:
                 if chunk:
                     ws.send("".join(chunk).encode("ascii"))
             if self.drop_after_answer:
-                ws.socket.close()  # abrupt: no WebSocket close frame
+                # like the real controller: the link is dropped after a short idle period,
+                # abruptly (no WebSocket close frame)
+                import time
+                time.sleep(0.1)
+                ws.socket.close()
                 return
 
     def stop(self):
@@ -126,7 +133,8 @@ def test_read_snapshot(fake):
     assert snap.base_cumulative_ml == 1.61
     assert snap.base_pump_pct == pytest.approx(100.0)
     assert snap.ph_control.mode == "pid"
-    assert snap.ph_control.pid == {"P": 100.0, "I": 2.0, "D": 10.0}
+    assert snap.ph_control.pid == {"P": 100.0, "I": 2.0, "D": 10.0, "deadband": 0.1,
+                                   "cycle_time": 10.0, "settling_time": 300.0}
     # second read reuses the connection
     fake.values["2.13.29"] = "1.75"
     assert drv.read().base_cumulative_ml == 1.75
@@ -149,7 +157,7 @@ def test_ph_control_pid_writes_only_differences(fake):
     # controller is already PID with P 100 / I 2 / D 10: only I changes
     drv.write_ph_control(PhControl(mode="pid", pid={"P": 100.0, "I": 2.5, "D": 10.0}))
     assert fake.writes == [("3.3.0", "2.50")]
-    assert drv.read().ph_control.pid == {"P": 100.0, "I": 2.5, "D": 10.0}
+    assert {k: drv.read().ph_control.pid[k] for k in "PID"} == {"P": 100.0, "I": 2.5, "D": 10.0}
     fake.writes.clear(); fake.logins.clear()
     drv.write_ph_control(PhControl(mode="pid", pid={"P": 100.0, "I": 2.5, "D": 10.0}))
     assert fake.writes == [] and fake.logins == []          # nothing to do: no login at all
@@ -170,6 +178,35 @@ def test_ph_control_rejected_without_sending(fake, control):
         drv.write_ph_control(PhControl(**control))
     assert fake.writes == [] and fake.logins == []
     drv.close()
+
+
+def test_ph_control_loop_parameters(fake):
+    from fm2.drivers import PhControl
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    drv.write_ph_control(PhControl("pid", {"P": 100.0, "I": 2.0, "D": 10.0, "deadband": 0.05,
+                                           "cycle_time": 15, "settling_time": 600}))
+    assert fake.writes == [("3.9.0", "0.05"), ("3.12.0", "15")]      # settling time is Adaptive-only
+    fake.writes.clear()
+    drv.write_ph_control(PhControl("adaptive", {"P": 1.0, "deadband": 0.05, "cycle_time": 15,
+                                                "settling_time": 600}))
+    assert fake.writes == [("1.19.0", "1"), ("3.71.0", "600")]       # P/I/D are tuned by the controller
+    with pytest.raises(DriverError):
+        drv.write_ph_control(PhControl("pid", {"deadband": 5.0}))     # above the controller's range
+    with pytest.raises(DriverError):
+        drv.write_ph_control(PhControl("pid", {"cycle_time": 2.5}))   # cycle time has no decimals
+    drv.close()
+
+
+def test_partial_answers_survive_a_dropped_link():
+    vals = dict(R2_VALUES); del vals["1.15.2"]          # temperature never answered
+    f = FakeController(vals, drop_after_answer=True)
+    try:
+        drv = make_driver("ez2control", "R2", f"127.0.0.1:{f.port}")
+        snap = drv.read()
+        assert snap.ph == 6.90 and snap.temperature is None and snap.base_cumulative_ml == 1.61
+        drv.close()
+    finally:
+        f.stop()
 
 
 def test_load_ph_control_from_planning_end_to_end(fake):

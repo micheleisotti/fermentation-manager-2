@@ -67,6 +67,7 @@ export const api = {
   createNamed: (kind: "media" | "buffers", name: string) => req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name }) }),
   profiles: () => req<Profile[]>("/profiles"),
   createProfile: (body: Omit<Profile, "id">) => req<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
+  deleteProfile: (id: number) => req<{ deleted: number; unlinked_experiments: string[] }>(`/profiles/${id}`, { method: "DELETE" }),
   start: (id: number) => req<Experiment>(`/experiments/${id}/start`, { method: "POST" }),
   end: (id: number) => req<Experiment>(`/experiments/${id}/end`, { method: "POST" }),
   readings: (id: number, sinceH = 0) => req<Readings>(`/experiments/${id}/readings?since_h=${sinceH}`),

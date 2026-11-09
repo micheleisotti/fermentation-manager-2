@@ -38,7 +38,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from .base import ControllerDriver, ControllerSnapshot, DriverCapabilities, DriverError, PhControl
+from .base import (PH_MODE_PARAMS, ControllerDriver, ControllerSnapshot, DriverCapabilities, DriverError,
+                   PhControl)
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ READ_MAP: dict[str, str] = {
     "ph_pid_p":                 f"3.0.{PH}",
     "ph_pid_i":                 f"3.3.{PH}",
     "ph_pid_d":                 f"3.6.{PH}",
+    "ph_deadband":              f"3.9.{PH}",
+    "ph_cycle_time":            f"3.12.{PH}",
+    "ph_settling_time":         f"3.71.{PH}",
     "temperature":              f"1.15.{TEMPERATURE}",
     "temperature_setpoint":     f"1.13.{TEMPERATURE}",
     "temperature_high_limit":   f"1.4.{TEMPERATURE}",
@@ -74,9 +78,14 @@ SETPOINT_ADDRESSES = frozenset(f"1.13.{i}" for i in SETPOINT_SENSORS.values())
 
 # pH loop: control type and PID terms (written only from planning, before Start)
 PH_TYPE_ADDRESS = f"1.19.{PH}"
-PH_PID_ADDRESSES = {"P": f"3.0.{PH}", "I": f"3.3.{PH}", "D": f"3.6.{PH}"}
-PH_PID_LIMITS = {"P": (f"3.2.{PH}", f"3.1.{PH}"), "I": (f"3.5.{PH}", f"3.4.{PH}"),   # (min, max)
-                 "D": (f"3.8.{PH}", f"3.7.{PH}")}
+# Loop parameters as named in the controller's "Controller setup" window
+# (controllersetupstandard.js): P, I, D, Dead Band, Cycle Time [s], Settling Time [s, Adaptive].
+PH_PID_ADDRESSES = {"P": f"3.0.{PH}", "I": f"3.3.{PH}", "D": f"3.6.{PH}", "deadband": f"3.9.{PH}",
+                    "cycle_time": f"3.12.{PH}", "settling_time": f"3.71.{PH}"}
+PH_PID_LIMITS = {"P": (f"3.2.{PH}", f"3.1.{PH}"), "I": (f"3.5.{PH}", f"3.4.{PH}"),   # (min, max) addresses
+                 "D": (f"3.8.{PH}", f"3.7.{PH}"), "deadband": (f"3.11.{PH}", f"3.10.{PH}"),
+                 "cycle_time": (f"3.14.{PH}", f"3.13.{PH}")}
+SETTLING_TIME_RANGE = (1.0, 86400.0)   # the controller exposes no min/max for it
 # Only PID (0) and Adaptive (1). External (2) would re-purpose the pumps: never written.
 WRITABLE_PH_MODES = {"pid": "0", "adaptive": "1"}
 
@@ -164,8 +173,9 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
 
     ctype = f("ph_control_type")
     mode = CONTROL_TYPES.get(int(ctype), f"type-{int(ctype)}") if ctype is not None else None
-    pid = {"P": f("ph_pid_p"), "I": f("ph_pid_i"), "D": f("ph_pid_d")}
-    pid = pid if any(v is not None for v in pid.values()) else None
+    pid = {"P": f("ph_pid_p"), "I": f("ph_pid_i"), "D": f("ph_pid_d"), "deadband": f("ph_deadband"),
+           "cycle_time": f("ph_cycle_time"), "settling_time": f("ph_settling_time")}
+    pid = {k: v for k, v in pid.items() if v is not None} or None
 
     return ControllerSnapshot(
         ts=ts,
@@ -276,7 +286,11 @@ class Ez2ControlDriver(ControllerDriver):
                 got.update({a: v for a, v in parse_frame(frame).items() if a in wanted})
         except Exception as e:
             self._drop()
-            raise DriverError(f"{self.url}: {e}") from e
+            if not got:
+                raise DriverError(f"{self.url}: {e}") from e
+            # link dropped after some answers arrived: keep them, the rest stays empty
+            log.warning("%s: connection closed during a read (%s); %d/%d values received",
+                        self.reactor_id, e, len(got), len(wanted))
         if not got:
             self._drop()
             raise DriverError(f"{self.url}: no answer within {self.timeout_s:.0f} s")
@@ -374,44 +388,49 @@ class Ez2ControlDriver(ControllerDriver):
 
     def write_ph_control(self, control: PhControl) -> None:
         """
-        Load the pH control type (PID or Adaptive) and, for PID, the P/I/D terms — from
-        planning only (services/commands.load_ph_control enforces 'planned'). Values are
-        checked against the controller's own min/max for each term; only values that differ
-        from the controller's are written, in one login session.
+        Load the pH control type (PID or Adaptive) and its loop parameters — from planning
+        only (services/commands.load_ph_control enforces 'planned'). PID: P, I, D, dead band,
+        cycle time. Adaptive: dead band, cycle time, settling time. Values are checked against
+        the controller's own min/max; only values that differ are written, in one login session.
         """
         import math
         if control is None or control.mode not in WRITABLE_PH_MODES:
             raise DriverError(f"pH control mode must be one of {sorted(WRITABLE_PH_MODES)}, got "
                               f"{getattr(control, 'mode', None)!r}")
-        pid = control.pid or {}
-        if control.mode == "pid" and pid and set(pid) - set(PH_PID_ADDRESSES):
-            raise DriverError(f"unknown PID terms {sorted(set(pid) - set(PH_PID_ADDRESSES))}: expected P, I, D")
+        params = {k: v for k, v in (control.pid or {}).items() if v is not None}
+        unknown = set(params) - set(PH_PID_ADDRESSES)
+        if unknown:
+            raise DriverError(f"unknown pH loop parameters {sorted(unknown)}: expected {sorted(PH_PID_ADDRESSES)}")
+        params = {k: v for k, v in params.items() if k in PH_MODE_PARAMS[control.mode]}
         with self._lock:
             keys = {"type": PH_TYPE_ADDRESS}
-            for term, addr in PH_PID_ADDRESSES.items():
-                keys[term] = addr
-                keys[term + "_min"], keys[term + "_max"] = PH_PID_LIMITS[term]
+            for term in params:
+                keys[term] = PH_PID_ADDRESSES[term]
+                if term in PH_PID_LIMITS:
+                    keys[term + "_min"], keys[term + "_max"] = PH_PID_LIMITS[term]
             cur = self._query(keys)
             writes: list[tuple[str, str, int]] = []
             want_type = WRITABLE_PH_MODES[control.mode]
             if to_float(cur.get("type")) != float(want_type):
                 writes.append((PH_TYPE_ADDRESS, want_type, 0))
-            if control.mode == "pid":
-                for term, value in pid.items():
-                    if value is None:
-                        continue
-                    if not isinstance(value, (int, float)) or not math.isfinite(value):
-                        raise DriverError(f"PID {term}: invalid value {value!r}")
+            for term, value in params.items():
+                if not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise DriverError(f"pH {term}: invalid value {value!r}")
+                if term in PH_PID_LIMITS:
                     lo, hi = to_float(cur.get(term + "_min")), to_float(cur.get(term + "_max"))
-                    if lo is None or hi is None:
-                        raise DriverError(f"PID {term}: cannot read the controller's range, not writing")
-                    if not (lo <= value <= hi):
-                        raise DriverError(f"PID {term} {value:g} outside the controller's range {lo:g}–{hi:g}")
-                    raw = cur.get(term, "")
-                    dec = len(raw.split(".")[1]) if "." in raw else 0   # controller's display decimals
-                    text = _format(value, dec, f"PID {term}")
-                    if to_float(raw) is None or abs(to_float(raw) - float(text)) >= 10 ** (-dec) / 2:
-                        writes.append((PH_PID_ADDRESSES[term], text, dec))
+                else:
+                    lo, hi = SETTLING_TIME_RANGE
+                if lo is None or hi is None:
+                    raise DriverError(f"pH {term}: cannot read the controller's range, not writing")
+                if not (lo <= value <= hi):
+                    raise DriverError(f"pH {term} {value:g} outside the controller's range {lo:g}–{hi:g}")
+                raw = cur.get(term, "")
+                if to_float(raw) is None:
+                    raise DriverError(f"pH {term}: cannot read the current value, not writing")
+                dec = len(raw.split(".")[1]) if "." in raw else 0   # controller's display decimals
+                text = _format(value, dec, f"pH {term}")
+                if abs(to_float(raw) - float(text)) >= 10 ** (-dec) / 2:
+                    writes.append((PH_PID_ADDRESSES[term], text, dec))
             if writes:
                 self._logged_in_writes(writes)
 

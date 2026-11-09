@@ -211,6 +211,25 @@ def create_profile(body: S.ProfileIn, db: Session = Depends(get_db)):
     return _profile_out(p)
 
 
+@router.delete("/profiles/{profile_id}")
+def delete_profile(profile_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a profile. Refused while a planned experiment uses it (its plan would be lost).
+    Started/completed experiments keep their own copy (plan_snapshot) and just lose the link.
+    """
+    p = _404(db.get(ControllerProfile, profile_id), "Profile not found")
+    users = db.scalars(select(Experiment).where(Experiment.profile_id == profile_id)).all()
+    planned = [e.code for e in users if e.status == ExperimentStatus.planned]
+    if planned:
+        raise HTTPException(409, f"Profile '{p.name}' is used by planned experiment(s) {', '.join(planned)}: "
+                                 "choose another profile for them first.")
+    for e in users:
+        e.profile_id = None
+    db.delete(p)
+    db.flush()
+    return {"deleted": profile_id, "unlinked_experiments": [e.code for e in users]}
+
+
 # --- experiments ------------------------------------------------------------------------
 
 @router.get("/experiments", response_model=list[S.ExperimentOut])
@@ -326,12 +345,15 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
         if p.ph_control_mode:
             rows.append({"parameter": "ph_control_mode", "plan": p.ph_control_mode.value,
                          "controller": snap.ph_control.mode, "match": p.ph_control_mode.value == snap.ph_control.mode})
-            if p.ph_control_mode.value == "pid":   # PID terms are not used (nor loaded) in Adaptive
-                ctrl_pid = snap.ph_control.pid or {}
-                rows.append({"parameter": "ph_pid", "plan": p.ph_pid, "controller": snap.ph_control.pid,
-                             "match": p.ph_pid is None or all(
-                                 ctrl_pid.get(k) is not None and abs(ctrl_pid[k] - v) < 1e-6
-                                 for k, v in p.ph_pid.items())})
+            plan_ctl = PhControl(p.ph_control_mode.value, p.ph_pid)
+            param_diffs = [d for d in commands.ph_control_differences(plan_ctl, snap.ph_control)
+                           if not d.startswith("mode ")]
+            applicable = {k: v for k, v in (p.ph_pid or {}).items()
+                          if k in commands.PH_MODE_PARAMS[p.ph_control_mode.value]}
+            if applicable:
+                rows.append({"parameter": "ph_pid", "plan": applicable,
+                             "controller": {k: (snap.ph_control.pid or {}).get(k) for k in applicable},
+                             "match": not param_diffs})
     rows.append({"parameter": "ph_limits", "plan": None, "controller": [snap.ph_low_limit, snap.ph_high_limit],
                  "match": True, "read_only": True})
     rows.append({"parameter": "temperature_limits", "plan": None,

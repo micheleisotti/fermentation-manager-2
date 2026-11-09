@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..config import SetpointRange
-from ..drivers.base import SETPOINT_PARAMETERS, ControllerDriver, DriverError, PhControl
+from ..drivers.base import PH_MODE_PARAMS, SETPOINT_PARAMETERS, ControllerDriver, DriverError, PhControl
 from ..alerts import ReactorAlertState
 
 
@@ -89,5 +89,20 @@ def load_ph_control(driver: ControllerDriver, control: PhControl, experiment_sta
         raise CommandRejected("pH control mode and PID can only be loaded from planning, before Start")
     driver.write_ph_control(control)
     after = driver.read().ph_control
-    if after.mode != control.mode or (control.pid is not None and after.pid != control.pid):
-        raise DriverError("pH control read-back does not match the profile")
+    diffs = ph_control_differences(control, after)
+    if diffs:
+        raise DriverError("pH control read-back does not match the profile: " + "; ".join(diffs))
+
+
+def ph_control_differences(plan: PhControl, ctrl: PhControl, tol: float = 1e-6) -> list[str]:
+    """Human-readable differences between a planned pH control and what the controller reports."""
+    out = []
+    if plan.mode != ctrl.mode:
+        out.append(f"mode {ctrl.mode!r} instead of {plan.mode!r}")
+    got = ctrl.pid or {}
+    for k, v in (plan.pid or {}).items():
+        if v is None or k not in PH_MODE_PARAMS.get(plan.mode or "", ()):
+            continue
+        if got.get(k) is None or abs(got[k] - v) > tol:
+            out.append(f"{k} {got.get(k)!r} instead of {v:g}")
+    return out
