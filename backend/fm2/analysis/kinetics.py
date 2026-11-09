@@ -1,7 +1,8 @@
 """
 Growth kinetics and integral KPIs, ported from Fermentation Manager v1 (kinetics.py).
 
-- Modified Gompertz model (Zwietering et al., 1990), fitted on y = ln(X/X0).
+- Modified Gompertz and logistic (Zwietering et al., 1990) and Baranyi-Roberts (1994)
+  models, fitted on y = ln(X/X0).
   Works on any growth-like variable (OD600, AFU, ...), not only biomass.
 - Yields, productivity and specific rates with the integral method; the integral of X
   uses the MEASURED points (trapezoidal rule), not the fitted curve.
@@ -23,12 +24,42 @@ _trapz = getattr(np, "trapezoid", None) or np.trapz
 
 
 def gompertz_modified(t: np.ndarray, A: float, mu_max: float, lam: float) -> np.ndarray:
-    """y(t) = A * exp(-exp(mu_max * e / A * (lam - t) + 1)), with y = ln(X/X0)."""
+    """Zwietering et al. (1990): y(t) = A exp(-exp(mu e / A (lam - t) + 1)), y = ln(X/X0)."""
     return A * np.exp(-np.exp((mu_max * np.e / A) * (lam - t) + 1))
 
 
+def logistic_modified(t: np.ndarray, A: float, mu_max: float, lam: float) -> np.ndarray:
+    """Zwietering et al. (1990): y(t) = A / (1 + exp(4 mu / A (lam - t) + 2)), y = ln(X/X0)."""
+    return A / (1 + np.exp((4 * mu_max / A) * (lam - t) + 2))
+
+
+def baranyi(t: np.ndarray, A: float, mu_max: float, lam: float) -> np.ndarray:
+    """
+    Baranyi & Roberts (1994), with y0 = 0 and y_max = A (y = ln(X/X0)) and h0 = mu_max * lam:
+    y = mu B(t) - ln(1 + (exp(mu B(t)) - 1) / exp(A)),
+    B(t) = t + ln(exp(-mu t) + exp(-h0) - exp(-mu t - h0)) / mu.
+    """
+    t = np.asarray(t, dtype=float)
+    h0 = mu_max * lam
+    # ln(e^-mu t + e^-h0 - e^-(mu t + h0)) = ln(e^-mu t (1 - e^-h0) + e^-h0), computed in log space
+    mt = mu_max * t
+    with np.errstate(divide="ignore"):
+        log_q = np.logaddexp(-mt + np.log(-np.expm1(-h0)) if h0 > 0 else -np.inf, -h0)
+    mb = mt + log_q
+    # ln(1 + (e^mb - 1) e^-A) = ln((1 - e^-A) + e^(mb - A))
+    return mb - np.logaddexp(np.log(-np.expm1(-A)), mb - A)
+
+
+MODELS = {
+    "gompertz": ("Modified Gompertz (Zwietering)", gompertz_modified),
+    "logistic": ("Modified logistic (Zwietering)", logistic_modified),
+    "baranyi": ("Baranyi-Roberts", baranyi),
+}
+
+
 @dataclass
-class GompertzFit:
+class GrowthFit:
+    model: str
     A: float
     mu_max: float
     lam: float
@@ -41,11 +72,30 @@ class GompertzFit:
     n_points: int
     t_fit: np.ndarray
     X_fit: np.ndarray
+    n_times: int = 0
+
+    @property
+    def warnings(self) -> list[str]:
+        """Reasons not to trust the parameters (shown next to them, never hidden)."""
+        w = []
+        if self.n_times < 6:
+            w.append(f"only {self.n_times} distinct time points for 3 parameters")
+        bad = [n for n, v, se in (("λ", self.lam, self.lam_se), ("μmax", self.mu_max, self.mu_max_se), ("A", self.A, self.A_se))
+               if not np.isfinite(se) or (v > 0 and se / v > 0.5)]
+        if bad:
+            w.append(f"{', '.join(bad)} poorly determined (standard error > 50 % of the value)")
+        return w
 
     @property
     def t_mu_max(self) -> float:
-        """Time of maximum growth rate = inflection point of the Gompertz curve."""
-        return self.lam + self.A / (self.mu_max * np.e)
+        """Time of maximum growth rate (inflection point of y = ln(X/X0))."""
+        if self.model == "gompertz":
+            return self.lam + self.A / (self.mu_max * np.e)
+        if self.model == "logistic":
+            return self.lam + self.A / (2 * self.mu_max)
+        t = np.linspace(0, max(self.t_fit.max(), self.lam * 2 + 1), 4000)
+        y = MODELS[self.model][1](t, self.A, self.mu_max, self.lam)
+        return float(t[int(np.argmax(np.gradient(y, t)))])
 
     @property
     def doubling_time(self) -> float:
@@ -53,17 +103,33 @@ class GompertzFit:
 
     def summary(self) -> dict:
         return {
+            "model": self.model,
             "lag_h": self.lam, "lag_se": self.lam_se,
             "mu_max_per_h": self.mu_max, "mu_max_se": self.mu_max_se,
             "t_mu_max_h": self.t_mu_max,
             "A_ln": self.A, "A_se": self.A_se,
-            "X0": self.X0, "doubling_time_h": self.doubling_time,
+            "X0": self.X0, "X_max": self.X0 * float(np.exp(self.A)),
+            "doubling_time_h": self.doubling_time,
             "r_squared": self.r_squared, "rmse": self.rmse, "n_points": self.n_points,
+            "n_times": self.n_times, "warnings": self.warnings,
         }
 
+    def curve(self) -> dict:
+        return {"t": self.t_fit.tolist(), "y": self.X_fit.tolist()}
 
-def fit_gompertz(t, X) -> GompertzFit:
-    """Raises ValueError with an explanation if data are insufficient or the fit fails."""
+
+GompertzFit = GrowthFit  # backwards-compatible name
+
+
+def fit_growth(t, X, model: str = "gompertz") -> GrowthFit:
+    """
+    Fit a primary growth model on y = ln(X/X0), X0 = first valid point. Statistics (R², RMSE)
+    are on the ln scale. Raises ValueError with an explanation if data are insufficient or
+    the fit fails.
+    """
+    if model not in MODELS:
+        raise ValueError(f"Unknown model '{model}' (use one of {', '.join(MODELS)}).")
+    f = MODELS[model][1]
     t = np.asarray(t, dtype=float)
     X = np.asarray(X, dtype=float)
     mask = np.isfinite(t) & np.isfinite(X) & (X > 0)
@@ -71,29 +137,40 @@ def fit_gompertz(t, X) -> GompertzFit:
     order = np.argsort(t_v)
     t_v, X_v = t_v[order], X_v[order]
     if len(t_v) < 4:
-        raise ValueError(f"Not enough valid points for a Gompertz fit ({len(t_v)}, at least 4 needed).")
+        raise ValueError(f"Not enough valid points for a fit ({len(t_v)}, at least 4 needed).")
     X0 = X_v[0]
     y = np.log(X_v / X0)
+    if y.max() <= 0:
+        raise ValueError("No increase over the first point: nothing to fit.")
     A0 = max(y.max(), 0.1)
-    mu0 = max((y.max() - y.min()) / (t_v.max() - t_v.min() + 1e-9), 0.01)
-    lam0 = t_v[np.argmax(np.gradient(y, t_v))] if len(t_v) > 1 else 0.0
+    slopes = np.gradient(y, t_v)
+    mu0 = max(float(slopes.max()), 0.01)
+    i = int(np.argmax(slopes))
+    lam0 = float(np.clip(t_v[i] - y[i] / mu0, 0.0, t_v.max()))
     try:
-        popt, pcov = curve_fit(gompertz_modified, t_v, y, p0=[A0, mu0, max(lam0, 0.0)],
-                               bounds=([1e-6, 1e-6, 0], [np.inf, np.inf, t_v.max()]), maxfev=20000)
-    except RuntimeError as e:
-        raise ValueError(f"Gompertz fit did not converge: {e}")
-    perr = np.sqrt(np.diag(pcov))
-    y_pred = gompertz_modified(t_v, *popt)
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            popt, pcov = curve_fit(f, t_v, y, p0=[A0, mu0, lam0],
+                                   bounds=([1e-6, 1e-6, 0], [np.inf, np.inf, t_v.max()]), maxfev=20000)
+    except (RuntimeError, ValueError) as e:
+        raise ValueError(f"{MODELS[model][0]} fit did not converge: {e}")
+    perr = np.sqrt(np.clip(np.diag(pcov), 0, None))
+    y_pred = f(t_v, *popt)
+    if not np.all(np.isfinite(y_pred)):
+        raise ValueError(f"{MODELS[model][0]} fit produced non-finite values.")
     ss_res = float(np.sum((y - y_pred) ** 2))
     ss_tot = float(np.sum((y - y.mean()) ** 2))
     t_dense = np.linspace(t_v.min(), t_v.max(), 200)
-    return GompertzFit(
-        A=float(popt[0]), mu_max=float(popt[1]), lam=float(popt[2]),
+    return GrowthFit(
+        model=model, A=float(popt[0]), mu_max=float(popt[1]), lam=float(popt[2]),
         A_se=float(perr[0]), mu_max_se=float(perr[1]), lam_se=float(perr[2]),
         r_squared=1 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
         rmse=float(np.sqrt(ss_res / len(y))), X0=float(X0), n_points=int(len(t_v)),
-        t_fit=t_dense, X_fit=X0 * np.exp(gompertz_modified(t_dense, *popt)),
+        t_fit=t_dense, X_fit=X0 * np.exp(f(t_dense, *popt)), n_times=int(len(np.unique(np.round(t_v, 2)))),
     )
+
+
+def fit_gompertz(t, X) -> GrowthFit:
+    return fit_growth(t, X, "gompertz")
 
 
 @dataclass

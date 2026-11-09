@@ -82,8 +82,9 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Windows service `fm2` via WinSW (`deploy/windows/`), virtual account `NT SERVICE\fm2`,
   data in `C:\ProgramData\FermentationManager\data`, logs in `…\logs`; survives reboot
   with nobody logged in; reachable from the phone.
-- Service runs the real controllers (read-only). Update procedure: `git pull`,
-  `pip install -e .` if dependencies changed, `npm.cmd run build` in `frontend`, `Restart-Service fm2` (admin).
+- Service runs the real controllers (read-only). Update procedure (admin PowerShell): `git pull`;
+  if dependencies changed: `Stop-Service fm2` first (the service locks `fm2-server.exe`), then `pip install -e .`;
+  `npm.cmd run build` in `frontend`; `Start-Service fm2` / `Restart-Service fm2`.
 
 ## Settings, notifications, backups (9 Nov 2026)
 - Settings page (mockup M3Settings): bioreactors (read-only), remote access (switch + allowed ranges and
@@ -97,11 +98,29 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Phone: "New" floating button above the bottom bar. "Plan on R1/R2" preselects the reactor.
 - Settings › Media and buffers: list and add (target of New → Medium / Buffer).
 
+## Experiment analysis (9 Nov 2026)
+- Analysis › single experiment (mockup M3ExperimentAnalysis), also reached from the experiment page
+  (Fermentation | Analysis tabs). Summary, faceted time course (ggplot grey; manual points mean ± SD per
+  time point, fitted model line; controller data averaged over 15 min / 1 / 2 / 4 h), kinetic table on
+  every manual variable, base-dosing table, export.
+- Models (`analysis/kinetics.py`): modified Gompertz and logistic (Zwietering 1990), Baranyi-Roberts
+  (1994), all on y = ln(X/X0) with X0 = first point; ± = SE from the fit covariance; R²/RMSE on the ln scale.
+- Export: XLSX (one sheet per block) or CSV zip; blocks controller (optional resampling), manual,
+  parameters, metadata (+ plan snapshot, change log, events). Figures rendered server-side with
+  matplotlib (PNG/SVG/PDF, width in mm, dpi, themes grey/bw/classic). **New dependency: run
+  `pip install -e .` on the PC** after pulling.
+- Desktop navigation rail stays fixed while the page scrolls.
+- To do (Michele, 9 Nov): **loop on/off** from the experiment page — start the control of a loop (pH, T,
+  stirrer) or stop it (control off and its actuator stopped). Never manual actuator outputs: those stay
+  on the physical controller. Data recording stays separate. Needs an inspection session to find the
+  loop on/off address per loop; then confirmation dialog, read-back, change log, remote disabled by
+  default. Until then the driver never writes loop or actuator states.
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.
 3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
 ## Still to build in the UI
-Experiment analysis & export, analysis sessions, app push notifications (need HTTPS:
+Analysis sessions, app push notifications (need HTTPS:
 `tailscale serve`) and PWA install, phone layout for planning, dark / dimmed theme (Settings, not urgent).

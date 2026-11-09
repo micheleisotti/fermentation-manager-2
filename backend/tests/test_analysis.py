@@ -76,3 +76,29 @@ def test_replicate_curve_fixed_grid():
     rc = stats.replicate_curve([(t, t), (t, t + 1)], step_h=2.0)
     assert list(rc.t) == list(np.arange(0, 16.1, 2.0))
     assert rc.mean[0] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("model", ["gompertz", "logistic", "baranyi"])
+def test_growth_models_recover_their_own_parameters(model):
+    f = kinetics.MODELS[model][1]
+    t = np.linspace(0, 18, 19)
+    X = 0.08 * np.exp(f(t, 4.0, 0.9, 3.0))
+    fit = kinetics.fit_growth(t, X, model)
+    # y = ln(X/X0) with X0 = first point forces y(0) = 0, while the logistic model is ~0.04 at t = 0:
+    # a small, known bias of the Zwietering parameterisation.
+    tol = 0.03 if model == "logistic" else 1e-3
+    assert fit.A == pytest.approx(4.0, rel=tol) and fit.mu_max == pytest.approx(0.9, rel=tol)
+    assert fit.lam == pytest.approx(3.0, abs=0.1 if model == "logistic" else 1e-2) and fit.r_squared > 0.999
+    assert fit.lam < fit.t_mu_max < 18 and fit.summary()["X_max"] == pytest.approx(0.08 * np.exp(4.0), rel=tol)
+
+
+def test_grouped_points_and_binned_series():
+    from fm2.analysis import report
+    import pandas as pd
+    g = report.grouped_points([0, 0, 2], [1.0, 3.0, 5.0])
+    assert g["mean"] == [2.0, 5.0] and g["sd"][0] == pytest.approx(np.sqrt(2)) and g["sd"][1] is None
+    t = np.arange(0, 4, 0.01)
+    df = pd.DataFrame({"t_h": t, "ph": 6 + 0 * t, "base_cumulative_ml": np.floor(t * 60 * 0.05 / 0.4) * 0.4})
+    s = report.binned_series(df, 1.0, ["ph", "base_rate", "base_cumulative_ml"])
+    assert s["t"] == [0.5, 1.5, 2.5, 3.5] and s["ph"] == [6.0] * 4
+    assert s["base_rate"][1] == pytest.approx(0.05, abs=0.01)

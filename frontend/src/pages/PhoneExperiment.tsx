@@ -130,7 +130,11 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
             {running && <> · reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</>}
           </span>
         </span>
-        <StatusChip status={e.status} />
+        <span className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
+          {e.status !== "planned" && <Link className="btn tonal" style={{ height: 32, padding: "0 12px", fontSize: 13 }}
+            to={`/analysis/experiments/${e.id}`}><Icon name="chart" size={16} />Analysis</Link>}
+          <StatusChip status={e.status} />
+        </span>
       </div>
 
       {alert && <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>{alert.message}</span></div>}

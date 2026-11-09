@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .. import __version__
 from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
-from ..analysis import base_dosing, kinetics, stats
+from ..analysis import base_dosing, kinetics, report, stats
 from ..config import Settings
 import logging
 from pathlib import Path
@@ -690,34 +690,147 @@ def _manual_series(db: Session, exp_id: int, variable: str) -> tuple[np.ndarray,
     return np.array([r[0] for r in rows], float), np.array([r[1] for r in rows], float)
 
 
-def experiment_parameters(db: Session, exp_id: int, fit_variable: str = "OD600") -> dict:
-    out: dict = {"fit_variable": fit_variable, "fit": None, "fit_error": None}
-    t, y = _manual_series(db, exp_id, fit_variable)
+def _fit(db: Session, exp_id: int, variable: str, model: str = "gompertz"):
+    """(fit object or None, error message or None) for one manual variable."""
+    t, y = _manual_series(db, exp_id, variable)
+    if not len(t):
+        return None, f"No {variable} measurements"
     try:
-        out["fit"] = kinetics.fit_gompertz(t, y).summary() if len(t) else None
-        if not len(t):
-            out["fit_error"] = f"No {fit_variable} measurements"
+        return kinetics.fit_growth(t, y, model), None
     except ValueError as ex:
-        out["fit_error"] = str(ex)
+        return None, str(ex)
+
+
+def experiment_parameters(db: Session, exp_id: int, fit_variable: str = "OD600", model: str = "gompertz",
+                          bin_h: float = 0.25) -> dict:
+    out: dict = {"fit_variable": fit_variable, "model": model, "fit": None, "fit_error": None}
+    f, err = _fit(db, exp_id, fit_variable, model)
+    out["fit"], out["fit_error"] = (f.summary() if f else None), err
     df = _readings_df(db, exp_id)
     t_od, od = _manual_series(db, exp_id, "OD600")
     final_od = float(od[-1]) if len(od) else None
     if not df.empty:
-        bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float), final_od)
+        bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float), final_od, bin_h)
         out["base_dosing"] = bd.__dict__
     else:
         out["base_dosing"] = None
     return out
 
 
+ANALYSIS_STEPS_H = (0.25, 0.5, 1.0, 2.0, 4.0)
+OUT_OF_LIMIT_KINDS = ("out_of_limits", "out_of_limits_at_start")
+
+
+def _measured_variables(db: Session, exp_id: int) -> list[Variable]:
+    """Manual variables with at least one measurement, OD600 and AFU first."""
+    vs = db.scalars(select(Variable).join(ManualMeasurement).where(ManualMeasurement.experiment_id == exp_id)
+                    .distinct()).all()
+    order = {"OD600": 0, "AFU": 1}
+    return sorted(vs, key=lambda v: (order.get(v.name, 2), v.name))
+
+
+def _partner(e: Experiment) -> Optional[dict]:
+    if not e.parallel_run:
+        return None
+    for x in e.parallel_run.experiments:
+        if x.id != e.id:
+            return {"id": x.id, "code": x.code, "reactor_id": x.reactor_id, "status": x.status.value,
+                    "parallel_run": e.parallel_run.code}
+    return None
+
+
 @router.get("/experiments/{exp_id}/analysis")
-def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable: str = "OD600", bin_h: float = 0.25):
-    _404(db.get(Experiment, exp_id))
-    res = experiment_parameters(db, exp_id, fit_variable)
+def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable: str = "OD600",
+                        bin_h: float = 0.25, model: str = "gompertz", step_h: float = 1.0):
+    """
+    Everything the single-experiment analysis shows: summary, manual points (mean ± SD per
+    time point), model fits on every manual variable, controller series averaged over
+    `step_h`, base-dosing metrics (peak rate on `bin_h` bins) and the rate bins.
+    """
+    e = _404(db.get(Experiment, exp_id))
+    if model not in kinetics.MODELS:
+        raise HTTPException(422, f"Unknown model '{model}'")
+    if not (0.05 <= step_h <= 24) or not (0.05 <= bin_h <= 24):
+        raise HTTPException(422, "Interval out of range")
+    res = experiment_parameters(db, exp_id, fit_variable, model, bin_h)
     df = _readings_df(db, exp_id)
     res["rate_bins"] = [] if df.empty else [b.__dict__ for b in base_dosing.rate_bins(
         df["t_h"].astype(float), df["base_cumulative_ml"].astype(float), bin_h)]
+    ch = channels_of(e)
+    manual, fits = {}, {}
+    for v in _measured_variables(db, exp_id):
+        t, y = _manual_series(db, exp_id, v.name)
+        manual[v.name] = {"unit": v.unit, "category": v.category.value, **report.grouped_points(t, y)}
+        f, err = _fit(db, exp_id, v.name, model)
+        fits[v.name] = {"params": f.summary(), "curve": f.curve()} if f else {"error": err}
+    keys = [sd.key for sd in report.CONTROLLER_SERIES if sd.channel in ch]
+    recorded_h = float(df["t_h"].max()) if not df.empty else None
+    if e.started_at and e.ended_at:
+        recorded_h = (_as_utc(e.ended_at) - _as_utc(e.started_at)).total_seconds() / 3600
+    bd = res["base_dosing"] or {}
+    od, afu = manual.get("OD600"), manual.get("AFU")
+    n_out = db.scalar(select(func.count()).select_from(Event).where(
+        Event.experiment_id == exp_id, Event.kind.in_(OUT_OF_LIMIT_KINDS))) or 0
+    res.update({
+        "experiment": {"id": e.id, "code": e.code, "name": e.name, "strain": e.strain, "reactor_id": e.reactor_id,
+                       "status": e.status.value, "started_at": e.started_at, "ended_at": e.ended_at,
+                       "channels": ch, "partner": _partner(e)},
+        "summary": {"recorded_h": recorded_h,
+                    "final_od": od["mean"][-1] if od and od["mean"] else None,
+                    "max_afu": max(afu["mean"]) if afu and afu["mean"] else None,
+                    "total_base_ml": bd.get("total_ml") if "ph" in ch else None,
+                    "peak_base_rate_ml_min": bd.get("peak_rate_ml_min") if "ph" in ch else None,
+                    "out_of_limit_events": int(n_out)},
+        "models": {k: v[0] for k, v in kinetics.MODELS.items()},
+        "manual": manual, "fits": fits, "step_h": step_h, "bin_h": bin_h,
+        "series_defs": [{"key": sd.key, "label": sd.label, "unit": sd.unit} for sd in report.CONTROLLER_SERIES
+                        if sd.key in keys],
+        "series": report.binned_series(df, step_h, keys),
+    })
+    if "ph" not in ch:
+        res["base_dosing"] = None
     return res
+
+
+PANEL_COLORS = {"OD600": "#1d3786", "AFU": "#7a4fa0", "ph": "#1d3786", "base_rate": "#1f7a63",
+                "base_cumulative_ml": "#1f7a63", "temperature": "#b3261e", "stirrer": "#54565a", "do2": "#00639b"}
+MANUAL_COLORS = ["#8a5300", "#006a6a", "#5c4d00", "#7d2a52"]
+
+
+@router.get("/experiments/{exp_id}/figure.{fmt}")
+def experiment_figure(exp_id: int, fmt: str, vars: str = "OD600,AFU,ph,base_rate", model: str = "gompertz",
+                      step_h: float = 1.0, width_mm: float = 174, dpi: int = 300, theme: str = "grey",
+                      fit: bool = True, db: Session = Depends(get_db)):
+    """Time-course figure of the selected panels (manual variables by name, controller series by key)."""
+    e = _404(db.get(Experiment, exp_id))
+    if fmt not in report.FIG_FORMATS:
+        raise HTTPException(404, "Format not available")
+    if not (40 <= width_mm <= 500) or not (72 <= dpi <= 1200):
+        raise HTTPException(422, "Width must be 40-500 mm and resolution 72-1200 dpi")
+    an = experiment_analysis(exp_id, db, model=model, step_h=step_h)
+    labels = {d["key"]: d for d in an["series_defs"]}
+    panels, other = [], 0
+    for v in [x.strip() for x in vars.split(",") if x.strip()]:
+        if v in an["manual"]:
+            m = an["manual"][v]
+            col = PANEL_COLORS.get(v) or MANUAL_COLORS[other % len(MANUAL_COLORS)]
+            other += v not in PANEL_COLORS
+            curve = an["fits"][v].get("curve") if fit else None
+            panels.append(report.Panel(f"{v} ({m['unit']})" if m["unit"] else v, col, points=m,
+                                       curve=curve and {"t": curve["t"], "y": curve["y"]}))
+        elif v in labels:
+            d = labels[v]
+            panels.append(report.Panel(f"{d['label']} ({d['unit']})" if d["unit"] else d["label"],
+                                       PANEL_COLORS.get(v, "#54565a"),
+                                       line={"t": an["series"]["t"], "y": an["series"][v]}, step=v == "base_rate"))
+        else:
+            raise HTTPException(422, f"Unknown variable '{v}'")
+    try:
+        data = report.render_figure(panels, fmt, width_mm, dpi, theme)
+    except ValueError as ex:
+        raise HTTPException(422, str(ex))
+    return StreamingResponse(io.BytesIO(data), media_type=report.FIG_FORMATS[fmt],
+                             headers={"Content-Disposition": f'attachment; filename="{e.code}-time-course.{fmt}"'})
 
 
 @router.post("/analysis-sessions", status_code=201)
@@ -780,35 +893,116 @@ def session_results(sid: int, db: Session = Depends(get_db), step_h: float = 2.0
 
 # --- export -------------------------------------------------------------------------------
 
-@router.get("/experiments/{exp_id}/export.xlsx")
-def export_xlsx(exp_id: int, db: Session = Depends(get_db), resample_min: Optional[float] = None):
+EXPORT_BLOCKS = ("controller", "manual", "parameters", "metadata")
+
+
+def _flatten(d, prefix: str = "") -> list[tuple[str, object]]:
+    out = []
+    for k, v in (d or {}).items():
+        key = f"{prefix}{k}"
+        if isinstance(v, dict):
+            out += _flatten(v, key + ".")
+        else:
+            out.append((key, v if not isinstance(v, list) else ", ".join(map(str, v))))
+    return out
+
+
+def _naive(df: pd.DataFrame, cols) -> pd.DataFrame:
+    for c in cols:
+        if c in df and not df.empty:
+            df[c] = pd.to_datetime(df[c], utc=True).dt.tz_localize(None)
+    return df
+
+
+def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: Optional[float] = None,
+                  model: str = "gompertz") -> dict[str, pd.DataFrame]:
+    """One table per export sheet/CSV. Times: hours since start plus absolute UTC timestamps."""
     e = _404(db.get(Experiment, exp_id))
-    readings = _readings_df(db, exp_id)
-    if resample_min and not readings.empty:
-        readings = readings.set_index(pd.to_datetime(readings["ts"], utc=True)).drop(columns=["ts"]) \
-            .resample(f"{resample_min}min").mean().dropna(how="all").reset_index()
-    if "ts" in readings:
-        readings["ts"] = pd.to_datetime(readings["ts"], utc=True).dt.tz_localize(None)
-    meas = pd.DataFrame([m.model_dump() for m in list_measurements(exp_id, db)])
-    if not meas.empty:
-        meas["sampled_at"] = pd.to_datetime(meas["sampled_at"], utc=True).dt.tz_localize(None)
-    params = experiment_parameters(db, exp_id)
-    meta = pd.DataFrame([{"field": k, "value": v} for k, v in {
-        "code": e.code, "name": e.name, "strain": e.strain, "reactor": e.reactor_id, "status": e.status.value,
-        "started_at (UTC)": e.started_at, "ended_at (UTC)": e.ended_at,
-        "parallel_run": e.parallel_run.code if e.parallel_run else None,
-        "profile": (e.plan_snapshot or {}).get("profile"), "notes": e.notes}.items()])
-    par_rows = [{"block": "fit", "parameter": k, "value": v} for k, v in (params["fit"] or {}).items()]
-    par_rows += [{"block": "base dosing", "parameter": k, "value": v} for k, v in (params["base_dosing"] or {}).items()]
+    out: dict[str, pd.DataFrame] = {}
+    if "controller" in blocks:
+        r = _readings_df(db, exp_id)
+        if resample_min and not r.empty:
+            r = r.set_index(pd.to_datetime(r["ts"], utc=True)).drop(columns=["ts"]) \
+                .apply(pd.to_numeric, errors="coerce").resample(f"{resample_min}min").mean() \
+                .dropna(how="all").reset_index()
+        r = _naive(r, ["ts"]).rename(columns={"ts": "timestamp (UTC)"})
+        lead = [c for c in ("t_h", "timestamp (UTC)") if c in r]
+        out["Controller data"] = r[lead + [c for c in r.columns if c not in lead]].dropna(axis=1, how="all") \
+            if not r.empty else r
+    if "manual" in blocks:
+        m = pd.DataFrame([x.model_dump() for x in list_measurements(exp_id, db)])
+        if not m.empty:
+            m = _naive(m, ["sampled_at"]).rename(columns={"sampled_at": "sampled_at (UTC)"})
+            m = m[["t_h", "sampled_at (UTC)", "variable_name", "value", "unit", "note", "author", "id"]]
+        out["Manual variables"] = m
+    if "parameters" in blocks:
+        rows = []
+        for v in _measured_variables(db, exp_id):
+            f, err = _fit(db, exp_id, v.name, model)
+            if f:
+                rows += [{"block": f"kinetics {v.name}", "parameter": k,
+                          "value": "; ".join(val) if isinstance(val, list) else val}
+                         for k, val in f.summary().items()]
+            else:
+                rows.append({"block": f"kinetics {v.name}", "parameter": "error", "value": err})
+        bd = experiment_parameters(db, exp_id, model=model)["base_dosing"] if "ph" in channels_of(e) else None
+        rows += [{"block": "base dosing", "parameter": k, "value": v} for k, v in (bd or {}).items()]
+        out["Parameters"] = pd.DataFrame(rows, columns=["block", "parameter", "value"])
+    if "metadata" in blocks:
+        meta = {"code": e.code, "name": e.name, "strain": e.strain, "reactor": e.reactor_id,
+                "status": e.status.value, "channels": ", ".join(channels_of(e)),
+                "started_at (UTC)": e.started_at, "ended_at (UTC)": e.ended_at,
+                "parallel_run": e.parallel_run.code if e.parallel_run else None,
+                "medium": e.medium.name if e.medium else None, "buffer": e.buffer.name if e.buffer else None,
+                "working_volume_ml": e.working_volume_ml, "author": e.author, "notes": e.notes}
+        rows = [{"field": k, "value": v} for k, v in meta.items()]
+        rows += [{"field": f"plan.{k}", "value": v} for k, v in _flatten(e.plan_snapshot)]
+        md = pd.DataFrame(rows)
+        md["value"] = md["value"].map(lambda v: v.replace(tzinfo=None) if isinstance(v, datetime) else v)
+        out["Metadata"] = md
+        log = db.scalars(select(SetpointCommand).where(SetpointCommand.experiment_id == exp_id)
+                         .order_by(SetpointCommand.at)).all()
+        out["Change log"] = _naive(pd.DataFrame([{
+            "at (UTC)": c.at, "parameter": c.parameter, "old_value": c.old_value, "requested_value": c.requested_value,
+            "readback_value": c.readback_value, "status": c.status, "origin": c.origin, "author": c.author,
+            "message": c.message} for c in log], columns=["at (UTC)", "parameter", "old_value", "requested_value",
+                                                          "readback_value", "status", "origin", "author", "message"]),
+            ["at (UTC)"])
+        ev = db.scalars(select(Event).where(Event.experiment_id == exp_id).order_by(Event.at)).all()
+        out["Events"] = _naive(pd.DataFrame([{"at (UTC)": x.at, "t_h": x.t_h, "kind": x.kind, "severity": x.severity,
+                                              "message": x.message} for x in ev],
+                                            columns=["at (UTC)", "t_h", "kind", "severity", "message"]), ["at (UTC)"])
+    return out
+
+
+@router.get("/experiments/{exp_id}/export.{fmt}")
+def export_data(exp_id: int, fmt: str, db: Session = Depends(get_db), resample_min: Optional[float] = None,
+                blocks: str = ",".join(EXPORT_BLOCKS), model: str = "gompertz"):
+    """XLSX with one sheet per block, or a zip of CSV files."""
+    e = _404(db.get(Experiment, exp_id))
+    if fmt not in ("xlsx", "zip"):
+        raise HTTPException(404, "Format not available")
+    sel = [b for b in blocks.split(",") if b]
+    if not sel or any(b not in EXPORT_BLOCKS for b in sel):
+        raise HTTPException(422, f"Blocks must be among {', '.join(EXPORT_BLOCKS)}")
+    if resample_min is not None and not (0.05 <= resample_min <= 1440):
+        raise HTTPException(422, "Resampling interval out of range")
+    tables = export_tables(db, exp_id, sel, resample_min, model)
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        meta.to_excel(xw, sheet_name="Metadata", index=False)
-        readings.to_excel(xw, sheet_name="Controller data", index=False)
-        meas.to_excel(xw, sheet_name="Manual variables", index=False)
-        pd.DataFrame(par_rows).to_excel(xw, sheet_name="Parameters", index=False)
+    if fmt == "xlsx":
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            for name, df in tables.items():
+                df.to_excel(xw, sheet_name=name[:31], index=False)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        import zipfile
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, df in tables.items():
+                z.writestr(f"{e.code}_{name.lower().replace(' ', '_')}.csv", df.to_csv(index=False))
+        media = "application/zip"
     buf.seek(0)
-    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                             headers={"Content-Disposition": f'attachment; filename="{e.code}.xlsx"'})
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{e.code}.{fmt}"'})
 
 
 # --- settings, notifications, backup --------------------------------------------------------

@@ -101,6 +101,30 @@ def test_full_workflow(env):
     x = c.get(f"/api/experiments/{a['id']}/export.xlsx?resample_min=5")
     assert x.status_code == 200 and x.content[:2] == b"PK"
 
+    for model in ("gompertz", "logistic", "baranyi"):
+        an = c.get(f"/api/experiments/{a['id']}/analysis?model={model}&step_h=2").json()
+        assert an["fits"]["OD600"]["params"]["model"] == model, an["fits"]["OD600"]
+        assert an["fits"]["OD600"]["params"]["mu_max_per_h"] > 0 and len(an["fits"]["OD600"]["curve"]["t"]) == 200
+    assert an["summary"]["final_od"] > 0 and an["summary"]["total_base_ml"] > 5
+    assert an["experiment"]["partner"]["code"] == b["code"]
+    s_ = an["series"]
+    assert len(s_["t"]) == len(s_["ph"]) == len(s_["base_rate"]) and s_["t"][0] == pytest.approx(1.0)
+    assert {d["key"] for d in an["series_defs"]} >= {"ph", "base_rate", "temperature", "stirrer"}
+    assert "do2" not in s_  # channel not enabled
+    assert c.get(f"/api/experiments/{a['id']}/analysis?model=nope").status_code == 422
+
+    for fmt, magic in (("png", b"\x89PNG"), ("svg", b"<?xml"), ("pdf", b"%PDF")):
+        f = c.get(f"/api/experiments/{a['id']}/figure.{fmt}?vars=OD600,ph,base_rate&dpi=100&theme=bw")
+        assert f.status_code == 200 and f.content[:len(magic)] == magic, fmt
+    assert c.get(f"/api/experiments/{a['id']}/figure.png?vars=bogus").status_code == 422
+
+    import io, zipfile
+    z = c.get(f"/api/experiments/{a['id']}/export.zip?blocks=controller,metadata&resample_min=15")
+    names = zipfile.ZipFile(io.BytesIO(z.content)).namelist()
+    assert z.status_code == 200 and any("controller_data" in n for n in names) and any("change_log" in n for n in names)
+    assert not any("manual" in n for n in names)
+    assert c.get(f"/api/experiments/{a['id']}/export.zip?blocks=nope").status_code == 422
+
 
 def test_manual_edit_is_audited_and_time_from_start(env):
     c, clock, app, _ = env

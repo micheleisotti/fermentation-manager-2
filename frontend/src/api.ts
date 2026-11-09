@@ -48,6 +48,27 @@ export interface EventItem { id: number; experiment_id: number | null; reactor_i
 export interface RateBin { t_start_h: number; t_end_h: number; rate_ml_min: number | null; complete: boolean }
 export interface CommandResult { parameter: string; old_value: number | null; requested_value: number; readback_value: number | null; status: string; message: string; warnings: string[] }
 
+export interface FitParams {
+  model: string; lag_h: number; lag_se: number; mu_max_per_h: number; mu_max_se: number; t_mu_max_h: number;
+  A_ln: number; A_se: number; X0: number; X_max: number; doubling_time_h: number; r_squared: number; rmse: number; n_points: number; n_times: number; warnings: string[];
+}
+export interface BaseDosing {
+  total_ml: number | null; peak_rate_ml_min: number | null; t_peak_h: number | null; t_half_total_h: number | null;
+  last_hour_rate_ml_min: number | null; n_doses: number | null; base_per_final_od: number | null;
+}
+export interface AnalysisResult {
+  experiment: { id: number; code: string; reactor_id: string; channels: Channel[];
+    partner: { id: number; code: string; reactor_id: string; status: Status; parallel_run: string } | null };
+  summary: { recorded_h: number | null; final_od: number | null; max_afu: number | null; total_base_ml: number | null;
+    peak_base_rate_ml_min: number | null; out_of_limit_events: number };
+  models: Record<string, string>;
+  manual: Record<string, { unit: string; category: string; t: number[]; mean: number[]; sd: (number | null)[]; n: number[] }>;
+  fits: Record<string, { params?: FitParams; curve?: { t: number[]; y: number[] }; error?: string }>;
+  series_defs: { key: string; label: string; unit: string }[];
+  series: { t: number[] } & Record<string, (number | null)[]>;
+  base_dosing: BaseDosing | null; rate_bins: RateBin[]; step_h: number; bin_h: number;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, { headers: { "Content-Type": "application/json" }, ...init });
   if (!r.ok) {
@@ -87,6 +108,8 @@ export const api = {
   variables: () => req<Variable[]>("/variables"),
   events: (id: number) => req<EventItem[]>(`/experiments/${id}/events`),
   recentEvents: () => req<EventItem[]>("/events/recent"),
+  analysisFull: (id: number, model = "gompertz", stepH = 1) =>
+    req<AnalysisResult>(`/experiments/${id}/analysis?model=${model}&step_h=${stepH}`),
   analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),
   setpoint: (reactor: string, parameter: string, value: number, origin = "local") =>
     req<CommandResult>(`/reactors/${reactor}/setpoints`, { method: "POST", body: JSON.stringify({ parameter, value, origin }) }),

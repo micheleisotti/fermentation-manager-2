@@ -60,7 +60,8 @@ h3 { margin: 0; font-size: 16px; font-weight: 500; }
 .kicker { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); font-weight: 600; }
 
 /* navigation rail */
-.rail { flex: 1 0 96px; max-width: 100%; padding: 20px 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; background: var(--surface-container); position: relative; z-index: 5; }
+.rail { flex: 1 0 96px; max-width: 100%; padding: 20px 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; background: var(--surface-container); position: sticky; top: 0; height: 100vh; box-sizing: border-box; align-self: flex-start; z-index: 5; }
+/* the rail stays in place while the page scrolls (desktop) */
 .rail a { display: flex; flex-direction: column; align-items: center; gap: 4px; text-decoration: none; color: var(--ink-soft); font-size: 12px; min-height: 56px; }
 .rail a .ind { width: 56px; height: 32px; border-radius: 16px; display: flex; align-items: center; justify-content: center; }
 .rail a.active { color: var(--ink); font-weight: 600; }
@@ -73,7 +74,7 @@ h3 { margin: 0; font-size: 16px; font-weight: 500; }
 
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   .rail { position: fixed; left: 0; right: 0; bottom: 0; flex-direction: row; flex-wrap: nowrap; justify-content: space-around;
-    padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); gap: 0; box-shadow: 0 -1px 3px rgba(34,41,77,.15); }
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); gap: 0; top: auto; height: auto; overflow: visible; box-shadow: 0 -1px 3px rgba(34,41,77,.15); }
   .rail a { min-height: 52px; font-size: 11px; flex: 1 1 0; }
   /* "New" on phones: floating button above the bottom bar, menu opening upwards */
   .rail .fab-wrap { position: fixed; right: 16px; bottom: calc(80px + env(safe-area-inset-bottom)); margin: 0; z-index: 6; }
@@ -194,3 +195,15 @@ body.no-rail .main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 .switch.on { background: var(--primary); justify-content: flex-end; }
 .cell-input { height: 40px; padding: 0 10px; border: 1px solid var(--outline); border-radius: 4px; font-size: 14px; color: var(--ink); background: var(--surface); }
 @media (max-width: 760px) { .settings-nav { display: none; } }
+
+/* experiment analysis */
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
+.facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 14px 20px; }
+.facet { display: flex; flex-direction: column; min-width: 0; }
+.facet-strip { background: #d9d9d9; color: #1a1a1a; font-size: 13px; text-align: center; padding: 3px 8px; margin-left: 48px; margin-right: 14px; }
+.facet-chart { height: 200px; width: 100%; }
+table.data th.num, table.data td.num { text-align: right; }
+.mode-tabs { height: 40px; border-radius: 20px; }
+.mode-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 0 18px; font-size: 14px; font-weight: 500; }
+a.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+@media (max-width: 760px) { .facets { grid-template-columns: 1fr; } }
