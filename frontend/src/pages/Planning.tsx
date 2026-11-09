@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
+import { DeleteExperiment } from "../components/DeleteExperiment";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -157,7 +158,10 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
           </div>
           <StatusChip status="planned" />
         </div>
-        <button className="btn filled" onClick={save} disabled={!!existing && !dirty}>{existing ? "Save plan" : "Create"}</button>
+        <div className="row" style={{ gap: 8 }}>
+          {existing && <DeleteExperiment e={existing} />}
+          <button className="btn filled" onClick={save} disabled={!!existing && !dirty}>{existing ? "Save plan" : "Create"}</button>
+        </div>
       </header>
       {msg && <div className={`banner ${msg.kind}`} role="status">{msg.text}</div>}
 

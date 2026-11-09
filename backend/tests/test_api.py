@@ -141,3 +141,30 @@ def test_delete_profile(env):
     assert [p["name"] for p in c.get("/api/profiles").json()] == []
     assert c.get(f"/api/experiments/{e['id']}").status_code == 200
     assert c.delete("/api/profiles/9999").status_code == 404
+
+
+def test_delete_experiment(env):
+    c, clock, app, drivers = env
+    a = c.post("/api/experiments", json={"name": "a", "reactor_id": "R1"}).json()
+    b = c.post("/api/experiments", json={"name": "b", "reactor_id": "R2"}).json()
+    assert c.post(f"/api/experiments/{a['id']}/parallel", json={"partner_id": b["id"]}).status_code == 200
+    for x in (a, b):
+        assert c.post(f"/api/experiments/{x['id']}/start").status_code == 200
+    run_hours(app, clock, 2, step_min=10)
+    var = c.get("/api/variables").json()[0]
+    assert c.post(f"/api/experiments/{a['id']}/measurements", json={"variable_id": var["id"], "value": 0.5}).status_code in (200, 201)
+    assert c.delete(f"/api/experiments/{a['id']}?confirm={a['code']}").status_code == 409   # still recording
+    c.post(f"/api/experiments/{a['id']}/end")
+    assert c.delete(f"/api/experiments/{a['id']}?confirm=FM-999").status_code == 400        # wrong code
+    r = c.delete(f"/api/experiments/{a['id']}?confirm={a['code']}")
+    assert r.status_code == 200 and r.json()["deleted"] == a["code"]
+    assert c.get(f"/api/experiments/{a['id']}").status_code == 404
+    assert c.get(f"/api/experiments/{a['id']}/readings").status_code == 404
+    partner = c.get(f"/api/experiments/{b['id']}").json()
+    assert partner["parallel_run_code"] is None and partner["status"] == "fermenting"
+    from sqlalchemy import func, select
+    from fm2.models import ControllerReading, Event, ManualMeasurement
+    with app.state.sessions() as s:
+        for model in (ControllerReading, ManualMeasurement, Event):
+            assert s.scalar(select(func.count()).select_from(model).where(model.experiment_id == a["id"])) == 0
+        assert s.scalar(select(func.count()).select_from(ControllerReading).where(ControllerReading.experiment_id == b["id"])) > 0

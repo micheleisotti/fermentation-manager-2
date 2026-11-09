@@ -15,7 +15,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -408,6 +408,37 @@ def end_experiment(exp_id: int, request: Request, db: Session = Depends(get_db))
 @router.post("/experiments/{exp_id}/abort", response_model=S.ExperimentOut)
 def abort_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
     return _close(exp_id, request, db, ExperimentStatus.aborted)
+
+
+@router.delete("/experiments/{exp_id}")
+def delete_experiment(exp_id: int, request: Request, confirm: str = "", db: Session = Depends(get_db)):
+    """
+    Permanently delete an experiment that is not recording, with all its data (readings,
+    manual measurements and their edit history, events, setpoint log, analysis-session
+    membership). `confirm` must repeat the experiment code. A parallel run left with one
+    experiment is dissolved.
+    """
+    e = _404(db.get(Experiment, exp_id))
+    if e.status == ExperimentStatus.fermenting:
+        raise HTTPException(409, f"{e.code} is recording: end it first.")
+    if confirm.strip() != e.code:
+        raise HTTPException(400, f"Type the experiment code ({e.code}) to confirm.")
+    code, run = e.code, e.parallel_run
+    db.execute(sa_delete(SetpointCommand).where(SetpointCommand.experiment_id == exp_id))
+    db.execute(sa_delete(SessionMember).where(SessionMember.experiment_id == exp_id))
+    e.parallel_run_id = None
+    db.flush()
+    if run is not None:
+        rest = db.scalars(select(Experiment).where(Experiment.parallel_run_id == run.id)).all()
+        if len(rest) <= 1:
+            for x in rest:
+                x.parallel_run_id = None
+            db.flush()
+            db.delete(run)
+    db.delete(e)          # readings, measurements (+ edits) and events go by ON DELETE CASCADE
+    db.flush()
+    request.app.state.acq.alert_states.pop(exp_id, None)
+    return {"deleted": code}
 
 
 # --- data ---------------------------------------------------------------------------------
