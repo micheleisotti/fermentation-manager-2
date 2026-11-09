@@ -49,3 +49,24 @@ def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def add_missing_columns(engine: Engine, base) -> list[str]:
+    """
+    Minimal forward migration for SQLite: add columns that exist in the models but not yet in
+    an existing database (nullable columns only). Returns "table.column" for each one added.
+    """
+    from sqlalchemy import inspect, text
+    added = []
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have and col.nullable:
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" '
+                                      f'{col.type.compile(dialect=engine.dialect)}'))
+                    added.append(f"{table.name}.{col.name}")
+    return added

@@ -268,7 +268,9 @@ def test_write_request_allowlist():
     assert SETPOINT_ADDRESSES == {"1.13.0", "1.13.2", "1.13.13"}
     assert build_write_request("1.13.0", "6.30") == b"J1.13.0s6.30\r"
     # dose counter, actuator on, calibration, loop on, temperature PID, temperature/stirrer control type
-    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.0", "3.0.2", "1.19.2", "1.19.13", "3.72.0"):
+    # also: interlock limits (1.20/1.21), stirrer alarm limits, dO2 limits
+    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.0", "3.0.2", "1.19.2", "1.19.13", "3.72.0",
+                 "1.20.0", "1.21.0", "1.4.13", "1.5.1"):
         with pytest.raises(DriverError):
             build_write_request(addr, "0")
     with pytest.raises(DriverError):
@@ -362,3 +364,35 @@ def test_login_request_format():
     for bad in (0, 3):                          # never View (pointless) nor Service
         with pytest.raises(DriverError):
             build_login_request(bad, 0, "x")
+
+
+def test_write_process_limits(fake):
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    drv.write_limits("ph", 5.8, 6.4)                       # pH 6.00–6.50 -> 5.80–6.40
+    assert fake.writes == [("1.5.0", "5.80"), ("1.4.0", "6.40")]
+    assert fake.holder is None
+    s = drv.read()
+    assert (s.ph_low_limit, s.ph_high_limit) == (5.8, 6.4)
+    fake.writes.clear()
+    drv.write_limits("temperature", None, 40.0)            # only the high limit
+    assert fake.writes == [("1.4.2", "40.0")]
+    fake.writes.clear()
+    drv.write_limits("ph", 6.6, 7.0)                       # moving up past the old high: high first
+    assert fake.writes == [("1.4.0", "7.00"), ("1.5.0", "6.60")]
+    drv.close()
+
+
+@pytest.mark.parametrize("parameter,low,high", [
+    ("ph", 6.5, 6.0),          # low above high
+    ("ph", None, 5.0),         # new high below the current low (6.00)
+    ("ph", -1.0, 6.0),         # outside the sensor range
+    ("ph", 5.805, 6.4),        # too many decimals
+    ("temperature", 20.0, float("inf")),
+    ("stirrer", 100, 500),     # stirrer limits are not writable
+])
+def test_process_limits_rejected_without_sending(fake, parameter, low, high):
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError):
+        drv.write_limits(parameter, low, high)
+    assert fake.writes == [] and fake.logins == []
+    drv.close()

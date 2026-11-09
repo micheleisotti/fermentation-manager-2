@@ -95,6 +95,11 @@ class ControllerProfile(Base):
     ph_control_mode: Mapped[Optional[PhControlMode]] = mapped_column(Enum(PhControlMode))
     # Parameter names depend on what ez2-Control exposes: kept as a free dict until verified.
     ph_pid: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Process (alarm) limits loaded with the profile (None = leave the controller's value)
+    ph_low_limit: Mapped[Optional[float]] = mapped_column(Float)
+    ph_high_limit: Mapped[Optional[float]] = mapped_column(Float)
+    temperature_low_limit: Mapped[Optional[float]] = mapped_column(Float)
+    temperature_high_limit: Mapped[Optional[float]] = mapped_column(Float)
     notes: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -10,6 +10,7 @@ import { fmt, fmtDuration, usePolling } from "../hooks";
 import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, type TrendVar } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
+import { LimitsDialog } from "../components/LimitsDialog";
 
 const V = (k: string) => TREND_VARS.find((v) => v.key === k)!;
 const PRESETS: { key: string; label: string; left: TrendVar; right: TrendVar | null }[] = [
@@ -57,6 +58,7 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
   const [amOpen, setAmOpen] = useState(running);
   const [spOpen, setSpOpen] = useState(false);
   const [dialog, setDialog] = useState<string | null>(null);
+  const [limitsDialog, setLimitsDialog] = useState<string | null>(null);
 
   const r = live.data?.find((x) => x.reactor_id === e.reactor_id);
   const s = running ? r?.snapshot : null;
@@ -169,7 +171,7 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
 
       {running && s && (
         <Collapsible label="Setpoints" open={spOpen} onToggle={() => setSpOpen(!spOpen)}
-          icon={<Icon name="sliders" size={22} color="#003366" />} title={<>Setpoints · <span className="mono">{e.reactor_id}</span></>}
+          icon={<Icon name="sliders" size={22} color="#003366" />} title={<>Setpoints & limits · <span className="mono">{e.reactor_id}</span></>}
           sub={<span className="mono">pH {fmt(s.ph_setpoint)} · {fmt(s.temperature_setpoint, 1)} °C · {fmt(s.stirrer_setpoint, 0)} rpm</span>}>
           {[
             { p: "ph", name: "pH", v: fmt(s.ph_setpoint), lim: `limits ${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}` },
@@ -182,10 +184,24 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
               <button className="btn text" onClick={() => setDialog(row.p)}>Edit</button>
             </div>
           ))}
+          {[
+            { p: "ph", name: "pH process limits", v: `${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}` },
+            { p: "temperature", name: "T process limits", v: `${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} °C` },
+          ].map((row) => (
+            <div key={`lim-${row.p}`} className="p-row" style={{ alignItems: "center" }}>
+              <span className="stack" style={{ gap: 0, flexGrow: 1 }}>{row.name}<span className="xs muted">alarm only · no effect on pumps</span></span>
+              <span className="mono small">{row.v}</span>
+              <button className="btn text" onClick={() => setLimitsDialog(row.p)}>Edit</button>
+            </div>
+          ))}
         </Collapsible>
       )}
 
       {full && <FullscreenChart e={e} partner={partner} partnerReadings={partnerReadings.data} onClose={() => setFull(false)} />}
+      {limitsDialog && s && (
+        <LimitsDialog reactor={e.reactor_id} parameter={limitsDialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
+          onClose={(changed) => { setLimitsDialog(null); if (changed) live.refresh(); }} />
+      )}
       {dialog && s && (
         <SetpointDialog reactor={e.reactor_id} parameter={dialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
           onClose={(changed) => { setDialog(null); if (changed) live.refresh(); }} />

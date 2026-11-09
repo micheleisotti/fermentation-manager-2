@@ -168,3 +168,47 @@ def test_delete_experiment(env):
         for model in (ControllerReading, ManualMeasurement, Event):
             assert s.scalar(select(func.count()).select_from(model).where(model.experiment_id == a["id"])) == 0
         assert s.scalar(select(func.count()).select_from(ControllerReading).where(ControllerReading.experiment_id == b["id"])) > 0
+
+
+def test_change_limits_and_profile_limits(env):
+    c, clock, app, drivers = env
+    r = c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 5.7, "high": 6.4, "author": "M"})
+    assert r.status_code == 200 and [x["status"] for x in r.json()] == ["confirmed", "confirmed"]
+    app.state.acq.poll_once()
+    snap = drivers["R1"].read()
+    assert (snap.ph_low_limit, snap.ph_high_limit) == (5.7, 6.4)
+    assert c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 6.5, "high": 6.0}).status_code == 422
+    assert c.post("/api/reactors/R1/limits", json={"parameter": "stirrer", "low": 1, "high": 2}).status_code == 422
+    # setpoint 6.0 outside new limits -> warning
+    r = c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 6.1})
+    assert r.json()[0]["warnings"] and "outside the new limits" in r.json()[0]["warnings"][0]
+
+    p = c.post("/api/profiles", json={"name": "lim", "ph_setpoint": 6.0, "ph_low_limit": 5.9, "ph_high_limit": 6.2,
+                                      "temperature_high_limit": 33.0}).json()
+    assert p["ph_low_limit"] == 5.9 and p["temperature_low_limit"] is None
+    e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R2", "profile_id": p["id"]}).json()
+    rows = {x["parameter"]: x for x in c.get(f"/api/experiments/{e['id']}/plan-check").json()["rows"]}
+    assert rows["ph_limits"]["match"] is False and not rows["ph_limits"].get("read_only")
+    res = c.post(f"/api/experiments/{e['id']}/load-profile").json()["results"]
+    assert {x["parameter"]: x["status"] for x in res}["ph_low_limit"] == "confirmed"
+    rows = {x["parameter"]: x for x in c.get(f"/api/experiments/{e['id']}/plan-check").json()["rows"]}
+    assert rows["ph_limits"]["match"] and rows["temperature_limits"]["match"]
+    assert drivers["R2"].read().temperature_high_limit == 33.0
+
+
+def test_old_database_gets_new_columns(tmp_path):
+    import sqlite3
+    from fm2.api.app import create_app
+    from fm2.config import Settings
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)        # a profiles table as it was before process limits
+    con.execute("CREATE TABLE controller_profiles (id INTEGER PRIMARY KEY, name VARCHAR(200) UNIQUE, "
+                "ph_setpoint FLOAT, temperature_setpoint FLOAT, stirrer_setpoint FLOAT, ph_control_mode VARCHAR(8), "
+                "ph_pid JSON, notes TEXT, author VARCHAR(100), created_at DATETIME)")
+    con.execute("INSERT INTO controller_profiles (name, ph_setpoint, notes, author) VALUES ('old', 6.1, '', '')")
+    con.commit(); con.close()
+    app = create_app(Settings(data_dir=tmp_path), start_acquisition=False, db_path=db,
+                     drivers={"R1": SimulatedController("R1"), "R2": SimulatedController("R2")})
+    c = TestClient(app)
+    profs = c.get("/api/profiles").json()
+    assert profs[0]["name"] == "old" and profs[0]["ph_setpoint"] == 6.1 and profs[0]["ph_low_limit"] is None

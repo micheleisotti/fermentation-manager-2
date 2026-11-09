@@ -42,6 +42,10 @@ class ProfileIn(BaseModel):
     stirrer_setpoint: Optional[float] = None
     ph_control_mode: Optional[str] = None
     ph_pid: Optional[dict] = None
+    ph_low_limit: Optional[float] = None
+    ph_high_limit: Optional[float] = None
+    temperature_low_limit: Optional[float] = None
+    temperature_high_limit: Optional[float] = None
     notes: str = ""
     author: str = ""
 
@@ -54,6 +58,10 @@ class ProfileOut(ORM):
     stirrer_setpoint: Optional[float]
     ph_control_mode: Optional[str]
     ph_pid: Optional[dict]
+    ph_low_limit: Optional[float] = None
+    ph_high_limit: Optional[float] = None
+    temperature_low_limit: Optional[float] = None
+    temperature_high_limit: Optional[float] = None
     notes: str
 
 
@@ -135,6 +143,14 @@ class MeasurementOut(ORM):
     unit: str
     note: str
     author: str
+
+
+class LimitsIn(BaseModel):
+    parameter: str                      # "ph" | "temperature"
+    low: Optional[float] = None
+    high: Optional[float] = None
+    origin: str = "local"
+    author: str = ""
 
 
 class SetpointIn(BaseModel):

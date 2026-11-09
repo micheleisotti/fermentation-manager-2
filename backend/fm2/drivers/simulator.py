@@ -35,7 +35,7 @@ def _utcnow() -> datetime:
 
 class SimulatedController(ControllerDriver):
     capabilities = DriverCapabilities(read_values=True, read_limits=True,
-                                      write_setpoints=True, write_ph_control=True)
+                                      write_setpoints=True, write_ph_control=True, write_limits=True)
 
     def __init__(self, reactor_id: str, *, clock: Clock = _utcnow, speed: float = 1.0,
                  seed: Optional[int] = None, lag_h: float = 4.0, mu_max: float = 0.9,
@@ -125,6 +125,16 @@ class SimulatedController(ControllerDriver):
         with self._lock:
             self._advance()
             self.sp[parameter] = float(value)
+
+    def write_limits(self, parameter: str, low, high) -> None:
+        if parameter not in self.limits:
+            raise DriverError(f"no process limits for {parameter!r}")
+        lo, hi = self.limits[parameter]
+        lo, hi = (lo if low is None else low), (hi if high is None else high)
+        if lo >= hi:
+            raise DriverError("low limit must be below the high limit")
+        with self._lock:
+            self.limits[parameter] = (lo, hi)
 
     def write_ph_control(self, control: PhControl) -> None:
         with self._lock:
