@@ -22,6 +22,8 @@ R2_VALUES = {
     "1.6.0": "14.00", "1.7.0": "0.00", "1.58.0": "2",
     "1.6.2": "60.0", "1.7.2": "0.0", "1.58.2": "1",
     "1.6.13": "2000", "1.7.13": "0", "1.58.13": "0",
+    # pH PID term ranges (max, min) — fake values for the tests
+    "3.1.0": "1000.00", "3.2.0": "0.00", "3.4.0": "10000.00", "3.5.0": "0.00", "3.7.0": "1000.00", "3.8.0": "0.00",
 }
 
 
@@ -131,6 +133,57 @@ def test_read_snapshot(fake):
     drv.close()
 
 
+def test_ph_control_switch_to_adaptive(fake):
+    from fm2.drivers import PhControl
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    drv.write_ph_control(PhControl(mode="adaptive", pid={"P": 5.0, "I": 1.0, "D": 0.0}))
+    assert fake.writes == [("1.19.0", "1")]                 # PID terms ignored in Adaptive
+    assert drv.read().ph_control.mode == "adaptive"
+    assert fake.holder is None
+    drv.close()
+
+
+def test_ph_control_pid_writes_only_differences(fake):
+    from fm2.drivers import PhControl
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    # controller is already PID with P 100 / I 2 / D 10: only I changes
+    drv.write_ph_control(PhControl(mode="pid", pid={"P": 100.0, "I": 2.5, "D": 10.0}))
+    assert fake.writes == [("3.3.0", "2.50")]
+    assert drv.read().ph_control.pid == {"P": 100.0, "I": 2.5, "D": 10.0}
+    fake.writes.clear(); fake.logins.clear()
+    drv.write_ph_control(PhControl(mode="pid", pid={"P": 100.0, "I": 2.5, "D": 10.0}))
+    assert fake.writes == [] and fake.logins == []          # nothing to do: no login at all
+    drv.close()
+
+
+@pytest.mark.parametrize("control", [
+    {"mode": "external"}, {"mode": "p-adaptive"}, {"mode": None},
+    {"mode": "pid", "pid": {"P": 2000.0}},                 # above the controller's range
+    {"mode": "pid", "pid": {"P": -1.0}},
+    {"mode": "pid", "pid": {"P": 1.234}},                  # more decimals than the controller shows
+    {"mode": "pid", "pid": {"Kp": 1.0}},                   # unknown term
+])
+def test_ph_control_rejected_without_sending(fake, control):
+    from fm2.drivers import PhControl
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError):
+        drv.write_ph_control(PhControl(**control))
+    assert fake.writes == [] and fake.logins == []
+    drv.close()
+
+
+def test_load_ph_control_from_planning_end_to_end(fake):
+    from fm2.drivers import PhControl
+    from fm2.services.commands import CommandRejected, load_ph_control
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(CommandRejected):
+        load_ph_control(drv, PhControl("adaptive", None), "fermenting")   # never after Start
+    assert fake.writes == []
+    load_ph_control(drv, PhControl("pid", {"P": 80.0, "I": 2.0, "D": 10.0}), "planned")
+    assert fake.writes == [("3.0.0", "80.00")]
+    drv.close()
+
+
 def test_read_never_writes(fake):
     drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
     drv.read()
@@ -176,11 +229,15 @@ def test_write_rejected_without_sending(fake, parameter, value):
 def test_write_request_allowlist():
     assert SETPOINT_ADDRESSES == {"1.13.0", "1.13.2", "1.13.13"}
     assert build_write_request("1.13.0", "6.30") == b"J1.13.0s6.30\r"
-    for addr in ("2.13.29", "2.24.29", "1.30.0", "3.0.0", "1.14.0"):   # dose counter, actuator, calibration, PID, loop on
+    # dose counter, actuator on, calibration, loop on, temperature PID, temperature/stirrer control type
+    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.0", "3.0.2", "1.19.2", "1.19.13", "3.72.0"):
         with pytest.raises(DriverError):
             build_write_request(addr, "0")
     with pytest.raises(DriverError):
         build_write_request("1.13.0", "6.3\rJ2.13.29s0")      # no injection of a second command
+    with pytest.raises(DriverError):
+        build_write_request("1.19.0", "2")                     # External control: never
+    assert build_write_request("1.19.0", "1") == b"J1.19.0s1\r"
 
 
 def test_setpoint_command_end_to_end(fake):

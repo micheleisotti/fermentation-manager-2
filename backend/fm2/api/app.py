@@ -326,8 +326,12 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
         if p.ph_control_mode:
             rows.append({"parameter": "ph_control_mode", "plan": p.ph_control_mode.value,
                          "controller": snap.ph_control.mode, "match": p.ph_control_mode.value == snap.ph_control.mode})
-            rows.append({"parameter": "ph_pid", "plan": p.ph_pid, "controller": snap.ph_control.pid,
-                         "match": p.ph_pid is None or p.ph_pid == snap.ph_control.pid})
+            if p.ph_control_mode.value == "pid":   # PID terms are not used (nor loaded) in Adaptive
+                ctrl_pid = snap.ph_control.pid or {}
+                rows.append({"parameter": "ph_pid", "plan": p.ph_pid, "controller": snap.ph_control.pid,
+                             "match": p.ph_pid is None or all(
+                                 ctrl_pid.get(k) is not None and abs(ctrl_pid[k] - v) < 1e-6
+                                 for k, v in p.ph_pid.items())})
     rows.append({"parameter": "ph_limits", "plan": None, "controller": [snap.ph_low_limit, snap.ph_high_limit],
                  "match": True, "read_only": True})
     rows.append({"parameter": "temperature_limits", "plan": None,
