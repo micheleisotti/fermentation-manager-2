@@ -863,3 +863,10 @@ def system_info(request: Request, db: Session = Depends(get_db)):
                       "capabilities": acq.drivers[r.reactor_id].capabilities.__dict__}
                      for r in st.reactors if r.reactor_id in acq.drivers],
     }
+
+
+@router.get("/system/status")
+def system_status():
+    """Server (bioreactor PC) and remote-access state, for the Home page."""
+    from ..system_status import remote_access, server_status
+    return {"server": {**server_status(), "version": __version__}, "remote": remote_access()}

@@ -45,7 +45,7 @@ function IdleCard({ r }: { r: LiveReactor }) {
       <div className="row between small muted">
         <span>last reading{" "}
           <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
-        <Link className="btn tonal" to="/experiments/new">Plan experiment</Link>
+        <Link className="btn tonal" to={`/experiments/new?reactor=${r.reactor_id}`}>Plan on {label(r.reactor_id)}</Link>
       </div>
     </div>
   );
@@ -104,8 +104,11 @@ const FILTERS: { key: Status | "all"; label: string }[] = [
   { key: "completed", label: "Completed" }, { key: "aborted", label: "Aborted" },
 ];
 
+const fmtUptime = (s: number) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} d`);
+
 export function Home() {
   const live = usePolling(api.live, 10000);
+  const sys = usePolling(api.systemStatus, 30000);
   const exps = usePolling(() => api.experiments(), 30000);
   const events = usePolling(api.recentEvents, 20000);
   const [filter, setFilter] = useState<Status | "all">("all");
@@ -128,7 +131,18 @@ export function Home() {
               <span className={`dot ${r.online ? "ok" : "bad"}`} />Controller {label(r.reactor_id)}
             </span>
           ))}
-          {live.error && <span className="pill"><span className="dot bad" />Server not reachable</span>}
+          {live.error || sys.error
+            ? <span className="pill"><span className="dot bad" />Server not reachable</span>
+            : sys.data && <span className="pill" title={`${sys.data.server.host} · v${sys.data.server.version} · up ${fmtUptime(sys.data.server.uptime_s)}`}>
+                <span className="dot ok" />Server</span>}
+          {sys.data && (
+            <span className="pill" title={sys.data.remote.state === "available"
+              ? `${sys.data.remote.name ?? ""}${sys.data.remote.devices_online != null ? ` · ${sys.data.remote.devices_online} device(s) online` : ""}`
+              : sys.data.remote.detail ?? sys.data.remote.backend_state ?? ""}>
+              <span className={`dot ${sys.data.remote.state === "available" ? "ok" : sys.data.remote.state === "unknown" ? "idle" : "bad"}`} />
+              Remote access{sys.data.remote.state === "available" ? "" : sys.data.remote.state === "unknown" ? " · unknown" : " · off"}
+            </span>
+          )}
         </div>
       </header>
 

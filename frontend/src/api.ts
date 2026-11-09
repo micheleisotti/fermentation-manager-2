@@ -99,6 +99,7 @@ export const api = {
   backupStatus: () => req<BackupStatus>("/backup/status"),
   backupRun: () => req<BackupStatus & { file: string }>("/backup/run", { method: "POST" }),
   system: () => req<SystemInfo>("/system"),
+  systemStatus: () => req<SystemStatus>("/system/status"),
   setpointLog: (id: number) => req<{ at: string; parameter: string; old: number | null; new: number; readback: number | null; status: string; origin: string }[]>(`/experiments/${id}/setpoint-log`),
 };
 
@@ -122,3 +123,7 @@ export interface BackupStatus { enabled: boolean; destination: string; last_ok: 
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
 export interface SystemInfo { version: string; data_dir: string; sampling_interval_s: number; experiments: number;
   reactors: { reactor_id: string; driver: string; address: string; online: boolean; capabilities: Record<string, boolean> }[] }
+export interface SystemStatus {
+  server: { host: string; started_at: string; uptime_s: number; version: string };
+  remote: { state: "available" | "not_available" | "unknown"; name?: string; ips?: string[]; devices_online?: number; backend_state?: string; detail?: string };
+}

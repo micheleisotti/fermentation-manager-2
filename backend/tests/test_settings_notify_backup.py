@@ -135,3 +135,24 @@ def test_backup(env, tmp_path):
     assert (dest / "csv" / f"{a['code']}_controller.csv").read_text().count("\n") >= 4
     st = c.get("/api/backup/status").json()
     assert st["backups_present"] == 2 and st["last_error"] is None and st["db_bytes"] > 0
+
+
+def test_system_status_parsing(env):
+    from fm2 import system_status as ss
+    ok = {"BackendState": "Running", "Self": {"DNSName": "lab-pc.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.5"]},
+          "Peer": {"a": {"Online": True}, "b": {"Online": False}}}
+    assert ss.parse_status(ok) == {"state": "available", "backend_state": "Running", "name": "lab-pc.tail1234.ts.net",
+                                   "ips": ["100.64.0.5"], "devices_online": 1}
+    assert ss.parse_status({"BackendState": "Stopped"})["state"] == "not_available"
+
+    class R:
+        stdout, stderr = "", "failed to connect to local tailscaled"
+    ss._CACHE.update(at=0.0, value=None)
+    no_ts = lambda *a, **k: [(2, 1, 6, "", ("192.0.2.10", 0))]
+    assert ss.remote_access(runner=lambda *a, **k: R(), ttl=0, resolver=no_ts)["state"] == "unknown"
+    with_ts = lambda *a, **k: [(2, 1, 6, "", ("192.0.2.10", 0)), (2, 1, 6, "", ("100.101.7.9", 0))]
+    r = ss.remote_access(runner=lambda *a, **k: R(), ttl=0, resolver=with_ts)
+    assert r["state"] == "available" and r["ips"] == ["100.101.7.9"]
+    c, *_ = env
+    st = c.get("/api/system/status").json()
+    assert st["server"]["uptime_s"] >= 0 and st["remote"]["state"] in ("available", "not_available", "unknown")

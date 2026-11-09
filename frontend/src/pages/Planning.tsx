@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow, DEFAULT_CHANNELS, type Channel } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
@@ -89,11 +89,12 @@ const CHANNEL_INFO: { key: Channel; label: string; what: string }[] = [
 
 export function Planning({ existing, onChange }: { existing?: Experiment; onChange?: () => void }) {
   const nav = useNavigate();
+  const preselected = new URLSearchParams(useLocation().search).get("reactor");
   const [d, setD] = useState<ExperimentDraft>(() => existing ? {
     name: existing.name, reactor_id: existing.reactor_id, planned_date: existing.planned_date, strain: existing.strain,
     medium_id: existing.medium_id, buffer_id: existing.buffer_id, working_volume_ml: existing.working_volume_ml,
     profile_id: existing.profile_id, notes: existing.notes, channels: existing.channels,
-  } : { name: "", reactor_id: "R1", planned_date: today(), strain: "", notes: "", channels: [...DEFAULT_CHANNELS] });
+  } : { name: "", reactor_id: preselected === "R2" ? "R2" : "R1", planned_date: today(), strain: "", notes: "", channels: [...DEFAULT_CHANNELS] });
   const [do2Notice, setDo2Notice] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ kind: "good" | "alert" | "warn"; text: string } | null>(null);
