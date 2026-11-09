@@ -80,7 +80,7 @@ export function EChart({ option, className = "chart", ariaLabel }: { option: ech
     ro.observe(el.current);
     return () => { ro.disconnect(); inst.current?.dispose(); inst.current = null; };
   }, []);
-  useEffect(() => { inst.current?.setOption(option, { notMerge: false, lazyUpdate: true }); }, [option]);
+  useEffect(() => { inst.current?.setOption(option, { replaceMerge: ["series", "yAxis", "xAxis", "grid"], lazyUpdate: true }); }, [option]);
   return <div ref={el} className={className} role="img" aria-label={ariaLabel} />;
 }
 

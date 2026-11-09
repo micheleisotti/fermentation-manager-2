@@ -45,7 +45,8 @@ def replicate_curve(curves: list[tuple], step_h: Optional[float] = None, n_point
     if t_min >= t_max:
         return ReplicateCurve(np.array([]), np.array([]), np.array([]), len(valid),
                               "Replicate time ranges do not overlap: no common mean curve.")
-    grid = (np.arange(np.ceil(t_min / step_h) * step_h, t_max + 1e-9, step_h) if step_h
+    # a grid point a few minutes before the common start (e.g. t = 0 vs first reading at 0.01 h) is kept
+    grid = (np.arange(np.ceil(t_min / step_h - 0.05) * step_h, t_max + 1e-9, step_h) if step_h
             else np.linspace(t_min, t_max, n_points))
     Y = np.vstack([np.interp(grid, t, y) for t, y in valid])
     return ReplicateCurve(grid, Y.mean(axis=0), Y.std(axis=0, ddof=1), len(valid))

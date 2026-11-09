@@ -96,7 +96,21 @@ def test_full_workflow(env):
     res = c.get(f"/api/analysis-sessions/{sess['id']}/results").json()
     assert res["parallel_run_flags"][0]["parallel_run"] == "PR-001"
     assert res["parallel_run_flags"][0]["same_condition"] is False
-    assert res["comparisons"]["mu_max_per_h"]["p_value"] is None  # n = 1 per condition: no test
+    assert res["comparisons_by_key"]["mu_max_per_h"]["p_value"] is None  # n = 1 per condition: no test
+    assert res["conditions"] == ["A", "B"] and res["curves"]["A"]["fit"] is not None
+    assert {o["key"] for o in res["variable_options"]} >= {"OD600", "ph", "base_rate"}
+    r2 = c.get(f"/api/analysis-sessions/{sess['id']}/results?variable=base_rate&step_h=1").json()
+    assert r2["curves"]["A"]["n"] == 1 and len(r2["curves"]["A"]["t"]) > 3
+    upd = c.put(f"/api/analysis-sessions/{sess['id']}", json={"name": "renamed", "members": {a["id"]: "WT"},
+                                                              "conditions": ["B2", "WT"], "model": "logistic"}).json()
+    assert upd["conditions"] == ["B2", "WT"] and upd["n_by_condition"] == {"B2": 0, "WT": 1}
+    assert c.get("/api/analysis-sessions").json()[0]["name"] == "renamed"
+    f = c.get(f"/api/analysis-sessions/{sess['id']}/figure.svg?variable=OD600&dpi=100")
+    assert f.status_code == 200 and f.content[:5] == b"<?xml"
+    x = c.get(f"/api/analysis-sessions/{sess['id']}/export.xlsx")
+    assert x.status_code == 200 and x.content[:2] == b"PK"
+    assert c.put(f"/api/analysis-sessions/{sess['id']}", json={"name": "x", "members": {}, "conditions": ["A", "A"]}).status_code == 422
+    assert c.delete(f"/api/analysis-sessions/{sess['id']}").json()["deleted"] == sess["code"]
 
     x = c.get(f"/api/experiments/{a['id']}/export.xlsx?resample_min=5")
     assert x.status_code == 200 and x.content[:2] == b"PK"

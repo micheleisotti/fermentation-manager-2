@@ -116,11 +116,26 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   loop on/off address per loop; then confirmation dialog, read-back, change log, remote disabled by
   default. Until then the driver never writes loop or actuator states.
 
+## Analysis sessions (9 Nov 2026)
+- Analysis › sessions (mockup M3Analysis): conditions are session-only labels (ordered: A, B, ...);
+  experiments with the same condition are replicates. Auto-saved on every change.
+- Comparison per parameter: mean ± SD, Welch's t-test with Δ and 95 % CI (2 conditions), one-way ANOVA +
+  Tukey HSD (3+); no test with n < 2. Parallel runs listed for information only.
+- Curves: manual variables interpolated per experiment on a 1/2/4 h grid within the replicates' common
+  range; controller variables averaged per interval then mean ± SD. Line = model fitted on the pooled
+  replicates (each normalised to its first point).
+- Fits now try several starting points and pick the best (pooled replicates with near-identical times
+  used to give a step-shaped fit).
+- Export: CSV zip / XLSX (experiments + per-experiment values, comparisons, mean curves of every
+  variable, session info); figure PNG/SVG/PDF.
+- Fixed: trend chart kept the previous variable's setpoint series (ECharts merge); phone full-screen
+  chart closed after a few seconds (effect re-run on every poll).
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.
 3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
 ## Still to build in the UI
-Analysis sessions, app push notifications (need HTTPS:
+App push notifications (need HTTPS:
 `tailscale serve`) and PWA install, phone layout for planning, dark / dimmed theme (Settings, not urgent).

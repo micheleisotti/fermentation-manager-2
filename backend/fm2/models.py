@@ -237,7 +237,9 @@ class AnalysisSession(Base):
     code: Mapped[str] = mapped_column(String(20), unique=True)  # "AS-007"
     name: Mapped[str] = mapped_column(String(300))
     fit_variable: Mapped[str] = mapped_column(String(100), default="OD600")
-    model: Mapped[str] = mapped_column(String(40), default="gompertz_modified")
+    model: Mapped[str] = mapped_column(String(40), default="gompertz")
+    # Ordered condition labels (order = A, B, C ... in the UI); may include conditions with no experiment yet
+    conditions: Mapped[Optional[list]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     author: Mapped[str] = mapped_column(String(100), default="")

@@ -207,3 +207,18 @@ table.data th.num, table.data td.num { text-align: right; }
 .mode-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 0 18px; font-size: 14px; font-weight: 500; }
 a.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
 @media (max-width: 760px) { .facets { grid-template-columns: 1fr; } }
+
+/* analysis sessions */
+.linklike { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.linklike:hover { text-decoration: underline dotted; }
+.cond-chip { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 4px 0 6px; border-radius: 8px; font-size: 14px; }
+.cond-letter { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 12px; color: #fff; font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.cond-add { height: 36px; padding: 0 14px; border: 1px dashed var(--outline); border-radius: 8px; background: transparent; color: var(--primary); font-size: 14px; font-weight: 500; }
+input.cond-add { border-style: solid; color: var(--ink); width: 180px; }
+.cond-select { height: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--outline-variant); background: var(--surface); font-size: 14px; color: var(--ink); }
+.search-pill { display: inline-flex; align-items: center; height: 32px; padding: 0 12px; border-radius: 16px; background: #eef0f4; }
+.search-pill input { border: 0; background: transparent; font-size: 13px; outline: none; width: 220px; color: var(--ink); }
+.run-pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; background: #e4e5e8; font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.note { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; border-radius: 12px; background: #e4e5e8; font-size: 14px; }
+.session-chart { height: 400px; width: 100%; max-width: 980px; align-self: center; }
+@media (max-width: 760px) { .session-chart { height: 320px; } }

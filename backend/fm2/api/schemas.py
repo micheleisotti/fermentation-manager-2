@@ -177,5 +177,7 @@ class EventOut(ORM):
 class SessionIn(BaseModel):
     name: str
     members: dict[int, str]   # experiment_id -> condition label
+    conditions: Optional[list[str]] = None   # ordered labels; default: order of first appearance in members
     fit_variable: str = "OD600"
+    model: str = "gompertz"
     author: str = ""

@@ -102,3 +102,12 @@ def test_grouped_points_and_binned_series():
     s = report.binned_series(df, 1.0, ["ph", "base_rate", "base_cumulative_ml"])
     assert s["t"] == [0.5, 1.5, 2.5, 3.5] and s["ph"] == [6.0] * 4
     assert s["base_rate"][1] == pytest.approx(0.05, abs=0.01)
+
+
+def test_fit_on_pooled_replicates_with_jittered_times():
+    """Pooled replicates sampled seconds apart used to give inf slopes in the starting guess and a step fit."""
+    rng = np.random.default_rng(3)
+    t = np.concatenate([np.arange(0, 19, 2.0) + d for d in (0.0, 0.01, 0.02)])
+    y = np.exp(kinetics.gompertz_modified(t, 4.0, 0.7, 2.5)) * (1 + rng.normal(0, 0.03, len(t)))
+    fit = kinetics.fit_growth(t, y)
+    assert fit.mu_max == pytest.approx(0.7, rel=0.1) and fit.lam == pytest.approx(2.5, abs=0.4) and fit.r_squared > 0.98

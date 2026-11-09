@@ -25,12 +25,14 @@ _trapz = getattr(np, "trapezoid", None) or np.trapz
 
 def gompertz_modified(t: np.ndarray, A: float, mu_max: float, lam: float) -> np.ndarray:
     """Zwietering et al. (1990): y(t) = A exp(-exp(mu e / A (lam - t) + 1)), y = ln(X/X0)."""
-    return A * np.exp(-np.exp((mu_max * np.e / A) * (lam - t) + 1))
+    with np.errstate(over="ignore"):
+        return A * np.exp(-np.exp((mu_max * np.e / A) * (lam - t) + 1))
 
 
 def logistic_modified(t: np.ndarray, A: float, mu_max: float, lam: float) -> np.ndarray:
     """Zwietering et al. (1990): y(t) = A / (1 + exp(4 mu / A (lam - t) + 2)), y = ln(X/X0)."""
-    return A / (1 + np.exp((4 * mu_max / A) * (lam - t) + 2))
+    with np.errstate(over="ignore"):
+        return A / (1 + np.exp((4 * mu_max / A) * (lam - t) + 2))
 
 
 def baranyi(t: np.ndarray, A: float, mu_max: float, lam: float) -> np.ndarray:
@@ -142,17 +144,35 @@ def fit_growth(t, X, model: str = "gompertz") -> GrowthFit:
     y = np.log(X_v / X0)
     if y.max() <= 0:
         raise ValueError("No increase over the first point: nothing to fit.")
-    A0 = max(y.max(), 0.1)
-    slopes = np.gradient(y, t_v)
-    mu0 = max(float(slopes.max()), 0.01)
-    i = int(np.argmax(slopes))
-    lam0 = float(np.clip(t_v[i] - y[i] / mu0, 0.0, t_v.max()))
-    try:
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            popt, pcov = curve_fit(f, t_v, y, p0=[A0, mu0, lam0],
-                                   bounds=([1e-6, 1e-6, 0], [np.inf, np.inf, t_v.max()]), maxfev=20000)
-    except (RuntimeError, ValueError) as e:
-        raise ValueError(f"{MODELS[model][0]} fit did not converge: {e}")
+    # Starting values from the mean per time point (pooled replicates repeat time points)
+    tu, inv = np.unique(np.round(t_v * 4) / 4, return_inverse=True)  # 15-min resolution for the guesses
+    yu = np.bincount(inv, weights=y) / np.bincount(inv)
+    A0 = max(yu.max(), 0.1)
+    if len(tu) > 1:
+        slopes = np.gradient(yu, tu)
+        mu0 = max(float(slopes.max()), 0.01)
+        i = int(np.argmax(slopes))
+        lam0 = float(np.clip(tu[i] - yu[i] / mu0, 0.0, t_v.max()))
+    else:
+        mu0, lam0 = 0.1, 0.0
+    # Several starting points (lag around the guess): keep the best least-squares solution
+    starts = [(A0, mu0, lam0)] + [(A0, mu0 * k, l) for k in (0.5, 1.0) for l in
+                                  np.linspace(0, float(np.median(tu)), 4)]
+    best, err = None, None
+    for p0 in starts:
+        try:
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                popt_, pcov_ = curve_fit(f, t_v, y, p0=list(p0), bounds=([1e-6, 1e-6, 0], [np.inf, np.inf, t_v.max()]),
+                                         maxfev=20000)
+                sse = float(np.sum((y - f(t_v, *popt_)) ** 2))
+        except (RuntimeError, ValueError) as e:
+            err = e
+            continue
+        if np.isfinite(sse) and (best is None or sse < best[0] - 1e-12):
+            best = (sse, popt_, pcov_)
+    if best is None:
+        raise ValueError(f"{MODELS[model][0]} fit did not converge: {err}")
+    _, popt, pcov = best
     perr = np.sqrt(np.clip(np.diag(pcov), 0, None))
     y_pred = f(t_v, *popt)
     if not np.all(np.isfinite(y_pred)):

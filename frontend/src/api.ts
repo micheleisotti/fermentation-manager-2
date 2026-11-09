@@ -69,6 +69,27 @@ export interface AnalysisResult {
   base_dosing: BaseDosing | null; rate_bins: RateBin[]; step_h: number; bin_h: number;
 }
 
+export interface SessionBody { name: string; members: Record<number, string>; conditions: string[]; fit_variable: string; model: string }
+export interface SessionInfo extends SessionBody {
+  id: number; code: string; author: string; created_at: string; updated_at: string; n_by_condition: Record<string, number>;
+}
+export interface CondSummary { n: number; mean: number | null; sd: number | null }
+export interface SessionComparison {
+  key: string; label: string; unit: string; source: string; test: string; statistic: number | null; p_value: number | null;
+  difference: number | null; ci95: [number, number] | null; warning: string | null;
+  posthoc: { a: string; b: string; difference: number; p_adj: number; ci95: [number, number] }[];
+  conditions: Record<string, CondSummary>;
+}
+export interface SessionCurve { t: number[]; mean: number[]; sd: (number | null)[]; n: number; warning: string | null; fit?: { t: number[]; y: number[] } | null }
+export interface SessionResults extends SessionInfo {
+  models: Record<string, string>; comparisons: SessionComparison[]; variable: string; step_h: number;
+  variable_options: { key: string; label: string; unit: string; manual: boolean }[];
+  curves: Record<string, SessionCurve | null>;
+  parallel_run_flags: { parallel_run: string; date: string | null; same_condition: boolean; experiments: { code: string; condition: string }[] }[];
+  experiments: { id: number; code: string; name: string; strain: string; reactor_id: string; date: string | null; parallel_run: string | null;
+    condition: string; values: Record<string, number | null>; fit_error: string | null; fit_warnings: string[] }[];
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, { headers: { "Content-Type": "application/json" }, ...init });
   if (!r.ok) {
@@ -108,6 +129,14 @@ export const api = {
   variables: () => req<Variable[]>("/variables"),
   events: (id: number) => req<EventItem[]>(`/experiments/${id}/events`),
   recentEvents: () => req<EventItem[]>("/events/recent"),
+  sessions: () => req<SessionInfo[]>("/analysis-sessions"),
+  session: (id: number) => req<SessionInfo>(`/analysis-sessions/${id}`),
+  createSession: (body: SessionBody) => req<SessionInfo>("/analysis-sessions", { method: "POST", body: JSON.stringify(body) }),
+  updateSession: (id: number, body: SessionBody) =>
+    req<SessionInfo>(`/analysis-sessions/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteSession: (id: number) => req<{ deleted: string }>(`/analysis-sessions/${id}`, { method: "DELETE" }),
+  sessionResults: (id: number, stepH: number, variable?: string) =>
+    req<SessionResults>(`/analysis-sessions/${id}/results?step_h=${stepH}${variable ? `&variable=${encodeURIComponent(variable)}` : ""}`),
   analysisFull: (id: number, model = "gompertz", stepH = 1) =>
     req<AnalysisResult>(`/experiments/${id}/analysis?model=${model}&step_h=${stepH}`),
   analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),

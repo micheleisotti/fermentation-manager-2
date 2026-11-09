@@ -3,7 +3,7 @@
  * reactor tabs, four key values, one chart with presets and a full-screen landscape view,
  * collapsible panels for events, a new measurement and setpoints.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, usePolling } from "../hooks";
@@ -314,18 +314,22 @@ function FullscreenChart({ e, partner, partnerReadings, onClose }:
   const readings = usePolling(() => api.readings(e.id, since), running ? 15000 : 600000, [e.id, range, rg.h ? Math.floor(since * 4) : 0]);
   const analysis = usePolling(() => api.analysis(e.id, 0.25), running ? 60000 : 600000, [e.id]);
 
+  // Run once per opening: the parent re-renders on every poll and passes a new onClose each time,
+  // which used to tear down full screen (and the landscape lock) every few seconds.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {   // full screen + landscape where the browser allows it
     const el = document.documentElement;
     const o = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
     el.requestFullscreen?.().then(() => o?.lock?.("landscape")).catch(() => { /* not supported: rotate by hand */ });
-    const esc = (k: KeyboardEvent) => { if (k.key === "Escape") onClose(); };
+    const esc = (k: KeyboardEvent) => { if (k.key === "Escape") closeRef.current(); };
     document.addEventListener("keydown", esc);
     return () => {
       document.removeEventListener("keydown", esc);
       try { o?.unlock?.(); } catch { /* ignore */ }
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     };
-  }, [onClose]);
+  }, []);
 
   const lv = leftVars.find((v) => v.key === left) ?? leftVars[0] ?? V("ph");
   const rv = right === "none" ? null : rightVars.find((v) => v.key === right && v.key !== lv.key) ?? null;

@@ -690,6 +690,19 @@ def _manual_series(db: Session, exp_id: int, variable: str) -> tuple[np.ndarray,
     return np.array([r[0] for r in rows], float), np.array([r[1] for r in rows], float)
 
 
+def _json_safe(x):
+    """NaN/inf (e.g. an undefined SD or a degenerate fit) become null: JSON has no NaN."""
+    if isinstance(x, float):
+        return x if np.isfinite(x) else None
+    if isinstance(x, (np.floating, np.integer)):
+        return _json_safe(x.item())
+    if isinstance(x, dict):
+        return {k: _json_safe(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_json_safe(v) for v in x]
+    return x
+
+
 def _fit(db: Session, exp_id: int, variable: str, model: str = "gompertz"):
     """(fit object or None, error message or None) for one manual variable."""
     t, y = _manual_series(db, exp_id, variable)
@@ -789,7 +802,7 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
     })
     if "ph" not in ch:
         res["base_dosing"] = None
-    return res
+    return _json_safe(res)
 
 
 PANEL_COLORS = {"OD600": "#1d3786", "AFU": "#7a4fa0", "ph": "#1d3786", "base_rate": "#1f7a63",
@@ -833,62 +846,322 @@ def experiment_figure(exp_id: int, fmt: str, vars: str = "OD600,AFU,ph,base_rate
                              headers={"Content-Disposition": f'attachment; filename="{e.code}-time-course.{fmt}"'})
 
 
-@router.post("/analysis-sessions", status_code=201)
-def create_session(body: S.SessionIn, db: Session = Depends(get_db)):
-    sess = AnalysisSession(code=_next_code(db, AnalysisSession, "AS"), name=body.name,
-                           fit_variable=body.fit_variable, author=body.author)
-    for eid, cond in body.members.items():
+SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model fit on the session's variable
+    ("lag_h", "Lag time λ", "h", "fit"),
+    ("mu_max_per_h", "Maximum specific growth rate μmax", "h⁻¹", "fit"),
+    ("doubling_time_h", "Doubling time at μmax", "h", "fit"),
+    ("t_mu_max_h", "Time at μmax", "h", "fit"),
+    ("X_max", "Predicted maximum X₀·e^A", "", "fit"),
+    ("A_ln", "Asymptote A", "ln X/X₀", "fit"),
+    ("total_ml", "Total base", "mL", "controller, cumulative at end"),
+    ("peak_rate_ml_min", "Peak base rate", "mL min⁻¹", "15-min bins"),
+    ("t_peak_h", "Time of peak base rate", "h", "15-min bins"),
+    ("t_half_total_h", "Time to 50 % of total base", "h", "controller, cumulative"),
+    ("last_hour_rate_ml_min", "Base rate in the last hour", "mL min⁻¹", "slowdown at end of run"),
+    ("base_per_final_od", "Total base per final OD600", "mL AU⁻¹", "acid produced per biomass, proxy"),
+]
+SESSION_CTRL_VARS = {"ph": ("pH", ""), "temperature": ("T", "°C"), "base_cumulative_ml": ("Base, cumulative", "mL"),
+                     "base_rate": ("Base rate", "mL min⁻¹"), "stirrer": ("Stirrer", "rpm"), "do2": ("dO2", "%")}
+
+
+def _check_session_body(db: Session, body: S.SessionIn) -> list[str]:
+    if not body.name.strip():
+        raise HTTPException(422, "Give the session a name.")
+    if body.model not in kinetics.MODELS:
+        raise HTTPException(422, f"Unknown model '{body.model}'")
+    conds = [c.strip() for c in (body.conditions or []) if c.strip()]
+    for c in body.members.values():
+        if c.strip() and c.strip() not in conds:
+            conds.append(c.strip())
+    if len(set(conds)) != len(conds):
+        raise HTTPException(422, "Condition names must be different.")
+    for eid in body.members:
         e = _404(db.get(Experiment, eid), f"Experiment {eid} not found")
         if e.status != ExperimentStatus.completed:
             raise HTTPException(422, f"{e.code} is not completed")
-        sess.members.append(SessionMember(experiment_id=eid, condition=cond))
+    return conds
+
+
+def _session_out(sess: AnalysisSession) -> dict:
+    conds = list(sess.conditions or [])
+    for m in sess.members:
+        if m.condition not in conds:
+            conds.append(m.condition)
+    return {"id": sess.id, "code": sess.code, "name": sess.name, "fit_variable": sess.fit_variable,
+            "model": sess.model if sess.model in kinetics.MODELS else "gompertz", "author": sess.author,
+            "created_at": sess.created_at, "updated_at": sess.updated_at, "conditions": conds,
+            "members": {m.experiment_id: m.condition for m in sess.members},
+            "n_by_condition": {c: sum(1 for m in sess.members if m.condition == c) for c in conds}}
+
+
+@router.get("/analysis-sessions")
+def list_sessions(db: Session = Depends(get_db)):
+    return [_session_out(x) for x in db.scalars(select(AnalysisSession).order_by(AnalysisSession.updated_at.desc()))]
+
+
+@router.post("/analysis-sessions", status_code=201)
+def create_session(body: S.SessionIn, db: Session = Depends(get_db)):
+    conds = _check_session_body(db, body)
+    sess = AnalysisSession(code=_next_code(db, AnalysisSession, "AS"), name=body.name.strip(),
+                           fit_variable=body.fit_variable, model=body.model, author=body.author, conditions=conds)
+    for eid, cond in body.members.items():
+        if cond.strip():
+            sess.members.append(SessionMember(experiment_id=eid, condition=cond.strip()))
     db.add(sess)
     db.flush()
-    return {"id": sess.id, "code": sess.code}
+    return _session_out(sess)
+
+
+@router.get("/analysis-sessions/{sid}")
+def get_session(sid: int, db: Session = Depends(get_db)):
+    return _session_out(_404(db.get(AnalysisSession, sid)))
+
+
+@router.put("/analysis-sessions/{sid}")
+def update_session(sid: int, body: S.SessionIn, db: Session = Depends(get_db)):
+    sess = _404(db.get(AnalysisSession, sid))
+    conds = _check_session_body(db, body)
+    sess.name, sess.fit_variable, sess.model, sess.conditions = body.name.strip(), body.fit_variable, body.model, conds
+    if body.author:
+        sess.author = body.author
+    sess.members.clear()
+    db.flush()
+    for eid, cond in body.members.items():
+        if cond.strip():
+            sess.members.append(SessionMember(experiment_id=eid, condition=cond.strip()))
+    sess.updated_at = _utcnow()
+    db.flush()
+    return _session_out(sess)
+
+
+@router.delete("/analysis-sessions/{sid}")
+def delete_session(sid: int, db: Session = Depends(get_db)):
+    sess = _404(db.get(AnalysisSession, sid))
+    code = sess.code
+    db.delete(sess)
+    db.flush()
+    return {"deleted": code}
+
+
+def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str) -> dict:
+    """Per-experiment parameters used in the comparison (None where not available)."""
+    f, err = _fit(db, e.id, fit_variable, model)
+    p = f.summary() if f else {}
+    df = _readings_df(db, e.id)
+    t_od, od = _manual_series(db, e.id, "OD600")
+    bd = {}
+    if "ph" in channels_of(e) and not df.empty:
+        bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
+                                   float(od[-1]) if len(od) else None).__dict__
+    vals = {k: (p.get(k) if src == "fit" else bd.get(k)) for k, _, _, src in SESSION_PARAMS}
+    return {"values": vals, "fit_error": err, "fit_warnings": p.get("warnings", [])}
+
+
+def _session_curve(db: Session, ids: list[int], variable: str, step_h: float) -> Optional[dict]:
+    """
+    Mean ± SD per condition on a fixed time grid.
+    Manual variables: each experiment interpolated on the grid, within the overlap of the replicates.
+    Controller variables: each experiment averaged per interval first, then mean ± SD across experiments
+    for intervals present in all of them.
+    """
+    if variable in SESSION_CTRL_VARS:
+        per = []
+        for eid in ids:
+            df = _readings_df(db, eid)
+            b = report.binned_series(df, step_h, [variable])
+            per.append({round(t, 6): v for t, v in zip(b["t"], b[variable]) if v is not None})
+        common = sorted(set.intersection(*(set(x) for x in per))) if per else []
+        if not common:
+            return None
+        Y = np.array([[x[t] for t in common] for x in per])
+        sd = Y.std(axis=0, ddof=1) if len(per) > 1 else np.full(len(common), np.nan)
+        return {"t": common, "mean": Y.mean(axis=0).tolist(), "sd": [None if np.isnan(v) else float(v) for v in sd],
+                "n": len(per), "warning": None if len(per) > 1 else "Only one experiment: no standard deviation."}
+    rc = stats.replicate_curve([_manual_series(db, eid, variable) for eid in ids], step_h=step_h)
+    if rc is None:
+        return None
+    return {"t": rc.t.tolist(), "mean": rc.mean.tolist(), "sd": [None if np.isnan(x) else float(x) for x in rc.sd.tolist()],
+            "n": rc.n, "warning": rc.warning}
+
+
+def _pooled_fit(db: Session, ids: list[int], variable: str, model: str) -> Optional[dict]:
+    """Model curve for a condition: one fit on the pooled readings of its replicates, each normalised to its own X0."""
+    ts, ys, x0s = [], [], []
+    for eid in ids:
+        t, y = _manual_series(db, eid, variable)
+        m = np.isfinite(y) & (y > 0)
+        t, y = t[m], y[m]
+        if len(t):
+            o = np.argsort(t)
+            t, y = t[o], y[o]
+            ts.append(t); ys.append(y / y[0]); x0s.append(y[0])
+    if not ts:
+        return None
+    try:
+        f = kinetics.fit_growth(np.concatenate(ts), np.concatenate(ys), model)
+    except ValueError:
+        return None
+    x0 = float(np.mean(x0s))
+    return {"t": f.t_fit.tolist(), "y": (np.asarray(f.X_fit) * x0).tolist()}
+
+
+def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: Optional[str] = None) -> dict:
+    sess = _404(db.get(AnalysisSession, sid))
+    out = _session_out(sess)
+    model, fv = out["model"], sess.fit_variable
+    variable = variable or fv
+    by_cond: dict[str, list[int]] = {c: [] for c in out["conditions"]}
+    for m in sess.members:
+        by_cond.setdefault(m.condition, []).append(m.experiment_id)
+    exps = {e.id: e for e in db.scalars(select(Experiment).where(Experiment.id.in_(out["members"].keys())))}
+    per_exp = {eid: _experiment_values(db, e, fv, model) for eid, e in exps.items()}
+    fv_unit = db.scalar(select(Variable.unit).where(Variable.name == fv)) or ""
+    comparisons = []
+    for key, label, unit, src in SESSION_PARAMS:
+        cmp = stats.compare_conditions({c: [per_exp[e]["values"][key] for e in ids]
+                                        for c, ids in by_cond.items() if ids})
+        comparisons.append({
+            "key": key, "label": label, "unit": fv_unit if key == "X_max" else unit,
+            "source": f"model fit on {fv}" if src == "fit" else src,
+            "test": cmp.test, "statistic": cmp.statistic, "p_value": cmp.p_value, "difference": cmp.difference,
+            "ci95": cmp.ci95, "posthoc": cmp.posthoc, "warning": cmp.warning,
+            "conditions": {c: x.__dict__ for c, x in cmp.conditions.items()}})
+    is_manual = variable not in SESSION_CTRL_VARS
+    curves = {}
+    for c, ids in by_cond.items():
+        if not ids:
+            continue
+        curve = _session_curve(db, ids, variable, step_h)
+        if curve is not None and is_manual:
+            curve["fit"] = _pooled_fit(db, ids, variable, model)
+        curves[c] = curve
+    runs: dict[str, dict] = {}
+    for e in exps.values():
+        if e.parallel_run:
+            r = runs.setdefault(e.parallel_run.code, {"parallel_run": e.parallel_run.code, "experiments": [],
+                                                      "date": e.started_at.date().isoformat() if e.started_at else None})
+            r["experiments"].append({"code": e.code, "condition": out["members"][e.id]})
+    flags = [dict(r, same_condition=len({x["condition"] for x in r["experiments"]}) == 1)
+             for r in runs.values() if len(r["experiments"]) > 1]
+    manual_vars = sorted({v.name for eid in exps for v in _measured_variables(db, eid)},
+                         key=lambda n: ({"OD600": 0, "AFU": 1}.get(n, 2), n))
+    units = {v.name: v.unit for v in db.scalars(select(Variable))}
+    var_opts = [{"key": n, "label": n, "unit": units.get(n, ""), "manual": True} for n in manual_vars]
+    var_opts += [{"key": k, "label": l, "unit": u, "manual": False} for k, (l, u) in SESSION_CTRL_VARS.items()
+                 if any(k in channels_of(e) or (k.startswith("base") and "ph" in channels_of(e)) for e in exps.values())]
+    experiments = [{"id": e.id, "code": e.code, "name": e.name, "strain": e.strain, "reactor_id": e.reactor_id,
+                    "date": e.started_at.date().isoformat() if e.started_at else None,
+                    "parallel_run": e.parallel_run.code if e.parallel_run else None,
+                    "condition": out["members"][e.id], **per_exp[e.id]} for e in exps.values()]
+    experiments.sort(key=lambda x: (out["conditions"].index(x["condition"]) if x["condition"] in out["conditions"] else 99,
+                                    x["code"]))
+    return {**out, "models": {k: v[0] for k, v in kinetics.MODELS.items()},
+            "conditions_n": {c: len(ids) for c, ids in by_cond.items()},
+            "comparisons": comparisons, "variable": variable, "variable_options": var_opts, "step_h": step_h,
+            "curves": curves, "parallel_run_flags": flags, "experiments": experiments}
 
 
 @router.get("/analysis-sessions/{sid}/results")
-def session_results(sid: int, db: Session = Depends(get_db), step_h: float = 2.0):
-    sess = _404(db.get(AnalysisSession, sid))
-    by_cond: dict[str, list[int]] = {}
-    for m in sess.members:
-        by_cond.setdefault(m.condition, []).append(m.experiment_id)
-    params = {eid: experiment_parameters(db, eid, sess.fit_variable) for ids in by_cond.values() for eid in ids}
+def session_results(sid: int, db: Session = Depends(get_db), step_h: float = 2.0, variable: Optional[str] = None):
+    if not (0.05 <= step_h <= 24):
+        raise HTTPException(422, "Interval out of range")
+    res = session_results_data(db, sid, step_h, variable)
+    # backwards-compatible shape: comparisons keyed by parameter, conditions -> n
+    res["comparisons_by_key"] = {c["key"]: c for c in res["comparisons"]}
+    return _json_safe(res)
 
-    def pick(eid: int, key: str):
-        p = params[eid]
-        if key in ("lag_h", "mu_max_per_h", "t_mu_max_h", "A_ln"):
-            return p["fit"][key] if p["fit"] else None
-        return p["base_dosing"][key] if p["base_dosing"] else None
 
-    keys = ["lag_h", "mu_max_per_h", "t_mu_max_h", "A_ln", "total_ml", "peak_rate_ml_min", "t_peak_h",
-            "t_half_total_h", "last_hour_rate_ml_min", "base_per_final_od"]
-    comparisons = {}
-    for k in keys:
-        cmp = stats.compare_conditions({c: [pick(e, k) for e in ids] for c, ids in by_cond.items()})
-        comparisons[k] = {"test": cmp.test, "statistic": cmp.statistic, "p_value": cmp.p_value,
-                          "difference": cmp.difference, "ci95": cmp.ci95, "posthoc": cmp.posthoc,
-                          "warning": cmp.warning,
-                          "conditions": {c: s.__dict__ for c, s in cmp.conditions.items()}}
-    curves = {}
-    for c, ids in by_cond.items():
-        rc = stats.replicate_curve([_manual_series(db, e, sess.fit_variable) for e in ids], step_h=step_h)
-        curves[c] = None if rc is None else {"t": rc.t.tolist(), "mean": rc.mean.tolist(),
-                                             "sd": [None if np.isnan(x) else x for x in rc.sd.tolist()],
-                                             "n": rc.n, "warning": rc.warning}
-    # Parallel-run flags: informational only, never used in statistics.
-    exps = {e.id: e for e in db.scalars(select(Experiment).where(Experiment.id.in_(params.keys())))}
-    runs: dict[str, list[str]] = {}
-    for e in exps.values():
-        if e.parallel_run:
-            runs.setdefault(e.parallel_run.code, []).append(e.code)
-    cond_of = {m.experiment_id: m.condition for m in sess.members}
-    flags = [{"parallel_run": r, "experiments": [{"code": code, "condition": cond_of[eid]}
-                                                for eid, e2 in exps.items() if (code := e2.code) in codes],
-              "same_condition": len({cond_of[eid] for eid, e2 in exps.items() if e2.code in codes}) == 1}
-             for r, codes in runs.items() if len(codes) > 1]
-    return {"code": sess.code, "conditions": {c: len(ids) for c, ids in by_cond.items()},
-            "comparisons": comparisons, "curves": curves, "parallel_run_flags": flags}
+SESSION_COLORS = ["#1d3786", "#c98a00", "#1f7a63", "#7a4fa0", "#b3261e", "#54565a"]
+SESSION_MARKERS = ["o", "^", "s", "D", "v", "P"]
+
+
+@router.get("/analysis-sessions/{sid}/figure.{fmt}")
+def session_figure(sid: int, fmt: str, variable: Optional[str] = None, step_h: float = 2.0, width_mm: float = 174,
+                   dpi: int = 300, theme: str = "grey", fit: bool = True, db: Session = Depends(get_db)):
+    if fmt not in report.FIG_FORMATS:
+        raise HTTPException(404, "Format not available")
+    if not (40 <= width_mm <= 500) or not (72 <= dpi <= 1200):
+        raise HTTPException(422, "Width must be 40-500 mm and resolution 72-1200 dpi")
+    res = session_results_data(db, sid, step_h, variable)
+    opt = next((o for o in res["variable_options"] if o["key"] == res["variable"]), None)
+    if opt is None:
+        raise HTTPException(422, f"No data for '{res['variable']}' in this session")
+    letters = "ABCDEFGHIJ"
+    series = []
+    for i, c in enumerate(res["conditions"]):
+        cv = res["curves"].get(c)
+        if not cv:
+            continue
+        series.append(report.ConditionSeries(f"{letters[i]} · {c} (n = {cv['n']})", SESSION_COLORS[i % 6],
+                                             SESSION_MARKERS[i % 6], cv["t"], cv["mean"], cv["sd"],
+                                             (cv.get("fit") if fit else None)))
+    ylabel = f"{opt['label']} ({opt['unit']})" if opt["unit"] else opt["label"]
+    try:
+        data = report.render_conditions(series, ylabel, fmt, width_mm, dpi, theme)
+    except ValueError as ex:
+        raise HTTPException(422, str(ex))
+    return StreamingResponse(io.BytesIO(data), media_type=report.FIG_FORMATS[fmt], headers={
+        "Content-Disposition": f'attachment; filename="{res["code"]}-{res["variable"]}.{fmt}"'})
+
+
+@router.get("/analysis-sessions/{sid}/export.{fmt}")
+def session_export(sid: int, fmt: str, step_h: float = 2.0, db: Session = Depends(get_db)):
+    """Experiments with conditions, per-experiment parameters, comparisons and mean ± SD curves of every variable."""
+    if fmt not in ("xlsx", "zip"):
+        raise HTTPException(404, "Format not available")
+    res = session_results_data(db, sid, step_h)
+    letters = "ABCDEFGHIJ"
+    label = {c: f"{letters[i]} · {c}" for i, c in enumerate(res["conditions"])}
+    tables: dict[str, pd.DataFrame] = {}
+    tables["Experiments"] = pd.DataFrame([{
+        "condition": label.get(x["condition"], x["condition"]), "code": x["code"], "name": x["name"],
+        "strain": x["strain"], "reactor": x["reactor_id"], "date": x["date"], "parallel_run": x["parallel_run"],
+        **{k: x["values"][k] for k, *_ in SESSION_PARAMS},
+        "fit_error": x["fit_error"], "fit_warnings": "; ".join(x["fit_warnings"])} for x in res["experiments"]])
+    rows = []
+    for c in res["comparisons"]:
+        r = {"parameter": c["label"], "unit": c["unit"], "source": c["source"]}
+        for cond in res["conditions"]:
+            s_ = c["conditions"].get(cond) or {}
+            r[f"{label[cond]} n"] = s_.get("n")
+            r[f"{label[cond]} mean"] = s_.get("mean")
+            r[f"{label[cond]} SD"] = s_.get("sd")
+        r.update({"test": c["test"], "statistic": c["statistic"], "p": c["p_value"], "difference": c["difference"],
+                  "CI95 low": c["ci95"][0] if c["ci95"] else None, "CI95 high": c["ci95"][1] if c["ci95"] else None,
+                  "post hoc (Tukey)": "; ".join(f"{p['a']}−{p['b']}: Δ={p['difference']:.4g}, p_adj={p['p_adj']:.3g}"
+                                              for p in c["posthoc"]),
+                  "note": c["warning"]})
+        rows.append(r)
+    tables["Comparisons"] = pd.DataFrame(rows)
+    crow = []
+    for opt in res["variable_options"]:
+        r2 = session_results_data(db, sid, step_h, opt["key"])
+        for cond, cv in r2["curves"].items():
+            for t, m, s_ in zip(cv["t"], cv["mean"], cv["sd"]) if cv else []:
+                crow.append({"variable": opt["label"], "unit": opt["unit"], "condition": label.get(cond, cond),
+                             "t_h": t, "mean": m, "SD": s_, "n": cv["n"]})
+    tables["Mean curves"] = pd.DataFrame(crow, columns=["variable", "unit", "condition", "t_h", "mean", "SD", "n"])
+    tables["Session"] = pd.DataFrame([{"field": k, "value": v} for k, v in {
+        "code": res["code"], "name": res["name"], "fit variable": res["fit_variable"],
+        "model": res["models"][res["model"]], "curve interval (h)": step_h,
+        "parallel runs": "; ".join(f"{f['parallel_run']}: " + ", ".join(f"{x['code']} ({x['condition']})"
+                                                                         for x in f["experiments"])
+                                   for f in res["parallel_run_flags"]) or None}.items()])
+    buf = io.BytesIO()
+    if fmt == "xlsx":
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            for name, df in tables.items():
+                df.to_excel(xw, sheet_name=name, index=False)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        import zipfile
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, df in tables.items():
+                z.writestr(f"{res['code']}_{name.lower().replace(' ', '_')}.csv", df.to_csv(index=False))
+        media = "application/zip"
+    buf.seek(0)
+    return StreamingResponse(buf, media_type=media,
+                             headers={"Content-Disposition": f'attachment; filename="{res["code"]}.{fmt}"'})
 
 
 # --- export -------------------------------------------------------------------------------
