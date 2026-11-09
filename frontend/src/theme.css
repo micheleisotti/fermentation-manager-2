@@ -249,3 +249,5 @@ input.cond-add { border-style: solid; color: var(--ink); width: 180px; }
 .choice input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
 .lib-tabs { height: 40px; border-radius: 20px; align-self: flex-start; flex-wrap: wrap; height: auto; }
 .lib-tabs button { height: 38px; padding: 0 18px; font-size: 14px; }
+fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+fieldset.plain:disabled { opacity: .6; }

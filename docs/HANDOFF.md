@@ -159,6 +159,11 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Manual variable roles: biomass (growth fit, μmax = specific growth rate), product (fit as accumulation:
   λ/μmax describe accumulation), substrate and other (plotted/exported, no growth fit). Yields
   (Yx/s, Yp/x, qs, qp) exist in `analysis/kinetics.compute_kpis` but are not shown yet.
+## Remote decided by the server (9 Nov 2026)
+- Fixed: "local"/"remote" was declared by the browser and the frontend always sent "local", so the
+  Remote access switch never applied to the phone. Now the server decides from the connection:
+  loopback (the lab PC itself) = local, anything else (Tailscale) = remote; logged per command.
+- Settings › Remote access and › Data and backup are read-only from remote devices (server returns 403).
 
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
