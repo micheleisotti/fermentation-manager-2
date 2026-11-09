@@ -24,6 +24,12 @@ Ethernet adapter has the static address 192.0.2.10/24 **without a gateway**; Wi-
   - write: `J<address>s<value>\r` (lowercase `s`), value as plain text, as the web UI's
     setpoint dialog does (`rightpanelsensors.js` → `controlData.setpoint()`; the UI only
     checks min ≤ value ≤ max of the sensor). FM2 writes **only** `1.13.0/2/13` (setpoints).
+  - **Login** needed to write (levels 0 View, 1 Operator, 2 Engineer, 3 Service):
+    `J0.11s<level>|<user>|<base64(password)>\r`, state read back from `0.11`
+    (`<level>|<user>|…`), logout `J0.11s0|0|\r` (`login.js`). One login at a time; the UI
+    can "claim" it from another user (`0.12`). **FM2 never claims**: it logs in only around
+    one setpoint write and logs out; if refused, nothing is sent. The password lives in
+    `C:\ProgramData\FermentationManager\ez2-password.txt` (service + admins only), never in git.
   - The controller **drops idle connections after a few seconds without a close frame**.
     The driver reconnects and retries once (cost ≈ 50–200 ms).
 - **HTTP history** `/Data/history.csv?<sensor>|<divider>`: ~500 lines
