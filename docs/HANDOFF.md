@@ -85,11 +85,23 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Service runs the real controllers (read-only). Update procedure: `git pull`,
   `pip install -e .` if dependencies changed, `npm.cmd run build` in `frontend`, `Restart-Service fm2` (admin).
 
+## Settings, notifications, backups (9 Nov 2026)
+- Settings page (mockup M3Settings): bioreactors (read-only), remote access (switch + allowed ranges and
+  max step), notifications (ntfy or Telegram; one switch per rule; alert timing/tolerances), data and
+  backup, credits. Stored in table `app_settings`, applied without restart.
+- Notifications are sent on a background thread; every event is still stored in the app.
+- Backups: `docs/backup.md`. **Destination not chosen yet** (Michele); the folder must be writable by
+  `NT SERVICE\fm2` and reachable with nobody logged in.
+
+- Home shows Server and Remote access (Tailscale CLI, or a Tailscale address on the PC as fallback).
+- Phone: "New" floating button above the bottom bar. "Plan on R1/R2" preselects the reactor.
+- Settings › Media and buffers: list and add (target of New → Medium / Buffer).
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
-2. Backup job, consultation mode on the laptop.
+2. Choose the backup destination; consultation mode on the laptop.
 3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
 ## Still to build in the UI
-Experiment analysis & export, analysis sessions, settings, push notifications (need HTTPS:
-`tailscale serve`), PWA install, extra channels, phone layout for planning.
+Experiment analysis & export, analysis sessions, app push notifications (need HTTPS:
+`tailscale serve`) and PWA install, phone layout for planning, dark / dimmed theme (Settings, not urgent).
