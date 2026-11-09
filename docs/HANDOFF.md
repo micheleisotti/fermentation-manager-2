@@ -82,8 +82,9 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Windows service `fm2` via WinSW (`deploy/windows/`), virtual account `NT SERVICE\fm2`,
   data in `C:\ProgramData\FermentationManager\data`, logs in `…\logs`; survives reboot
   with nobody logged in; reachable from the phone.
-- Service runs the real controllers (read-only). Update procedure: `git pull`,
-  `pip install -e .` if dependencies changed, `npm.cmd run build` in `frontend`, `Restart-Service fm2` (admin).
+- Service runs the real controllers (read-only). Update procedure (admin PowerShell): `git pull`;
+  if dependencies changed: `Stop-Service fm2` first (the service locks `fm2-server.exe`), then `pip install -e .`;
+  `npm.cmd run build` in `frontend`; `Start-Service fm2` / `Restart-Service fm2`.
 
 ## Settings, notifications, backups (9 Nov 2026)
 - Settings page (mockup M3Settings): bioreactors (read-only), remote access (switch + allowed ranges and
