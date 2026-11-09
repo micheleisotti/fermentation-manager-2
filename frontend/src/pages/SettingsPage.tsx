@@ -5,8 +5,10 @@ import { api, type AppSettings, type BackupStatus } from "../api";
 import { usePolling } from "../hooks";
 import { DataValue, Icon } from "../components/ui";
 import { REACTOR_LABEL } from "./Home";
+import { initials, useUser } from "../components/UserGate";
 
 const SECTIONS = [
+  { id: "users", label: "Users" },
   { id: "bioreactors", label: "Bioreactors" },
   { id: "remote", label: "Remote access" },
   { id: "alerts", label: "Notifications" },
@@ -88,6 +90,70 @@ function NamedList({ kind, label }: { kind: "media" | "buffers"; label: string }
   );
 }
 
+function UsersSection() {
+  const ctx = useUser();
+  const list = usePolling(() => api.users(true), 600000);
+  const [pin, setPin] = useState("");
+  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [name, setName] = useState("");
+  if (!ctx) return null;
+  const me = ctx.user;
+  const run = async (f: () => Promise<string | void>) => {
+    setMsg(null);
+    try { const t = await f(); if (t) setMsg({ kind: "good", text: t }); list.refresh(); }
+    catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+  };
+  return (
+    <Section id="users" title="Users"
+      sub="Who is using the software. The signed-in user signs experiments, measurements and setpoint changes. No permission levels: a PIN only stops others from signing with your name.">
+      <div className="row" style={{ gap: 12, alignItems: "center" }}>
+        <span className="avatar">{initials(me.name)}</span>
+        <span>Signed in as <b>{me.name}</b> on this device{me.has_pin ? " (with PIN)" : ""}.</span>
+        <button className="btn outlined" onClick={ctx.switchUser}>Switch user</button>
+      </div>
+      {!me.guest && (
+        <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+          <label className="field" style={{ width: 200 }}>{me.has_pin ? "New PIN" : "Set a PIN"} (4–8 digits)
+            <input className="mono" type="password" inputMode="numeric" autoComplete="new-password" maxLength={8} value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} /></label>
+          <button className="btn tonal" disabled={pin.length < 4} onClick={() => run(async () => {
+            const r = await api.updateUser(me.id, { pin }); ctx.setUser(r.user, r.token); setPin("");
+            return "PIN saved. Other devices signed in as you must sign in again.";
+          })}>Save PIN</button>
+          {me.has_pin && <button className="btn text" onClick={() => run(async () => {
+            const r = await api.updateUser(me.id, { pin: "" }); ctx.setUser(r.user, r.token); return "PIN removed.";
+          })}>Remove PIN</button>}
+        </div>
+      )}
+      <div className="table-wrap">
+        <table className="data">
+          <thead><tr><th>User</th><th>PIN</th><th>Status</th><th /></tr></thead>
+          <tbody>{(list.data ?? []).map((u) => (
+            <tr key={u.id}>
+              <td>{u.name}{u.id === me.id && <span className="muted"> (you)</span>}</td>
+              <td>{u.guest ? "—" : u.has_pin ? "yes" : "no"}</td>
+              <td>{u.archived ? "archived" : "active"}</td>
+              <td className="num">{!u.guest && (!u.has_pin || u.id === me.id) && u.id !== me.id && (
+                <button className="btn text" onClick={() => run(async () => { await api.updateUser(u.id, { archived: !u.archived }); })}>
+                  {u.archived ? "Restore" : "Archive"}</button>)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div className="row" style={{ gap: 8, flexWrap: "nowrap", maxWidth: 520 }}>
+        <label className="field" style={{ flex: "1 1 auto" }}><span className="sr-only">New user</span>
+          <input value={name} placeholder="Add a user (name)" onChange={(e) => setName(e.target.value)} maxLength={60} /></label>
+        <button className="btn tonal" disabled={!name.trim()} onClick={() => run(async () => {
+          await api.createUser(name.trim()); setName(""); return "User added: they can set their own PIN after signing in.";
+        })}>Add</button>
+      </div>
+      <span className="xs muted">Forgotten PIN: on the lab PC (admin PowerShell) run
+        <span className="mono"> .venv\Scripts\python -m fm2.users reset-pin "Name" --data-dir C:\ProgramData\FermentationManager\data</span></span>
+      {msg && <div className={`banner ${msg.kind} small`} role="status">{msg.text}</div>}
+    </Section>
+  );
+}
+
 export function SettingsPage() {
   const all = usePolling(api.settings, 600000);
   const sys = usePolling(api.system, 15000);
@@ -140,6 +206,8 @@ export function SettingsPage() {
           {SECTIONS.map((x) => <a key={x.id} href={`#${x.id}`}>{x.label}</a>)}
         </nav>
         <div className="stack" style={{ flex: "999 1 640px", minWidth: 0, gap: 24 }}>
+
+          <UsersSection />
 
           <Section id="bioreactors" title="Bioreactors"
             sub={<>Read from the service configuration (address and driver change with a service restart). Sampling every <span className="mono">{sys.data?.sampling_interval_s ?? "—"} s</span>.</>}>

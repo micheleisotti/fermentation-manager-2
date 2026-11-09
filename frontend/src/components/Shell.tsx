@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { Icon } from "./ui";
+import { UserButton } from "./UserGate";
 
 const NAV = [
   { to: "/", label: "Home", icon: "home", end: true },
@@ -55,6 +56,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="ind"><Icon name={n.icon} /></span>{n.label}
           </NavLink>
         ))}
+        <UserButton />
       </nav>
       <main className="main">{children}</main>
     </div>

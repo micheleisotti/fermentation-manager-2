@@ -90,8 +90,18 @@ export interface SessionResults extends SessionInfo {
     condition: string; values: Record<string, number | null>; fit_error: string | null; fit_warnings: string[] }[];
 }
 
+export interface UserInfo { id: number; name: string; has_pin: boolean; archived: boolean; guest: boolean }
+const TOKEN_KEY = "fm2.token";
+export function getToken(): string {
+  try { return localStorage.getItem(TOKEN_KEY) ?? ""; } catch { return ""; }
+}
+export function setToken(t: string | null): void {
+  try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch { /* storage unavailable */ }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`/api${path}`, { headers: { "Content-Type": "application/json" }, ...init });
+  const tok = getToken();
+  const r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...(tok ? { "X-FM2-Token": tok } : {}) } });
   if (!r.ok) {
     let detail = r.statusText;
     try { detail = (await r.json()).detail ?? detail; } catch { /* not JSON */ }
@@ -129,6 +139,12 @@ export const api = {
   variables: () => req<Variable[]>("/variables"),
   events: (id: number) => req<EventItem[]>(`/experiments/${id}/events`),
   recentEvents: () => req<EventItem[]>("/events/recent"),
+  users: (archived = false) => req<UserInfo[]>(`/users${archived ? "?include_archived=true" : ""}`),
+  me: () => req<{ user: UserInfo | null }>("/auth/me"),
+  login: (user_id: number, pin?: string) => req<{ user: UserInfo; token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ user_id, pin }) }),
+  createUser: (name: string, pin?: string) => req<{ user: UserInfo; token: string }>("/users", { method: "POST", body: JSON.stringify({ name, pin: pin || null }) }),
+  updateUser: (id: number, body: { name?: string; pin?: string; archived?: boolean }) =>
+    req<{ user: UserInfo; token: string | null }>(`/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   sessions: () => req<SessionInfo[]>("/analysis-sessions"),
   session: (id: number) => req<SessionInfo>(`/analysis-sessions/${id}`),
   createSession: (body: SessionBody) => req<SessionInfo>("/analysis-sessions", { method: "POST", body: JSON.stringify(body) }),

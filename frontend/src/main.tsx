@@ -9,6 +9,7 @@ import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import "./theme.css";
 import { Shell } from "./components/Shell";
+import { UserGate } from "./components/UserGate";
 import { Home } from "./pages/Home";
 import { ExperimentPage } from "./pages/ExperimentPage";
 import { Planning } from "./pages/Planning";
@@ -29,6 +30,7 @@ function ComingNext({ title, text }: { title: string; text: string }) {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BrowserRouter>
+      <UserGate>
       <Shell>
         <Routes>
           <Route path="/" element={<Home />} />
@@ -45,6 +47,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Shell>
+      </UserGate>
     </BrowserRouter>
   </StrictMode>,
 );

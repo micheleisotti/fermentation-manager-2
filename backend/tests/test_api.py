@@ -289,3 +289,44 @@ def test_channels(env):
     i = r["columns"].index("do2")
     assert all(row[i] is not None for row in r["rows"])            # all channels recorded anyway
     assert c.patch(f"/api/experiments/{b['id']}", json={"channels": ["ph", "temperature"]}).json()["channels"] == ["temperature", "ph"]
+
+
+def test_users_pin_and_signatures(env):
+    c, clock, app, _ = env
+    users = c.get("/api/users").json()
+    assert [u["name"] for u in users] == ["Guest"]
+    assert c.post("/api/users", json={"name": "Michele", "pin": "12"}).status_code == 422
+    m = c.post("/api/users", json={"name": "Michele", "pin": "2468"}).json()
+    assert m["user"]["has_pin"] and m["token"]
+    assert c.post("/api/users", json={"name": "michele"}).status_code == 409
+    carl = c.post("/api/users", json={"name": "Carlettino"}).json()
+    mid = m["user"]["id"]
+
+    assert c.post("/api/auth/login", json={"user_id": mid, "pin": "0000"}).status_code == 401
+    tok = c.post("/api/auth/login", json={"user_id": mid, "pin": "2468"}).json()["token"]
+    h = {"X-FM2-Token": tok}
+    assert c.get("/api/auth/me", headers=h).json()["user"]["name"] == "Michele"
+    assert c.get("/api/auth/me", headers={"X-FM2-Token": tok[:-2] + "xx"}).json()["user"] is None
+    assert c.post("/api/auth/login", json={"user_id": carl["user"]["id"]}).status_code == 200  # no PIN
+
+    # the server, not the browser, decides the signature
+    e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "author": "Someone else"}, headers=h).json()
+    c.post(f"/api/experiments/{e['id']}/start", headers=h)
+    od = c.get("/api/variables").json()[0]["id"]
+    mm = c.post(f"/api/experiments/{e['id']}/measurements", json={"variable_id": od, "value": 0.1, "author": "Michele"}).json()
+    assert mm["author"] == "Guest"   # no token → Guest, whatever the body says
+    c.post("/api/reactors/R1/setpoints", json={"parameter": "temperature", "value": 31}, headers=h)
+    assert any(x["author"] == "Michele" for x in c.get(f"/api/experiments/{e['id']}/setpoint-log").json())
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    assert any("started by Michele" in x["message"] for x in ev)
+
+    # PIN-protected user can be changed only when signed in as them; PIN change invalidates old tokens
+    assert c.put(f"/api/users/{mid}", json={"archived": True}).status_code == 403
+    r = c.put(f"/api/users/{mid}", json={"pin": "13579"}, headers=h).json()
+    assert c.get("/api/auth/me", headers=h).json()["user"] is None
+    assert c.get("/api/auth/me", headers={"X-FM2-Token": r["token"]}).json()["user"]["name"] == "Michele"
+    assert c.put(f"/api/users/{users[0]['id']}", json={"pin": "1234"}).status_code == 422  # Guest
+
+    for _ in range(5):
+        c.post("/api/auth/login", json={"user_id": mid, "pin": "0000"})
+    assert c.post("/api/auth/login", json={"user_id": mid, "pin": "13579"}).status_code == 429

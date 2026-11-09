@@ -38,6 +38,8 @@ from ..models import (
     PhControlMode, SessionMember, SetpointCommand, Variable, VariableCategory,
 )
 from ..services import commands
+from .. import users as users_mod
+from ..models import GUEST_NAME, User
 from . import schemas as S
 
 
@@ -55,6 +57,8 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
         log.info("database: added column %s", c)
     sessions = make_session_factory(engine)
     with session_scope(sessions) as s:
+        if not s.scalar(select(User.id).where(User.name == GUEST_NAME)):
+            s.add(User(name=GUEST_NAME))
         if not s.scalar(select(func.count()).select_from(Variable)):
             s.add_all(Variable(name=n, unit=u, category=c) for n, u, c in DEFAULT_VARIABLES)
 
@@ -84,6 +88,8 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
     app = FastAPI(title="Fermentation Manager", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.sessions, app.state.acq, app.state.clock = settings, sessions, acq, clock
     app.state.app_settings, app.state.notifier, app.state.backups = app_settings, notifier, backups
+    app.state.auth_secret = users_mod.load_secret(db_file.parent / "auth-secret.txt")
+    app.state.pin_throttle = users_mod.Throttle()
     app.include_router(router, prefix="/api")
     _mount_frontend(app, settings)
     return app
@@ -150,6 +156,26 @@ def _404(obj, what="Not found"):
 def _next_code(db: Session, model, prefix: str) -> str:
     n = (db.scalar(select(func.max(model.id))) or 0) + 1
     return f"{prefix}-{n:03d}"
+
+
+def current_user(request: Request, db: Session) -> Optional[User]:
+    """The signed-in user from the X-FM2-Token header (None = not signed in)."""
+    tok = request.headers.get("x-fm2-token", "")
+    parsed = users_mod.parse_token(request.app.state.auth_secret, tok) if tok else None
+    if not parsed:
+        return None
+    u = db.get(User, parsed[0])
+    return u if u and not u.archived and u.token_version == parsed[1] else None
+
+
+def who(request: Request, db: Session) -> str:
+    """Name recorded on data: the signed-in user, or Guest."""
+    u = current_user(request, db)
+    return u.name if u else GUEST_NAME
+
+
+def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None) -> None:
+    db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity="info", message=message, t_h=t_h))
 
 
 def channels_of(e: Experiment) -> list[str]:
@@ -248,8 +274,9 @@ def _profile_out(p: ControllerProfile) -> S.ProfileOut:
 
 
 @router.post("/profiles", response_model=S.ProfileOut, status_code=201)
-def create_profile(body: S.ProfileIn, db: Session = Depends(get_db)):
+def create_profile(body: S.ProfileIn, request: Request, db: Session = Depends(get_db)):
     data = body.model_dump()
+    data["author"] = who(request, db)
     if data["ph_control_mode"]:
         data["ph_control_mode"] = PhControlMode(data["ph_control_mode"])
     p = ControllerProfile(**data)
@@ -297,6 +324,7 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
     data = body.model_dump()
     data["planned_date"] = data["planned_date"] or now_of(request).date().isoformat()
     data["channels"] = _check_channels(data.get("channels"))
+    data["author"] = who(request, db)
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
     db.add(e)
     db.flush()
@@ -365,7 +393,8 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
             results.append({"parameter": param, "status": status, "message": str(ex)})
             continue
         db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=param, old_value=cur,
-                               requested_value=value, readback_value=rb, status=status, origin="profile"))
+                               requested_value=value, readback_value=rb, status=status, origin="profile",
+                               author=who(request, db)))
         results.append({"parameter": param, "status": status, "readback": rb})
     for param, lo, hi in (("ph", prof.ph_low_limit, prof.ph_high_limit),
                           ("temperature", prof.temperature_low_limit, prof.temperature_high_limit)):
@@ -376,7 +405,7 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
                 db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=r.parameter,
                                        old_value=r.old_value, requested_value=r.requested_value,
                                        readback_value=r.readback_value, status=r.status, message=r.message,
-                                       origin="profile"))
+                                       origin="profile", author=who(request, db)))
                 results.append({"parameter": r.parameter, "status": r.status, "readback": r.readback_value,
                                 **({"message": r.message} if r.status != "confirmed" else {})})
         except commands.CommandRejected as ex:
@@ -452,6 +481,7 @@ def start_experiment(exp_id: int, request: Request, db: Session = Depends(get_db
     if hasattr(driver, "on_experiment_start"):
         driver.on_experiment_start()  # simulator only: fresh culture
     e.status, e.started_at = ExperimentStatus.fermenting, now_of(request)
+    _event(db, e, "started", f"{e.code} started by {who(request, db)}", 0.0)
     if e.profile:
         p = e.profile
         e.plan_snapshot = {"profile": p.name, "ph_setpoint": p.ph_setpoint,
@@ -472,6 +502,9 @@ def _close(exp_id: int, request: Request, db: Session, status: ExperimentStatus)
     if e.status != ExperimentStatus.fermenting:
         raise HTTPException(409, "Experiment is not fermenting")
     e.status, e.ended_at = status, now_of(request)
+    t_h = (_as_utc(e.ended_at) - _as_utc(e.started_at)).total_seconds() / 3600 if e.started_at else None
+    _event(db, e, "ended" if status == ExperimentStatus.completed else "aborted",
+           f"{e.code} {'ended (end of production)' if status == ExperimentStatus.completed else 'aborted'} by {who(request, db)}", t_h)
     return _exp_out(e)
 
 
@@ -568,7 +601,7 @@ def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Se
     var = _404(db.get(Variable, body.variable_id), "Unknown variable")
     at = body.sampled_at or now_of(request)
     m = ManualMeasurement(experiment_id=e.id, variable_id=var.id, sampled_at=at, t_h=_t_h(e, at),
-                          value=body.value, unit=body.unit or var.unit, note=body.note, author=body.author)
+                          value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db))
     db.add(m)
     db.flush()
     db.refresh(m)
@@ -576,7 +609,7 @@ def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Se
 
 
 @router.patch("/measurements/{mid}", response_model=S.MeasurementOut)
-def edit_measurement(mid: int, body: S.MeasurementPatch, db: Session = Depends(get_db)):
+def edit_measurement(mid: int, body: S.MeasurementPatch, request: Request, db: Session = Depends(get_db)):
     m = _404(db.get(ManualMeasurement, mid))
     old = {"value": m.value, "sampled_at": m.sampled_at.isoformat(), "unit": m.unit, "note": m.note}
     data = body.model_dump(exclude_unset=True, exclude={"author"})
@@ -585,7 +618,7 @@ def edit_measurement(mid: int, body: S.MeasurementPatch, db: Session = Depends(g
     if "sampled_at" in data:
         m.t_h = _t_h(db.get(Experiment, m.experiment_id), m.sampled_at)
     new = {"value": m.value, "sampled_at": _as_utc(m.sampled_at).isoformat(), "unit": m.unit, "note": m.note}
-    db.add(ManualMeasurementEdit(measurement_id=m.id, old=old, new=new, author=body.author))
+    db.add(ManualMeasurementEdit(measurement_id=m.id, old=old, new=new, author=who(request, db)))
     return _meas_out(m)
 
 
@@ -628,13 +661,13 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     except commands.CommandRejected as ex:
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id,
                                parameter=body.parameter, requested_value=body.value, status="rejected",
-                               message=str(ex), origin=body.origin, author=body.author))
+                               message=str(ex), origin=body.origin, author=who(request, db)))
         db.commit()
         raise HTTPException(422, str(ex))
     db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=res.parameter,
                            old_value=res.old_value, requested_value=res.requested_value,
                            readback_value=res.readback_value, status=res.status, message=res.message,
-                           origin=body.origin, author=body.author))
+                           origin=body.origin, author=who(request, db)))
     return res.__dict__
 
 
@@ -659,7 +692,7 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=r.parameter,
                                old_value=r.old_value, requested_value=r.requested_value,
                                readback_value=r.readback_value, status=r.status, message=r.message,
-                               origin=body.origin, author=body.author))
+                               origin=body.origin, author=who(request, db)))
     return [r.__dict__ for r in results]
 
 
@@ -900,10 +933,10 @@ def list_sessions(db: Session = Depends(get_db)):
 
 
 @router.post("/analysis-sessions", status_code=201)
-def create_session(body: S.SessionIn, db: Session = Depends(get_db)):
+def create_session(body: S.SessionIn, request: Request, db: Session = Depends(get_db)):
     conds = _check_session_body(db, body)
     sess = AnalysisSession(code=_next_code(db, AnalysisSession, "AS"), name=body.name.strip(),
-                           fit_variable=body.fit_variable, model=body.model, author=body.author, conditions=conds)
+                           fit_variable=body.fit_variable, model=body.model, author=who(request, db), conditions=conds)
     for eid, cond in body.members.items():
         if cond.strip():
             sess.members.append(SessionMember(experiment_id=eid, condition=cond.strip()))
@@ -922,8 +955,6 @@ def update_session(sid: int, body: S.SessionIn, db: Session = Depends(get_db)):
     sess = _404(db.get(AnalysisSession, sid))
     conds = _check_session_body(db, body)
     sess.name, sess.fit_variable, sess.model, sess.conditions = body.name.strip(), body.fit_variable, body.model, conds
-    if body.author:
-        sess.author = body.author
     sess.members.clear()
     db.flush()
     for eid, cond in body.members.items():
@@ -1276,6 +1307,85 @@ def export_data(exp_id: int, fmt: str, db: Session = Depends(get_db), resample_m
     buf.seek(0)
     return StreamingResponse(buf, media_type=media,
                              headers={"Content-Disposition": f'attachment; filename="{e.code}.{fmt}"'})
+
+
+# --- users (identity for signatures, optional PIN) ---------------------------------------------
+
+def _user_out(u: User) -> dict:
+    return {"id": u.id, "name": u.name, "has_pin": u.pin_hash is not None, "archived": u.archived,
+            "guest": u.name == GUEST_NAME}
+
+
+@router.get("/users")
+def list_users(db: Session = Depends(get_db), include_archived: bool = False):
+    q = select(User).order_by(User.name)
+    users = [u for u in db.scalars(q) if include_archived or not u.archived]
+    return sorted([_user_out(u) for u in users], key=lambda x: (x["guest"], x["name"].lower()))
+
+
+@router.post("/users", status_code=201)
+def create_user(body: S.UserIn, request: Request, db: Session = Depends(get_db)):
+    name = body.name.strip()
+    if not name or len(name) > 60:
+        raise HTTPException(422, "Give a name (up to 60 characters).")
+    if db.scalar(select(User).where(func.lower(User.name) == name.lower())):
+        raise HTTPException(409, f"A user named {name} already exists.")
+    if body.pin and not users_mod.valid_pin(body.pin):
+        raise HTTPException(422, f"The PIN must be {users_mod.PIN_MIN}-{users_mod.PIN_MAX} digits.")
+    u = User(name=name, pin_hash=users_mod.hash_pin(body.pin) if body.pin else None)
+    db.add(u)
+    db.flush()
+    return {"user": _user_out(u), "token": users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)}
+
+
+@router.post("/auth/login")
+def login(body: S.LoginIn, request: Request, db: Session = Depends(get_db)):
+    u = db.get(User, body.user_id)
+    if u is None or u.archived:
+        raise HTTPException(404, "User not found")
+    th: users_mod.Throttle = request.app.state.pin_throttle
+    if u.pin_hash:
+        wait = th.locked_for(u.id)
+        if wait:
+            raise HTTPException(429, f"Too many wrong PINs: try again in {int(wait // 60) + 1} min.")
+        if not users_mod.check_pin(body.pin or "", u.pin_hash):
+            th.fail(u.id)
+            raise HTTPException(401, "Wrong PIN.")
+        th.ok(u.id)
+    return {"user": _user_out(u), "token": users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)}
+
+
+@router.get("/auth/me")
+def me(request: Request, db: Session = Depends(get_db)):
+    u = current_user(request, db)
+    return {"user": _user_out(u) if u else None}
+
+
+@router.put("/users/{uid}")
+def update_user(uid: int, body: S.UserPatch, request: Request, db: Session = Depends(get_db)):
+    """Rename, set/change/remove the PIN or archive. A user with a PIN can be changed only when signed in as them."""
+    u = _404(db.get(User, uid))
+    me_ = current_user(request, db)
+    if u.pin_hash and (me_ is None or me_.id != u.id):
+        raise HTTPException(403, f"Sign in as {u.name} to change this user.")
+    if u.name == GUEST_NAME and (body.name not in (None, GUEST_NAME) or body.pin or body.archived):
+        raise HTTPException(422, "Guest cannot be renamed, archived or given a PIN.")
+    token = None
+    if body.name is not None and body.name.strip() != u.name:
+        name = body.name.strip()
+        if not name or db.scalar(select(User).where(func.lower(User.name) == name.lower(), User.id != u.id)):
+            raise HTTPException(409, "Name empty or already used.")
+        u.name = name   # past records keep the name they were signed with
+    if body.pin is not None:
+        if body.pin and not users_mod.valid_pin(body.pin):
+            raise HTTPException(422, f"The PIN must be {users_mod.PIN_MIN}-{users_mod.PIN_MAX} digits.")
+        u.pin_hash = users_mod.hash_pin(body.pin) if body.pin else None
+        u.token_version += 1   # other devices signed in as this user must sign in again
+        token = users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)
+    if body.archived is not None:
+        u.archived = body.archived
+    db.flush()
+    return {"user": _user_out(u), "token": token}
 
 
 # --- settings, notifications, backup --------------------------------------------------------

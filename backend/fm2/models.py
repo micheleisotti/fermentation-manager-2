@@ -269,3 +269,21 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(40), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class User(Base):
+    """
+    People who use the app. Identity only (no permission levels): the chosen user signs
+    experiments, measurements and commands. An optional PIN stops others from signing
+    as that user; "Guest" never has a PIN.
+    """
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    pin_hash: Mapped[Optional[str]] = mapped_column(String(200))   # "salt$hash" (PBKDF2-SHA256), None = no PIN
+    token_version: Mapped[int] = mapped_column(Integer, default=0)  # bumped on PIN change: old sign-ins expire
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+GUEST_NAME = "Guest"

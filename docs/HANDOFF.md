@@ -131,6 +131,18 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Fixed: trend chart kept the previous variable's setpoint series (ECharts merge); phone full-screen
   chart closed after a few seconds (effect re-run on every poll).
 
+## Users and desktop shortcut (9 Nov 2026)
+- Sign-in screen before the app: pick a user (optional 4–8 digit PIN) or Guest; remembered per
+  browser/device until "Switch user" (rail, bottom; Settings › Users on phones).
+- Identity only, no roles. The server signs a token (HMAC, secret in `data\auth-secret.txt`) and writes
+  the user on experiments, profiles, measurements and edits, setpoint/limit/profile commands, sessions,
+  and Start/End events. The `author` sent by a browser is ignored.
+- A user with a PIN can be renamed/archived/PIN-changed only when signed in as them; a PIN change
+  signs out their other devices. 5 wrong PINs → 5 min lock. Forgotten PIN (admin shell):
+  `.venv\Scripts\python -m fm2.users reset-pin "Name" --data-dir C:\ProgramData\FermentationManager\data`.
+- Desktop/Start-menu shortcut for all Windows users: `deploy\windows\create-shortcut.ps1` (admin, once);
+  opens http://localhost:8000 in an Edge/Chrome app window with the FM icon (`fm2.ico`).
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.
