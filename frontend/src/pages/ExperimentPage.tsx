@@ -9,6 +9,7 @@ import { DeleteExperiment } from "../components/DeleteExperiment";
 import { LimitsDialog } from "../components/LimitsDialog";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
+import { ModeTabs } from "./ExperimentAnalysis";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -52,7 +53,10 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
           </div>
           <StatusChip status={e.status} />
         </div>
-        <DeleteExperiment e={e} />
+        <div className="row" style={{ gap: 12 }}>
+          <ModeTabs e={e} current="fermentation" />
+          <DeleteExperiment e={e} />
+        </div>
       </header>
     </>
   );

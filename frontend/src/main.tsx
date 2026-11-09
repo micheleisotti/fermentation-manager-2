@@ -14,6 +14,7 @@ import { ExperimentPage } from "./pages/ExperimentPage";
 import { Planning } from "./pages/Planning";
 import { Profiles } from "./pages/Profiles";
 import { SettingsPage } from "./pages/SettingsPage";
+import { AnalysisHome, ExperimentAnalysisPage } from "./pages/ExperimentAnalysis";
 
 function ComingNext({ title, text }: { title: string; text: string }) {
   return (
@@ -33,7 +34,9 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/experiments" element={<Navigate to="/" replace />} />
           <Route path="/experiments/new" element={<Planning />} />
           <Route path="/experiments/:id" element={<ExperimentPage />} />
-          <Route path="/analysis/*" element={<ComingNext title="Analysis" text="Experiment analysis & export and analysis sessions are the next screens to build." />} />
+          <Route path="/analysis" element={<AnalysisHome />} />
+          <Route path="/analysis/experiments/:id" element={<ExperimentAnalysisPage />} />
+          <Route path="/analysis/*" element={<ComingNext title="Analysis sessions" text="Comparing experiments by condition is the next screen to build." />} />
           <Route path="/profiles/*" element={<Profiles />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
