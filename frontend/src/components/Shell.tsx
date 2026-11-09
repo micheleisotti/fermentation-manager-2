@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { Icon } from "./ui";
 import { UserButton } from "./UserGate";
+import { ConnectionBanner } from "./ConnectionBanner";
 
 const NAV = [
   { to: "/", label: "Home", icon: "home", end: true },
@@ -59,7 +60,7 @@ export function Shell({ children }: { children: ReactNode }) {
         ))}
         <UserButton />
       </nav>
-      <main className="main">{children}</main>
+      <main className="main"><ConnectionBanner />{children}</main>
     </div>
   );
 }

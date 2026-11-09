@@ -100,9 +100,38 @@ export function setToken(t: string | null): void {
   try { if (t) localStorage.setItem(TOKEN_KEY, t); else localStorage.removeItem(TOKEN_KEY); } catch { /* storage unavailable */ }
 }
 
+// Connection state with the lab PC, for the "connection lost" banner
+type ConnListener = (online: boolean, lastOk: number) => void;
+const connListeners = new Set<ConnListener>();
+let connOnline = true;
+let connLastOk = Date.now();
+export function onConnection(fn: ConnListener): () => void {
+  connListeners.add(fn);
+  fn(connOnline, connLastOk);
+  return () => { connListeners.delete(fn); };
+}
+function setConn(ok: boolean) {
+  if (ok) connLastOk = Date.now();
+  if (ok !== connOnline || ok) {
+    const changed = ok !== connOnline;
+    connOnline = ok;
+    if (changed) connListeners.forEach((f) => f(connOnline, connLastOk));
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const tok = getToken();
-  const r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...(tok ? { "X-FM2-Token": tok } : {}) } });
+  let r: Response;
+  try {
+    r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...(tok ? { "X-FM2-Token": tok } : {}) } });
+  } catch {
+    setConn(false);
+    throw new Error("No connection to the lab PC");
+  }
+  // 502/503/504 without our JSON body = the proxy could not reach the server (e.g. service restarting)
+  const proxyDown = r.status >= 502 && r.status <= 504 && !(r.headers.get("content-type") ?? "").includes("json");
+  setConn(!proxyDown);
+  if (proxyDown) throw new Error("The lab PC is not answering");
   if (!r.ok) {
     let detail = r.statusText;
     try { detail = (await r.json()).detail ?? detail; } catch { /* not JSON */ }

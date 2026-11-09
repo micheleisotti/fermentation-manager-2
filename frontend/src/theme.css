@@ -251,3 +251,4 @@ input.cond-add { border-style: solid; color: var(--ink); width: 180px; }
 .lib-tabs button { height: 38px; padding: 0 18px; font-size: 14px; }
 fieldset.plain { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 fieldset.plain:disabled { opacity: .6; }
+.conn-banner { position: sticky; top: 8px; z-index: 30; margin-bottom: 8px; }

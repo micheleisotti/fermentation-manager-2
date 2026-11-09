@@ -46,6 +46,9 @@ def test_settings_defaults_validation_and_live_apply(env):
     assert rc.put("/api/settings/remote", json=ok).status_code == 403
     assert rc.put("/api/settings/backup", json=c.get("/api/settings").json()["backup"]).status_code == 403
     assert rc.get("/api/system").json()["client_local"] is False and c.get("/api/system").json()["client_local"] is True
+    # through "tailscale serve" (HTTPS) requests come from 127.0.0.1 with forwarding headers: remote
+    assert c.get("/api/system", headers={"X-Forwarded-For": "100.80.1.2"}).json()["client_local"] is False
+    assert c.get("/api/system", headers={"Tailscale-User-Login": "someone@example.org"}).json()["client_local"] is False
     c.put("/api/settings/remote", json=ok)
     r = rc.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.0}).json()
     assert r["status"] == "confirmed"

@@ -53,3 +53,8 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+// Service worker: needed to install the app (only over HTTPS or on localhost). Caches nothing.
+if ("serviceWorker" in navigator && (window.isSecureContext)) {
+  navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+}

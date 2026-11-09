@@ -767,6 +767,12 @@ def is_local(request: Request) -> bool:
     True for requests from the lab PC itself (loopback). Decided from the connection, never from
     what the browser declares. "testclient" is Starlette's test client (not a network address).
     """
+    # Behind "tailscale serve" (HTTPS for the installable app) every request reaches us from
+    # 127.0.0.1: the proxy marks them with X-Forwarded-For / Tailscale-User-* headers, and those
+    # are remote. A local browser adding such a header only makes itself "remote" (the safe side).
+    h = request.headers
+    if h.get("x-forwarded-for") or h.get("tailscale-user-login") or h.get("forwarded"):
+        return False
     host = request.client.host if request.client else ""
     if host == "testclient":
         return True

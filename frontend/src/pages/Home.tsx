@@ -123,8 +123,8 @@ export function Home() {
         <h1 style={{ lineHeight: 0 }}><img src={logo} alt="Fermentation Manager 2.0" style={{ height: 64, width: "auto" }} /></h1>
         <div className="row" style={{ gap: 8 }}>
           {(live.data ?? []).map((r) => (
-            <span key={r.reactor_id} className="pill" title={r.error ?? ""}>
-              <span className={`dot ${r.online ? "ok" : "bad"}`} />Controller {label(r.reactor_id)}
+            <span key={r.reactor_id} className="pill" title={live.error ? "Unknown: no connection to the lab PC" : r.error ?? ""}>
+              <span className={`dot ${live.error ? "" : r.online ? "ok" : "bad"}`} />Controller {label(r.reactor_id)}
             </span>
           ))}
           {live.error || sys.error

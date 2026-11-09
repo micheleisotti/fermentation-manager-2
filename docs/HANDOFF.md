@@ -165,6 +165,19 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   loopback (the lab PC itself) = local, anything else (Tailscale) = remote; logged per command.
 - Settings › Remote access and › Data and backup are read-only from remote devices (server returns 403).
 
+## Installable app (PWA) and HTTPS (9 Nov 2026)
+- `frontend/public`: manifest.json, icons (any + maskable), apple-touch-icon, favicon, `sw.js`
+  (service worker that caches nothing: live data never stale; registered only in secure contexts;
+  will host native push).
+- HTTPS through Tailscale: `deploy\windows\enable-https.ps1` (admin; needs MagicDNS + HTTPS
+  certificates enabled in the Tailscale admin console) → `tailscale serve --bg 8000` →
+  https://<pc>.<tailnet>.ts.net. Requests then reach FastAPI from 127.0.0.1 with X-Forwarded-For /
+  Tailscale-User-* headers: `is_local` treats those as remote.
+- "No connection to the lab PC" banner (network error or proxy 502/503/504) + grey controller pills;
+  polling refreshes immediately when the phone screen comes back on.
+- Telegram: pasted tokens normalised (spaces, quotes, "bot" prefix, whole URL), format checked, 401/403
+  hints; "Send test" asks to save first (the test uses saved settings).
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.
