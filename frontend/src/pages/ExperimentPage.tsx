@@ -5,6 +5,7 @@ import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling } from "../hoo
 import { baseOption, trendsOption, TREND_VARS } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
+import { DeleteExperiment } from "../components/DeleteExperiment";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 
@@ -50,6 +51,7 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
           </div>
           <StatusChip status={e.status} />
         </div>
+        <DeleteExperiment e={e} />
       </header>
     </>
   );
