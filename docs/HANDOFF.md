@@ -85,6 +85,9 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Service runs the real controllers (read-only). Update procedure (admin PowerShell): `git pull`;
   if dependencies changed: `Stop-Service fm2` first (the service locks `fm2-server.exe`), then `pip install -e .`;
   `npm.cmd run build` in `frontend`; `Start-Service fm2` / `Restart-Service fm2`.
+  **Now one command:** `deploy\windows\update.ps1` (pull, pip if deps changed, npm, build, restart, health
+  check; asks before restarting while an experiment records, `-Force` to skip). `grant-update-rights.ps1 -User <name>`
+  (admin, once) lets that account restart only fm2, so updates also work from a normal shell.
 
 ## Settings, notifications, backups (9 Nov 2026)
 - Settings page (mockup M3Settings): bioreactors (read-only), remote access (switch + allowed ranges and
