@@ -108,7 +108,7 @@ docs/                notes, including the controller inspection checklist
 
 1. ✅ Backend core: data model, simulator, acquisition, alerts, setpoint commands, analysis, XLSX export
 2. Web interface (React + TypeScript, Material 3 styling with the project palette), installable on phones
-   — in progress: Home and Fermentation screens done; Planning, Analysis, Settings next
+   — in progress: Home, Fermentation, Planning and Profiles done; Analysis, Settings and phone layout next
 3. Push notifications (app push / ntfy / Telegram)
 4. ez2-Control driver on the bioreactor PC (read first, then writes)
 5. Deployment: Windows service at boot, Tailscale remote access, automatic backups
