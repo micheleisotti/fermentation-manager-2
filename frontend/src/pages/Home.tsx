@@ -6,6 +6,51 @@ import { phAndRateOption } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import logo from "../assets/logo.png";
 
+/** Display names agreed for the lab: R1 is the left unit, R2 the right one. */
+export const REACTOR_LABEL: Record<string, string> = { R1: "R1-sx", R2: "R2-dx" };
+const label = (id: string) => REACTOR_LABEL[id] ?? id;
+
+const outOf = (v: number | null | undefined, lo: number | null | undefined, hi: number | null | undefined) =>
+  v != null && lo != null && hi != null && (v < lo || v > hi);
+
+/** A reactor with no experiment recording: live values only, nothing is stored. */
+function IdleCard({ r }: { r: LiveReactor }) {
+  const s = r.snapshot;
+  return (
+    <div className="card">
+      <div className="row between" style={{ alignItems: "flex-start" }}>
+        <div className="stack" style={{ gap: 4 }}>
+          <span className="kicker">Bioreactor {label(r.reactor_id)}</span>
+          <span style={{ fontSize: 18, fontWeight: 500 }}>No experiment</span>
+        </div>
+        <span className="pill" title="Live values from the controller; nothing is recorded until Start">
+          <span className="dot idle" />Idle · not recording
+        </span>
+      </div>
+      {!r.online ? (
+        <div className="banner alert" role="alert">
+          <Icon name="bell" color="#b30020" size={20} />
+          <span>Controller not reachable{r.error ? `: ${r.error}` : ""}</span>
+        </div>
+      ) : (
+        <div className="dv-grid">
+          <DataValue value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`}
+            color={outOf(s?.ph, s?.ph_low_limit, s?.ph_high_limit) ? "#b30020" : "#1d3786"} />
+          <DataValue value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`}
+            color={outOf(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) ? "#b30020" : undefined} />
+          <DataValue value={fmt(s?.stirrer, 0)} unit="rpm" label={`Stirrer · set ${fmt(s?.stirrer_setpoint, 0)}`} />
+          <DataValue value={fmt(s?.base_cumulative_ml, 2)} unit="mL" label="Base counter (reset before Start)" color="#1f7a63" />
+        </div>
+      )}
+      <div className="row between small muted">
+        <span>last reading{" "}
+          <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
+        <Link className="btn tonal" to="/experiments/new">Plan experiment</Link>
+      </div>
+    </div>
+  );
+}
+
 function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
   const exp = r.experiment!;
   const s = r.snapshot;
@@ -21,7 +66,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
     <div className="card">
       <div className="row between" style={{ alignItems: "flex-start" }}>
         <div className="stack" style={{ gap: 4 }}>
-          <span className="kicker">Bioreactor {r.reactor_id.slice(1)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
+          <span className="kicker">Bioreactor {label(r.reactor_id)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
           <span style={{ fontSize: 18, fontWeight: 500 }}><span className="mono">{exp.code}</span> · <i>L. plantarum</i> {exp.strain || "—"}</span>
         </div>
         <StatusChip status="fermenting" />
@@ -58,7 +103,8 @@ export function Home() {
   const [q, setQ] = useState("");
   const nav = useNavigate();
 
-  const running = (live.data ?? []).filter((r) => r.experiment);
+  const reactors = live.data ?? [];
+  const running = reactors.filter((r) => r.experiment);
   const list = (exps.data ?? []).filter((e) => (filter === "all" || e.status === filter) &&
     (!q || `${e.code} ${e.name} ${e.strain}`.toLowerCase().includes(q.toLowerCase())));
   const count = (k: Status | "all") => (exps.data ?? []).filter((e) => k === "all" || e.status === k).length;
@@ -70,7 +116,7 @@ export function Home() {
         <div className="row" style={{ gap: 8 }}>
           {(live.data ?? []).map((r) => (
             <span key={r.reactor_id} className="pill" title={r.error ?? ""}>
-              <span className={`dot ${r.online ? "ok" : "bad"}`} />Controller {r.reactor_id}
+              <span className={`dot ${r.online ? "ok" : "bad"}`} />Controller {label(r.reactor_id)}
             </span>
           ))}
           {live.error && <span className="pill"><span className="dot bad" />Server not reachable</span>}
@@ -78,14 +124,18 @@ export function Home() {
       </header>
 
       <section className="stack" aria-labelledby="running">
-        <h2 id="running">Running now</h2>
-        {running.length === 0 ? (
-          <div className="card"><span className="muted">No experiment is recording. Plan one with <b>New → Experiment</b>.</span></div>
+        <h2 id="running">Bioreactors</h2>
+        {reactors.length === 0 ? (
+          <div className="card"><span className="muted">Waiting for the server…</span></div>
         ) : (
           <div className="grid-cards">
-            {running.map((r) => <RunningCard key={r.reactor_id} r={r} events={events.data ?? []} />)}
+            {reactors.map((r) => r.experiment
+              ? <RunningCard key={r.reactor_id} r={r} events={events.data ?? []} />
+              : <IdleCard key={r.reactor_id} r={r} />)}
           </div>
         )}
+        {running.length === 0 && reactors.length > 0 &&
+          <span className="small muted">No experiment is recording. Plan one with <b>New → Experiment</b>.</span>}
       </section>
 
       <section className="stack" aria-labelledby="exp-title">

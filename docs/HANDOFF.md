@@ -13,13 +13,13 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   change setpoints from phone/home (e.g. lower T early morning).
 
 ## State of the code (github.com/micheleisotti/fermentation-manager-2)
-- `main`: backend core (merged PR #1).
-- Branch `frontend-shell`: React UI shell, Home, Fermentation screens.
-- Branch `planning` (on top of frontend-shell): Planning, Profiles screens, this file.
-  Merge frontend-shell first, then planning.
-- Backend: FastAPI + SQLite (WAL) + acquisition thread + alert engine + analysis;
-  23 pytest tests. Simulator driver works; **ez2-Control driver is a stub**
-  (`backend/fm2/drivers/ez2control.py`). Inspection checklist: `docs/controller-inspection.md`.
+- `main`: backend core, React UI (Home, Fermentation, Planning, Profiles).
+- Backend: FastAPI + SQLite (WAL) + acquisition thread + alert engine + analysis; 30 pytest tests.
+- **ez2-Control driver: read-only, working on both real controllers** (WebSocket protocol,
+  address map and verification in `docs/controller-inspection.md`). Writes not implemented:
+  setpoint commands are rejected with "read-only for now".
+- Reactor names: **R1-sx = 192.0.2.42, R2-dx = 192.0.2.41** (PC Ethernet 192.0.2.10/24, no gateway).
+- Home shows every reactor: running experiment card, or "Idle · not recording" card with live values.
 - Demo: `FM2_SIM_SPEED=300 FM2_SAMPLING_INTERVAL_S=2 fm2-server` + `python scripts/demo_seed.py`.
 - Approved mockups (Material 3, project palette): a Claude Design canvas
   "Fermentation Manager 2 — mockup" in Michele's artifacts.
@@ -47,21 +47,32 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   laptop opening a backup copy (to build). Never open the live DB from a synced folder.
 - Remote access via Tailscale (service). Backups to a dedicated cloud account or
   institutional folder, not Michele's personal OneDrive.
+- Sampling every **5 s** (`FM2_SAMPLING_INTERVAL_S`): the base volume is integrated by the
+  controller, so short additions are never lost; 5 s only adds time resolution.
+- Extra channels (dO2, CO2 valve/MFC, …): off by default, opt-in per experiment with their
+  own optional charts; main charts keep the existing drop-down. Not needed yet.
 - Deployment: code in `C:\FermentationManager`, data in `C:\ProgramData\FermentationManager\data`,
   Windows service (WinSW/NSSM or Task Scheduler) under a dedicated local account, starting at
   boot with no user logged in. Michele's own Windows account only for maintenance sessions;
   a generic local "Laboratorio" user for daily use (browser to http://localhost:8000).
 - Licence: undecided (CC BY-NC is not meant for software; options PolyForm NC, GPL/AGPL, MIT).
 
-## Next steps on the bioreactor PC
-1. Check/install Python 3.12 (all users, add to PATH), Node.js LTS, Git.
-2. Clone the repo into `C:\FermentationManager`, `pip install -e .`, `npm install && npm run build`
-   in `frontend/`, run with the simulator, open from a phone via Tailscale.
-3. With controllers connected: follow `docs/controller-inspection.md` (browser DevTools on
-   the controller web UI; check the manual for OPC UA / Modbus first). Implement read first,
-   then setpoint writes with read-back.
-4. Service + autostart, backup job, consultation mode.
+## Done on the bioreactor PC (9 Nov 2026)
+- Python 3.12 (all users), Node.js LTS, Git; repo in `C:\FermentationManager`, `.venv`, frontend built.
+- Tailscale (Michele's account for now; move to a dedicated account later, with backups),
+  "Run unattended", key expiry disabled; firewall rule: TCP 8000 only from 100.64.0.0/10.
+- Windows service `fm2` via WinSW (`deploy/windows/`), virtual account `NT SERVICE\fm2`,
+  data in `C:\ProgramData\FermentationManager\data`, logs in `…\logs`; survives reboot
+  with nobody logged in; reachable from the phone.
+- Service runs the real controllers (read-only). Update procedure: `git pull`,
+  `pip install -e .` if dependencies changed, `npm.cmd run build` in `frontend`, `Restart-Service fm2` (admin).
+
+## Next steps
+1. Setpoint writes with read-back (one at a time with Michele), then pH mode/PID from planning.
+2. Backup job, consultation mode on the laptop.
+3. Chart zoom that fetches full-resolution data for the selected window (browser gets ≤2000 points).
 
 ## Still to build in the UI
 Experiment analysis & export, analysis sessions, settings, dedicated phone layout
-(collapsible panels, full-screen landscape chart), push notifications.
+(collapsible panels, full-screen landscape chart), push notifications (need HTTPS:
+`tailscale serve`), PWA install, extra channels.

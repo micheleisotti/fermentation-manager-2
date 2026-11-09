@@ -1,0 +1,38 @@
+<!--
+  WinSW v2 configuration for the Fermentation Manager 2 Windows service.
+  This file must sit next to fm2-service.exe (same base name). Install with install-service.ps1.
+-->
+<service>
+  <id>fm2</id>
+  <name>Fermentation Manager 2</name>
+  <description>Acquisition, alerts and web interface for the ez2-Control bioreactors (http://localhost:8000).</description>
+
+  <executable>C:\FermentationManager\.venv\Scripts\fm2-server.exe</executable>
+  <workingdirectory>C:\ProgramData\FermentationManager</workingdirectory>
+
+  <env name="FM2_DATA_DIR" value="C:\ProgramData\FermentationManager\data"/>
+  <env name="FM2_PORT" value="8000"/>
+  <!-- Controller polling interval. The base volume is integrated by the controller, so
+       short additions are never lost; 5 s only improves time resolution (pH dynamics, pulses). -->
+  <env name="FM2_SAMPLING_INTERVAL_S" value="5"/>
+  <!-- Real controllers (read-only driver). R1-sx = 192.0.2.42, R2-dx = 192.0.2.41.
+       To go back to the simulator: set both drivers to "simulator" and restart the service. -->
+  <env name="FM2_R1_DRIVER" value="ez2control"/>
+  <env name="FM2_R1_ADDRESS" value="192.0.2.42"/>
+  <env name="FM2_R2_DRIVER" value="ez2control"/>
+  <env name="FM2_R2_ADDRESS" value="192.0.2.41"/>
+  <env name="PYTHONUNBUFFERED" value="1"/>
+
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <stoptimeout>20 sec</stoptimeout>
+
+  <logpath>C:\ProgramData\FermentationManager\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
