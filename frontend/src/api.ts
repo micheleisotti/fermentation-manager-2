@@ -6,21 +6,26 @@ export interface Experiment {
   id: number; code: string; name: string; planned_date: string | null; strain: string;
   medium_id: number | null; buffer_id: number | null; working_volume_ml: number | null;
   reactor_id: string; status: Status; profile_id: number | null;
-  parallel_run_code: string | null; parallel_partner_codes: string[];
+  parallel_run_code: string | null; parallel_partner_codes: string[]; channels: Channel[];
   notes: string; started_at: string | null; ended_at: string | null; updated_at: string;
 }
+
+export type Channel = "temperature" | "ph" | "stirrer" | "do2";
+export const DEFAULT_CHANNELS: Channel[] = ["temperature", "ph", "stirrer"];
 
 export interface Snapshot {
   ph: number | null; ph_setpoint: number | null; temperature: number | null; temperature_setpoint: number | null;
   stirrer: number | null; stirrer_setpoint: number | null; base_cumulative_ml: number | null; base_pump_pct: number | null;
   ph_low_limit: number | null; ph_high_limit: number | null;
   temperature_low_limit: number | null; temperature_high_limit: number | null;
+  extra?: Partial<Record<"do2" | "do2_setpoint" | "do2_low_limit" | "do2_high_limit" | "heating_pct" | "cooling_pct" |
+    "stirrer_out_rpm" | "n2_pct" | "air_pct", number>>;
 }
 
 export interface LiveReactor {
   reactor_id: string; online: boolean; last_reading_age_s: number | null; error: string | null;
   snapshot: Snapshot | null; ph_control: { mode: string | null; pid: Record<string, number> | null } | null;
-  experiment: { id: number; code: string; strain: string; t_h: number; parallel_run: string | null } | null;
+  experiment: { id: number; code: string; strain: string; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 
 export interface Named { id: number; name: string; description: string; archived: boolean }
@@ -33,7 +38,8 @@ export interface Profile {
 export interface PlanCheckRow { parameter: string; plan: unknown; controller: unknown; match: boolean; read_only?: boolean }
 export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[] }
 export type ExperimentDraft = { name: string; reactor_id: string; planned_date?: string | null; strain?: string;
-  medium_id?: number | null; buffer_id?: number | null; working_volume_ml?: number | null; profile_id?: number | null; notes?: string };
+  medium_id?: number | null; buffer_id?: number | null; working_volume_ml?: number | null; profile_id?: number | null; notes?: string;
+  channels?: Channel[] };
 
 export interface Readings { columns: string[]; rows: (number | null)[][] }
 export interface Measurement { id: number; variable_id: number; variable_name: string; sampled_at: string; t_h: number; value: number; unit: string; note: string; author: string }

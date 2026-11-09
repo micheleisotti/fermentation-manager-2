@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from .drivers.base import ControllerSnapshot
+from .drivers.base import CHANNELS, ControllerSnapshot
 
 LIMITED = {"ph": ("ph", "ph_low_limit", "ph_high_limit", "pH", ""),
            "temperature": ("temperature", "temperature_low_limit", "temperature_high_limit", "T", " °C")}
@@ -71,6 +71,8 @@ class _SetpointState:
 class ReactorAlertState:
     reactor_id: str
     params: AlertParams = field(default_factory=AlertParams)
+    # channels in use: rules for a channel switched off stay silent ("controller silent" always applies)
+    channels: frozenset = field(default_factory=lambda: frozenset(CHANNELS))
     _first: bool = True
     _last_ok: Optional[datetime] = None
     _silent_alerted: bool = False
@@ -110,9 +112,12 @@ class ReactorAlertState:
 
         events += self._external_changes(snap, first)
         for param in ("ph", "temperature"):
+            if param not in self.channels:
+                continue
             events += self._limit_rule(param, snap, now, first)
             events += self._setpoint_rule(param, snap, now, first)
-        events += self._finished_rule(snap, now)
+        if "ph" in self.channels:
+            events += self._finished_rule(snap, now)
         return events
 
     # -- rules ----------------------------------------------------------------------
@@ -120,7 +125,7 @@ class ReactorAlertState:
         out = []
         for param in ("ph", "temperature", "stirrer"):
             cur = snap.setpoint(param)
-            if cur is None:
+            if cur is None or param not in self.channels:
                 continue
             prev = self._observed_sp.get(param)
             self._observed_sp[param] = cur

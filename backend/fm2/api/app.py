@@ -26,6 +26,7 @@ from ..config import Settings
 import logging
 
 from ..db import add_missing_columns, make_engine, make_session_factory, session_scope
+from ..drivers.base import CHANNELS, DEFAULT_CHANNELS, EXTRA_FIELDS
 from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
 from ..models import (
     DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event,
@@ -136,9 +137,23 @@ def _next_code(db: Session, model, prefix: str) -> str:
     return f"{prefix}-{n:03d}"
 
 
+def channels_of(e: Experiment) -> list[str]:
+    return [c for c in CHANNELS if c in (e.channels or DEFAULT_CHANNELS)]
+
+
+def _check_channels(ch: Optional[list[str]]) -> Optional[list[str]]:
+    if ch is None:
+        return None
+    bad = [c for c in ch if c not in CHANNELS]
+    if bad:
+        raise HTTPException(422, f"Unknown channel(s) {bad}; allowed: {list(CHANNELS)}")
+    return [c for c in CHANNELS if c in ch]
+
+
 def _exp_out(e: Experiment) -> S.ExperimentOut:
     out = S.ExperimentOut.model_validate(e)
     out.status = e.status.value
+    out.channels = channels_of(e)
     if e.parallel_run:
         out.parallel_run_code = e.parallel_run.code
         out.parallel_partner_codes = [x.code for x in e.parallel_run.experiments if x.id != e.id]
@@ -266,6 +281,7 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
         raise HTTPException(422, f"Unknown reactor {body.reactor_id}")
     data = body.model_dump()
     data["planned_date"] = data["planned_date"] or now_of(request).date().isoformat()
+    data["channels"] = _check_channels(data.get("channels"))
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
     db.add(e)
     db.flush()
@@ -281,6 +297,8 @@ def get_experiment(exp_id: int, db: Session = Depends(get_db)):
 def patch_experiment(exp_id: int, body: S.ExperimentPatch, db: Session = Depends(get_db)):
     e = _404(db.get(Experiment, exp_id))
     data = body.model_dump(exclude_unset=True)
+    if "channels" in data:
+        data["channels"] = _check_channels(data["channels"])
     plan_only = {"reactor_id", "profile_id"}
     if e.status != ExperimentStatus.planned and plan_only & data.keys():
         raise HTTPException(409, "Reactor and profile can only be changed while planned")
@@ -316,9 +334,10 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
     driver = acq.drivers[e.reactor_id]
     ranges = request.app.state.settings.setpoint_ranges
     results = []
+    chans = channels_of(e)
     for param, value in (("ph", prof.ph_setpoint), ("temperature", prof.temperature_setpoint),
                          ("stirrer", prof.stirrer_setpoint)):
-        if value is None:
+        if value is None or param not in chans:
             continue
         try:
             cur = driver.read().setpoint(param)
@@ -335,7 +354,7 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
         results.append({"parameter": param, "status": status, "readback": rb})
     for param, lo, hi in (("ph", prof.ph_low_limit, prof.ph_high_limit),
                           ("temperature", prof.temperature_low_limit, prof.temperature_high_limit)):
-        if lo is None and hi is None:
+        if (lo is None and hi is None) or param not in chans:
             continue
         try:
             for r in commands.write_limits(driver, param, lo, hi):
@@ -347,7 +366,7 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
                                 **({"message": r.message} if r.status != "confirmed" else {})})
         except commands.CommandRejected as ex:
             results.append({"parameter": f"{param}_limits", "status": "error", "message": str(ex)})
-    if prof.ph_control_mode:
+    if prof.ph_control_mode and "ph" in chans:
         try:
             commands.load_ph_control(driver, PhControl(prof.ph_control_mode.value, prof.ph_pid), e.status.value)
             results.append({"parameter": "ph_control", "status": "confirmed"})
@@ -367,13 +386,16 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
         return {"reachable": False, "message": str(ex), "rows": []}
     rows = []
     p = e.profile
+    chans = channels_of(e)
     if p:
         for param, planned in (("ph", p.ph_setpoint), ("temperature", p.temperature_setpoint),
                                ("stirrer", p.stirrer_setpoint)):
+            if param not in chans:
+                continue
             ctrl = snap.setpoint(param)
             rows.append({"parameter": f"{param}_setpoint", "plan": planned, "controller": ctrl,
                          "match": planned is None or (ctrl is not None and abs(ctrl - planned) < 1e-6)})
-        if p.ph_control_mode:
+        if p.ph_control_mode and "ph" in chans:
             rows.append({"parameter": "ph_control_mode", "plan": p.ph_control_mode.value,
                          "controller": snap.ph_control.mode, "match": p.ph_control_mode.value == snap.ph_control.mode})
             plan_ctl = PhControl(p.ph_control_mode.value, p.ph_pid)
@@ -386,6 +408,8 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
                              "controller": {k: (snap.ph_control.pid or {}).get(k) for k in applicable},
                              "match": not param_diffs})
     for param in ("ph", "temperature"):
+        if param not in chans:
+            continue
         ctrl = [getattr(snap, f"{param}_low_limit"), getattr(snap, f"{param}_high_limit")]
         plan = [getattr(p, f"{param}_low_limit"), getattr(p, f"{param}_high_limit")] if p else [None, None]
         if plan == [None, None]:     # profile leaves the limits as they are on the controller
@@ -485,11 +509,14 @@ READING_FIELDS = ["t_h", "ph", "ph_setpoint", "temperature", "temperature_setpoi
 
 
 def _readings_df(db: Session, exp_id: int, since_h: float = 0.0) -> pd.DataFrame:
+    """Controller readings, one column per field; optional-channel values become columns too."""
     rows = db.execute(select(ControllerReading).where(ControllerReading.experiment_id == exp_id,
                                                       ControllerReading.t_h >= since_h)
                       .order_by(ControllerReading.t_h)).scalars().all()
-    df = pd.DataFrame([{f: getattr(r, f) for f in READING_FIELDS} | {"ts": r.ts} for r in rows])
-    return df if not df.empty else pd.DataFrame(columns=READING_FIELDS + ["ts"])
+    cols = READING_FIELDS + list(EXTRA_FIELDS)
+    df = pd.DataFrame([{f: getattr(r, f) for f in READING_FIELDS} | {k: (r.extra or {}).get(k) for k in EXTRA_FIELDS}
+                       | {"ts": r.ts} for r in rows])
+    return df if not df.empty else pd.DataFrame(columns=cols + ["ts"])
 
 
 @router.get("/experiments/{exp_id}/readings")
@@ -561,7 +588,7 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
             "snapshot": None if snap is None else {k: v for k, v in snap.__dict__.items() if k not in ("ts", "ph_control")},
             "ph_control": None if snap is None else snap.ph_control.__dict__,
             "experiment": None if exp is None else {"id": exp.id, "code": exp.code, "strain": exp.strain,
-                                                    "t_h": _t_h(exp, now),
+                                                    "t_h": _t_h(exp, now), "channels": channels_of(exp),
                                                     "parallel_run": exp.parallel_run.code if exp.parallel_run else None},
         })
     return out

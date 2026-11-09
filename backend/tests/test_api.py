@@ -228,3 +228,26 @@ def test_frontend_cache_headers(tmp_path):
         assert r.status_code == 200 and "app" in r.text and r.headers["cache-control"] == "no-cache"
     r = c.get("/assets/index-abc123.js")
     assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
+
+
+def test_channels(env):
+    c, clock, app, drivers = env
+    a = c.post("/api/experiments", json={"name": "default", "reactor_id": "R1"}).json()
+    assert a["channels"] == ["temperature", "ph", "stirrer"]
+    assert c.post("/api/experiments", json={"name": "bad", "reactor_id": "R2", "channels": ["ph", "foam"]}).status_code == 422
+    p = c.post("/api/profiles", json={"name": "p", "ph_setpoint": 6.1, "temperature_setpoint": 33.0}).json()
+    b = c.post("/api/experiments", json={"name": "ph only", "reactor_id": "R2", "profile_id": p["id"],
+                                        "channels": ["do2", "ph"]}).json()
+    assert b["channels"] == ["ph", "do2"]                         # canonical order
+    rows = [r["parameter"] for r in c.get(f"/api/experiments/{b['id']}/plan-check").json()["rows"]]
+    assert "temperature_setpoint" not in rows and "ph_setpoint" in rows
+    res = c.post(f"/api/experiments/{b['id']}/load-profile").json()["results"]
+    assert [r["parameter"] for r in res] == ["ph"]                 # T setpoint not written: channel off
+    assert drivers["R2"].read().temperature_setpoint == 30.0
+    c.post(f"/api/experiments/{b['id']}/start")
+    run_hours(app, clock, 0.5, step_min=5)
+    r = c.get(f"/api/experiments/{b['id']}/readings").json()
+    assert {"do2", "heating_pct", "n2_pct"} <= set(r["columns"])
+    i = r["columns"].index("do2")
+    assert all(row[i] is not None for row in r["rows"])            # all channels recorded anyway
+    assert c.patch(f"/api/experiments/{b['id']}", json={"channels": ["ph", "temperature"]}).json()["channels"] == ["temperature", "ph"]

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type EventItem, type Experiment, type LiveReactor, type Status } from "../api";
 import { usePolling, fmt, fmtDuration } from "../hooks";
-import { phAndRateOption } from "../components/charts";
+import { phAndRateOption, trendsOption, TREND_VARS } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import logo from "../assets/logo.png";
 
@@ -56,7 +56,12 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
   const s = r.snapshot;
   const readings = usePolling(() => api.readings(exp.id), 30000, [exp.id]);
   const analysis = usePolling(() => api.analysis(exp.id, 0.25), 60000, [exp.id]);
-  const option = useMemo(() => phAndRateOption(readings.data, analysis.data?.rate_bins), [readings.data, analysis.data]);
+  const ch = exp.channels ?? ["temperature", "ph", "stirrer"];
+  const option = useMemo(() => {
+    if (ch.includes("ph")) return phAndRateOption(readings.data, analysis.data?.rate_bins);
+    const first = TREND_VARS.find((v) => v.channel && ch.includes(v.channel) && ["temperature", "stirrer", "do2"].includes(v.key));
+    return first ? trendsOption(readings.data, first, null, { setpoints: true, limits: true, compact: true }) : {};
+  }, [readings.data, analysis.data, ch.join()]);
   const lastBin = analysis.data?.rate_bins.filter((b) => b.complete).at(-1);
   const alert = events.find((e) => e.experiment_id === exp.id && e.severity === "alert" &&
     Date.now() - new Date(e.at).getTime() < 30 * 60 * 1000);
@@ -72,12 +77,16 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
         <StatusChip status="fermenting" />
       </div>
       <div className="dv-grid">
-        <DataValue value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`} color="#1d3786" />
-        <DataValue value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`} color={tOut ? "#b30020" : undefined} />
-        <DataValue value={fmt(s?.base_cumulative_ml, 1)} unit="mL" label="Base, cumulative" color="#1f7a63" />
-        <DataValue value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label="Base rate, last 15 min" color="#1f7a63" />
+        {[
+          ch.includes("ph") && <DataValue key="ph" value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`} color="#1d3786" />,
+          ch.includes("temperature") && <DataValue key="t" value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`} color={tOut ? "#b30020" : undefined} />,
+          ch.includes("ph") && <DataValue key="cum" value={fmt(s?.base_cumulative_ml, 1)} unit="mL" label="Base, cumulative" color="#1f7a63" />,
+          ch.includes("ph") && <DataValue key="rate" value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label="Base rate, last 15 min" color="#1f7a63" />,
+          ch.includes("do2") && <DataValue key="do2" value={fmt(s?.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s?.extra?.do2_setpoint, 1)}`} />,
+          ch.includes("stirrer") && <DataValue key="st" value={fmt(s?.stirrer, 0)} unit="rpm" label={`Stirrer · set ${fmt(s?.stirrer_setpoint, 0)}`} />,
+        ].filter(Boolean).slice(0, 4)}
       </div>
-      <EChart option={option} className="chart mini" ariaLabel={`${r.reactor_id}: pH with setpoint and process limits, base rate bars`} />
+      <EChart option={option} className="chart mini" ariaLabel={`${r.reactor_id}: main channel since start`} />
       {alert && (
         <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={20} /><span>{alert.message}</span></div>
       )}

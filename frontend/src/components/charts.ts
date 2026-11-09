@@ -1,5 +1,5 @@
 import type { EChartsCoreOption } from "echarts/core";
-import { col, type RateBin, type Readings } from "../api";
+import { col, type Channel, type RateBin, type Readings } from "../api";
 import { axisBase, C } from "./ui";
 
 type Pair = [number, number | null];
@@ -50,17 +50,27 @@ export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undef
 }
 
 /** Main fermentation chart: two selectable variables, setpoints, limits, optional partner overlay. */
-export interface TrendVar { key: string; label: string; unit: string; setpoint?: string; limits?: [string, string]; digits: number }
+export interface TrendVar { key: string; label: string; unit: string; setpoint?: string; limits?: [string, string]; digits: number; channel?: Channel }
 export const TREND_VARS: TrendVar[] = [
-  { key: "ph", label: "pH", unit: "", setpoint: "ph_setpoint", limits: ["ph_low_limit", "ph_high_limit"], digits: 2 },
-  { key: "temperature", label: "Temperature", unit: "°C", setpoint: "temperature_setpoint", limits: ["temperature_low_limit", "temperature_high_limit"], digits: 1 },
-  { key: "stirrer", label: "Stirrer", unit: "rpm", setpoint: "stirrer_setpoint", digits: 0 },
-  { key: "base_cumulative_ml", label: "Base, cumulative", unit: "mL", digits: 1 },
-  { key: "base_pump_pct", label: "Base pump activation", unit: "%", digits: 0 },
+  { key: "ph", label: "pH", unit: "", setpoint: "ph_setpoint", limits: ["ph_low_limit", "ph_high_limit"], digits: 2, channel: "ph" },
+  { key: "temperature", label: "Temperature", unit: "°C", setpoint: "temperature_setpoint", limits: ["temperature_low_limit", "temperature_high_limit"], digits: 1, channel: "temperature" },
+  { key: "stirrer", label: "Stirrer", unit: "rpm", setpoint: "stirrer_setpoint", digits: 0, channel: "stirrer" },
+  { key: "do2", label: "dO2", unit: "%", setpoint: "do2_setpoint", limits: ["do2_low_limit", "do2_high_limit"], digits: 1, channel: "do2" },
+  { key: "base_cumulative_ml", label: "Base, cumulative", unit: "mL", digits: 1, channel: "ph" },
+  { key: "base_pump_pct", label: "Base pump activation", unit: "%", digits: 0, channel: "ph" },
+  { key: "heating_pct", label: "Heating", unit: "%", digits: 0, channel: "temperature" },
+  { key: "cooling_pct", label: "Cooling", unit: "%", digits: 0, channel: "temperature" },
+  { key: "stirrer_out_rpm", label: "Stirrer motor output", unit: "rpm", digits: 0, channel: "stirrer" },
+  { key: "n2_pct", label: "N2 valve", unit: "%", digits: 0, channel: "do2" },
+  { key: "air_pct", label: "Air valve", unit: "%", digits: 0, channel: "do2" },
 ];
 
+/** Variables of the channels in use (all when channels are unknown). */
+export const varsFor = (channels?: Channel[]) =>
+  TREND_VARS.filter((v) => !channels || !v.channel || channels.includes(v.channel));
+
 /** Pseudo-variable for the right axis: base rate bars per bin (needs opts.bins). */
-export const BASE_RATE_VAR: TrendVar = { key: "base_rate", label: "Base rate (15 min)", unit: "mL/min", digits: 3 };
+export const BASE_RATE_VAR: TrendVar = { key: "base_rate", label: "Base rate (15 min)", unit: "mL/min", digits: 3, channel: "ph" };
 
 export function trendsOption(r: Readings | undefined, left: TrendVar, right: TrendVar | null,
   opts: { setpoints: boolean; limits: boolean; partner?: Readings; partnerLabel?: string;
@@ -90,9 +100,9 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
     }
     yAxes.push({ ...axisBase, type: "value", name: `${v.label}${v.unit ? ` (${v.unit})` : ""}`, nameLocation: "middle",
       nameGap: 44, position: i ? "right" : "left",
-      ...(v.key === "ph" || v.key === "temperature"
+      ...(v.key === "ph" || v.key === "temperature" || v.key === "do2"
         ? range(col(r, v.key).concat(i === 0 && opts.partner ? col(opts.partner, v.key) : []),
-            opts.limits ? [lo, hi] : [], v.key === "ph" ? 0.4 : 4, v.key === "ph" ? 1 : 0)
+            opts.limits ? [lo, hi] : [], v.key === "ph" ? 0.4 : v.key === "do2" ? 10 : 4, v.key === "ph" ? 1 : 0)
         : { min: 0 }),
       axisLine: { show: true, lineStyle: { color: textColor, width: 1.5 } },
       axisLabel: { ...axisBase.axisLabel, color: textColor, formatter: (x: number) => x.toFixed(v.digits === 2 ? 2 : v.digits) } });

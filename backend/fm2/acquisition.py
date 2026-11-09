@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .alerts import AlertParams, ReactorAlertState
 from .db import session_scope
+from .drivers.base import DEFAULT_CHANNELS
 from .drivers.base import ControllerDriver, ControllerSnapshot, DriverError
 from .models import ControllerReading, Event, Experiment, ExperimentStatus
 
@@ -96,8 +97,10 @@ class Acquisition:
                     ph_low_limit=snap.ph_low_limit, ph_high_limit=snap.ph_high_limit,
                     temperature_low_limit=snap.temperature_low_limit,
                     temperature_high_limit=snap.temperature_high_limit,
+                    extra=dict(snap.extra) or None,
                 ))
             state = self.alert_state_for(exp.id, reactor_id)
+            state.channels = frozenset(exp.channels or DEFAULT_CHANNELS)   # may change during the run
             for ev in state.observe(snap, now):
                 row = Event(experiment_id=exp.id, reactor_id=reactor_id, kind=ev.kind,
                             severity=ev.severity, message=ev.message, t_h=t_h, at=now)

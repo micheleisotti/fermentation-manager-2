@@ -65,8 +65,10 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   institutional folder, not Michele's personal OneDrive.
 - Sampling every **5 s** (`FM2_SAMPLING_INTERVAL_S`): the base volume is integrated by the
   controller, so short additions are never lost; 5 s only adds time resolution.
-- Extra channels (dO2, CO2 valve/MFC, …): off by default, opt-in per experiment with their
-  own optional charts; main charts keep the existing drop-down. Not needed yet.
+- **Channels per experiment** (planning panel, editable during the run): Temperature (sensor +
+  heating/cooling %), pH (sensor + base pump: cumulative, mL/min, %), Stirrer (sensor + motor output),
+  dO2 (probe + N2/air valve %; notice: air not configured yet). Default T + pH + stirrer. A channel
+  switched off is hidden, raises no alerts and is not written by the profile, but is still recorded.
 - Deployment: code in `C:\FermentationManager`, data in `C:\ProgramData\FermentationManager\data`,
   Windows service (WinSW/NSSM or Task Scheduler) under a dedicated local account, starting at
   boot with no user logged in. Michele's own Windows account only for maintenance sessions;
