@@ -92,7 +92,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
         <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={20} /><span>{alert.message}</span></div>
       )}
       <div className="row between small muted">
-        <span>t = <span className="mono" style={{ color: "#22294d" }}>{fmtDuration(exp.t_h)}</span> · last reading{" "}
+        <span>t = <span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span> · last reading{" "}
           <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
         <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
       </div>
@@ -120,7 +120,7 @@ export function Home() {
   return (
     <>
       <header className="row between">
-        <h1 style={{ lineHeight: 0 }}><img src={logo} alt="Fermentation Manager 2.0" style={{ height: 64, width: "auto" }} /></h1>
+        <h1 style={{ lineHeight: 0 }}><img className="logo-img" src={logo} alt="Fermentation Manager 2.0" style={{ height: 64, width: "auto" }} /></h1>
         <div className="row" style={{ gap: 8 }}>
           {(live.data ?? []).map((r) => (
             <span key={r.reactor_id} className="pill" title={live.error ? "Unknown: no connection to the lab PC" : r.error ?? ""}>

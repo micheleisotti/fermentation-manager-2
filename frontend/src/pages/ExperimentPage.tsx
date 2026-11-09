@@ -35,7 +35,7 @@ function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment
         <Link to="/" className="btn icon text" aria-label="Back to home"><Icon name="back" /></Link>
         {e.parallel_run_code && partner && (
           <div className="row" role="tablist" aria-label="Reactor" style={{ gap: 8 }}>
-            <span className="small muted">Parallel run <b className="mono" style={{ color: "#22294d" }}>{e.parallel_run_code}</b></span>
+            <span className="small muted">Parallel run <b className="mono" style={{ color: "var(--ink)" }}>{e.parallel_run_code}</b></span>
             {[e, partner].sort((a, b) => a.reactor_id.localeCompare(b.reactor_id)).map((x) => (
               <button key={x.id} role="tab" aria-selected={x.id === e.id} className={`btn ${x.id === e.id ? "filled" : "outlined"}`}
                 style={{ height: 44 }} onClick={() => nav(`/experiments/${x.id}`)}>
@@ -182,7 +182,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 { p: "temperature", v: fmt(s.temperature, 1), u: "°C", l: `T · set ${fmt(s.temperature_setpoint, 1)} · limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} · heating ${fmt(s.extra?.heating_pct, 0)} % · cooling ${fmt(s.extra?.cooling_pct, 0)} %` },
                 { p: "stirrer", v: fmt(s.stirrer, 0), u: "rpm", l: `Stirrer · set ${fmt(s.stirrer_setpoint, 0)}` },
               ].filter((row) => ch.includes(row.p as Channel)).map((row) => (
-                <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
+                <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
                   <DataValue value={row.v} unit={row.u} label={row.l} color={row.c} />
                   <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
                     {row.p !== "stirrer" && <button className="btn text" onClick={() => setLimitsDialog(row.p)} aria-label={`Edit ${row.p} process limits`}>Limits</button>}
@@ -191,7 +191,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 </div>
               ))}
               {ch.includes("do2") && (
-                <div className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
+                <div className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
                   <DataValue value={fmt(s.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s.extra?.do2_setpoint, 1)} · N2 ${fmt(s.extra?.n2_pct, 0)} % · air ${fmt(s.extra?.air_pct, 0)} %`} />
                   <span className="xs muted">set on the controller</span>
                 </div>

@@ -86,7 +86,7 @@ export function ExperimentAnalysisPage() {
         <ModeTabs e={e} current="analysis" />
       </header>
 
-      {running && <div className="card tight small" style={{ background: "#fff8e1" }}>
+      {running && <div className="card tight small" style={{ background: "var(--warn-container)" }}>
         The experiment is still recording: parameters are provisional and are recalculated every minute.</div>}
       {an.error && <div className="card tight" style={{ color: "#b30020" }}>Analysis failed: {an.error}</div>}
       {!a ? <div className="muted">Calculating…</div> : (
@@ -337,7 +337,7 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
         options={[{ value: "zip", label: "CSV (zip)" }, { value: "xlsx", label: "XLSX · one sheet per block" }]} />
       <a className={`btn filled ${blocks.length ? "" : "disabled"}`} href={blocks.length ? dataUrl : undefined} download
         aria-disabled={!blocks.length} style={{ justifyContent: "center" }}>Export data</a>
-      <div style={{ height: 1, background: "#eef0f4" }} />
+      <div style={{ height: 1, background: "var(--surface-container)" }} />
       <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0, gap: 10 }}>
         <legend className="small muted" style={{ paddingBottom: 6 }}>Figure (the panels shown above)</legend>
         <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>

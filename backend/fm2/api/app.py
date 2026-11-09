@@ -1540,6 +1540,24 @@ def test_notification(request: Request):
     return {"sent": True, "channel": cfg["channel"]}
 
 
+@router.post("/settings/notifications/telegram-chats")
+def find_telegram_chats(body: dict, request: Request):
+    """Chats that wrote to the bot: helps to fill in the chat id (the token is the one typed, or the saved one)."""
+    from ..notify import telegram_chats
+    from ..services.app_settings import normalize_telegram_token, SECRET
+    tok = str(body.get("token") or "")
+    if not tok or tok == SECRET:
+        tok = request.app.state.app_settings.get("notifications")["telegram_token"]
+    tok = normalize_telegram_token(tok)
+    if not tok:
+        raise HTTPException(422, "Enter the bot token first.")
+    try:
+        chats = telegram_chats(tok)
+    except NotifyError as ex:
+        raise HTTPException(502, str(ex))
+    return {"chats": chats}
+
+
 @router.get("/backup/status")
 def backup_status(request: Request):
     return request.app.state.backups.status()

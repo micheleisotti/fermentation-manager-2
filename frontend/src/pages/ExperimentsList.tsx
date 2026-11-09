@@ -77,7 +77,7 @@ export function ExperimentsList() {
         <label className="field" style={{ minWidth: 280 }}>
           <span className="sr-only">Search experiments</span>
           <input type="search" placeholder="Search by code, name, strain, user or date" value={q} onChange={(e) => setQ(e.target.value)}
-            style={{ borderRadius: 24, background: "#eef0f4", border: 0 }} />
+            style={{ borderRadius: 24, background: "var(--surface-container)", border: 0 }} />
         </label>
       </div>
       <div className="row small" style={{ gap: 16 }}>
@@ -111,7 +111,7 @@ export function EndExperimentButton({ e, onDone, compact = false }: { e: Experim
   };
   return (
     <>
-      <button className="btn outlined" style={{ color: "#22294d", ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={() => setOpen(true)}>
+      <button className="btn outlined" style={{ color: "var(--ink)", ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={() => setOpen(true)}>
         <Icon name="stop" size={16} />End of experiment</button>
       {open && (
         <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) setOpen(false); }}>

@@ -40,7 +40,7 @@ export function Icon({ name, size = 22, color = "currentColor", width = 1.8 }: {
 export function DataValue({ value, unit, label, color }: { value: ReactNode; unit?: string; label: ReactNode; color?: string }) {
   return (
     <div className="dv">
-      <span className="v" style={{ color }}>{value}{unit && <span className="u">{unit}</span>}</span>
+      <span className="v" style={{ color: color && THEMED[color] ? THEMED[color] : color }}>{value}{unit && <span className="u">{unit}</span>}</span>
       <span className="l">{label}</span>
     </div>
   );
@@ -81,8 +81,14 @@ export function EChart({ option, className = "chart", ariaLabel }: { option: ech
     return () => { ro.disconnect(); inst.current?.dispose(); inst.current = null; };
   }, []);
   useEffect(() => { inst.current?.setOption(option, { replaceMerge: ["series", "yAxis", "xAxis", "grid"], lazyUpdate: true }); }, [option]);
-  return <div ref={el} className={className} role="img" aria-label={ariaLabel} />;
+  return <div ref={el} className={`${className} echart`} role="img" aria-label={ariaLabel} />;
 }
+
+/** Palette colours that must follow the theme when used as text (dark theme: lighter variants). */
+const THEMED: Record<string, string> = {
+  "#22294d": "var(--ink)", "#1d3786": "var(--data-blue-text, #1d3786)", "#1f7a63": "var(--data-green-text, #1f7a63)",
+  "#8a5a00": "var(--data-orange-text)", "#455e6f": "var(--data-slate-text, #455e6f)",
+};
 
 export const C = {
   blue: "#1d3786", orange: "#f9b112", orangeText: "#8a5a00", green: "#38b292", greenDark: "#1f7a63",

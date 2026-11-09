@@ -178,6 +178,15 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Telegram: pasted tokens normalised (spaces, quotes, "bot" prefix, whole URL), format checked, 401/403
   hints; "Send test" asks to save first (the test uses saved settings).
 
+## Appearance, licence, Telegram helper (10 Nov 2026)
+- Settings › Appearance (per device, localStorage `fm2.theme`): Light; Dim (dark teal-slate page derived
+  from the palette's data slate #455e6f, white cards and charts); Dark (dark cards, charts on light
+  panels so they read like the exports). Implemented with CSS variables (`html[data-theme]`).
+- Licence GPL-3.0-or-later: `LICENSE` (verbatim GPLv3), notice in README and Settings › Credits.
+  Credits order: DeFENS, University of Milan · DiSAFA, University of Turin.
+- Telegram: clearer labels (bot token vs your own chat id) and "Find it" (getUpdates via
+  POST /settings/notifications/telegram-chats, bots skipped).
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.

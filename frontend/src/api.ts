@@ -189,6 +189,8 @@ export const api = {
   createUser: (name: string, pin?: string) => req<{ user: UserInfo; token: string }>("/users", { method: "POST", body: JSON.stringify({ name, pin: pin || null }) }),
   updateUser: (id: number, body: { name?: string; pin?: string; archived?: boolean }) =>
     req<{ user: UserInfo; token: string | null }>(`/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  telegramChats: (token: string) => req<{ chats: { id: string; name: string; type: string }[] }>(
+    "/settings/notifications/telegram-chats", { method: "POST", body: JSON.stringify({ token }) }),
   sessions: () => req<SessionInfo[]>("/analysis-sessions"),
   session: (id: number) => req<SessionInfo>(`/analysis-sessions/${id}`),
   createSession: (body: SessionBody) => req<SessionInfo>("/analysis-sessions", { method: "POST", body: JSON.stringify(body) }),

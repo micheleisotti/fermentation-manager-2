@@ -181,3 +181,16 @@ def test_telegram_token_normalised_and_checked():
     import pytest as _pt
     with _pt.raises(SettingsError):
         _validate("notifications", {"channel": "telegram", "telegram_token": "not-a-token", "telegram_chat_id": "42"})
+
+
+def test_telegram_chats_skips_the_bot():
+    import httpx
+    from fm2.notify import telegram_chats
+    data = {"ok": True, "result": [
+        {"update_id": 1, "message": {"from": {"id": 555, "is_bot": False}, "chat": {"id": 555, "first_name": "Michele", "type": "private"}}},
+        {"update_id": 2, "my_chat_member": {"chat": {"id": -1001, "title": "Lab group", "type": "supergroup"}}},
+        {"update_id": 3, "message": {"chat": {"id": 555, "first_name": "Michele", "type": "private"}}},
+    ]}
+    client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=data)))
+    chats = telegram_chats("123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", client)
+    assert [c["id"] for c in chats] == ["555", "-1001"] and chats[0]["name"] == "Michele"

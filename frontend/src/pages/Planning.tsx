@@ -66,7 +66,7 @@ function PlanCheckTable({ rows }: { rows: PlanCheckRow[] }) {
                   <td className="mono" style={{ textAlign: "right" }}>{r.read_only ? "—" : show(r.plan)}</td>
                   <td className="mono" style={{ textAlign: "right" }}>{show(r.controller)}</td>
                   <td>
-                    <span className={`status ${r.read_only ? "planned" : r.match ? "completed" : "aborted"}`} style={r.match && !r.read_only ? { background: "#d3efe7", color: "#22294d" } : undefined}>
+                    <span className={`status ${r.read_only ? "planned" : r.match ? "completed" : "aborted"}`} style={r.match && !r.read_only ? { background: "#d3efe7", color: "var(--ink)" } : undefined}>
                       {r.read_only ? "From controller" : r.match ? "Match" : "Differs"}
                     </span>
                   </td>
@@ -311,7 +311,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
             </div>
             <span className="small muted">Logistics only: live monitoring side by side and R1 | R2 switching. It does not define conditions or replicates for analysis.</span>
             {existing?.parallel_run_code ? (
-              <span className="pill" style={{ alignSelf: "flex-start", background: "#e4e5e8", border: 0 }}>
+              <span className="pill" style={{ alignSelf: "flex-start", background: "var(--neutral-chip)", border: 0 }}>
                 <b className="mono">{existing.parallel_run_code}</b>&nbsp;with {existing.parallel_partner_codes.join(", ")}
               </span>
             ) : parallel && (

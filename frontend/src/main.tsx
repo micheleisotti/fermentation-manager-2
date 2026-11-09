@@ -8,6 +8,9 @@ import "@fontsource/ibm-plex-sans/400-italic.css";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import "./theme.css";
+import { applyTheme } from "./theme";
+
+applyTheme();
 import { Shell } from "./components/Shell";
 import { UserGate } from "./components/UserGate";
 import { Home } from "./pages/Home";

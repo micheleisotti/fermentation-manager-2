@@ -115,10 +115,22 @@ docs/                notes, including the controller inspection checklist
 
 ## Credits
 
-Developed by Michele Isotti — DiSAFA, University of Turin · DeFENS, University of Milan.
+Developed by Michele Isotti — DeFENS, University of Milan · DiSAFA, University of Turin.
 Kinetic analysis ported from Fermentation Manager v1.
 
 ## License
 
-To be decided before the first public release (see discussion: CC licences are not
-designed for software; options include PolyForm Noncommercial, GPL/AGPL or MIT).
+Copyright (C) 2026 Michele Isotti
+
+This program is free software: you can redistribute it and/or modify it under the terms of
+the GNU General Public License as published by the Free Software Foundation, either version 3
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with this program
+(file `LICENSE`). If not, see <https://www.gnu.org/licenses/>.
+
+SPDX-License-Identifier: GPL-3.0-or-later
