@@ -6,7 +6,8 @@ import pytest
 from websockets.sync.server import serve
 
 from fm2.drivers import DriverError, make_driver
-from fm2.drivers.ez2control import READ_MAP, build_read_request, parse_frame, to_float
+from fm2.drivers.ez2control import (READ_MAP, SETPOINT_ADDRESSES, build_read_request, build_write_request,
+                                    parse_frame, to_float)
 
 # Values read from R2-dx on 2026-11-09 (no culture, probes disconnected), plus a pump run.
 R2_VALUES = {
@@ -16,6 +17,10 @@ R2_VALUES = {
     "1.15.13": "0", "1.13.13": "400",
     "2.1.29": "Alkali", "2.13.29": "1.61", "2.12.29": "4.80", "2.4.29": "4.80",
     "1.15.3": "NO CONT", "1.4.3": "1.0E+05",
+    # sensor range (max, min) and display decimals, used to validate writes
+    "1.6.0": "14.00", "1.7.0": "0.00", "1.58.0": "2",
+    "1.6.2": "60.0", "1.7.2": "0.0", "1.58.2": "1",
+    "1.6.13": "2000", "1.7.13": "0", "1.58.13": "0",
 }
 
 
@@ -29,6 +34,7 @@ class FakeController:
         self.drop_after_answer = drop_after_answer
         self.connections = 0
         self.requests: list[str] = []
+        self.writes: list[tuple[str, str]] = []
         self.server = serve(self._handler, "127.0.0.1", 0)
         self.port = self.server.socket.getsockname()[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -41,7 +47,13 @@ class FakeController:
             self.requests.extend(lines)
             answers = []
             for l in lines:
-                assert l.startswith("J") and l.endswith("S"), f"non-read request sent: {l!r}"
+                assert l.startswith("J"), f"malformed request: {l!r}"
+                if "s" in l:                       # write: J<addr>s<value>
+                    addr, val = l[1:].split("s", 1)
+                    self.writes.append((addr, val))
+                    self.values[addr] = val
+                    continue
+                assert l.endswith("S"), f"unexpected request: {l!r}"
                 addr = l[1:-1]
                 if addr in self.values:
                     answers.append(f"J{addr}A{self.values[addr]}\r")
@@ -88,15 +100,64 @@ def test_read_snapshot(fake):
     drv.close()
 
 
-def test_never_writes(fake):
+def test_read_never_writes(fake):
     drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
     drv.read()
-    with pytest.raises(DriverError):
-        drv.write_setpoint("ph", 6.5)
-    with pytest.raises(DriverError):
-        drv.write_ph_control(None)
-    assert fake.requests and all(r.endswith("S") for r in fake.requests)
+    drv.read()
+    assert fake.requests and all(r.endswith("S") and "s" not in r for r in fake.requests)
     assert set(r[1:-1] for r in fake.requests) == set(READ_MAP.values())
+    assert fake.writes == []
+    with pytest.raises(DriverError):
+        drv.write_ph_control(None)          # pH mode/PID stay controller-only for now
+    assert fake.writes == []
+    drv.close()
+
+
+def test_write_setpoints(fake):
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    drv.write_setpoint("ph", 6.3)
+    drv.write_setpoint("temperature", 30)
+    drv.write_setpoint("stirrer", 250)
+    assert fake.writes == [("1.13.0", "6.30"), ("1.13.2", "30.0"), ("1.13.13", "250")]
+    snap = drv.read()
+    assert (snap.ph_setpoint, snap.temperature_setpoint, snap.stirrer_setpoint) == (6.3, 30.0, 250.0)
+    drv.close()
+
+
+@pytest.mark.parametrize("parameter,value", [
+    ("ph", 14.5),            # above the controller's range
+    ("temperature", -1),     # below
+    ("ph", 6.255),           # more decimals than the controller accepts
+    ("stirrer", 250.5),
+    ("ph", float("nan")),
+    ("foam", 1.0),           # not a setpoint we may write
+])
+def test_write_rejected_without_sending(fake, parameter, value):
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    with pytest.raises(DriverError):
+        drv.write_setpoint(parameter, value)
+    assert fake.writes == []
+    drv.close()
+
+
+def test_write_request_allowlist():
+    assert SETPOINT_ADDRESSES == {"1.13.0", "1.13.2", "1.13.13"}
+    assert build_write_request("1.13.0", "6.30") == b"J1.13.0s6.30\r"
+    for addr in ("2.13.29", "2.24.29", "1.30.0", "3.0.0", "1.14.0"):   # dose counter, actuator, calibration, PID, loop on
+        with pytest.raises(DriverError):
+            build_write_request(addr, "0")
+    with pytest.raises(DriverError):
+        build_write_request("1.13.0", "6.3\rJ2.13.29s0")      # no injection of a second command
+
+
+def test_setpoint_command_end_to_end(fake):
+    """services/commands.py with the real driver: validate, write, read back, confirm."""
+    from fm2.config import settings
+    from fm2.services.commands import write_setpoint as command
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    res = command(drv, "ph", 6.5, settings.setpoint_ranges)
+    assert res.status == "confirmed" and res.old_value == 6.2 and res.readback_value == 6.5
+    assert fake.writes == [("1.13.0", "6.50")]
     drv.close()
 
 

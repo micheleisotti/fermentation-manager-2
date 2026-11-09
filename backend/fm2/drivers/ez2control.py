@@ -9,9 +9,11 @@ see docs/controller-inspection.md):
 - Read request:   "J<address>S\\r"        e.g. b"J1.15.0S\\r"
   Answer:         "J<address>A<value>\\r" e.g. b"J1.15.0A6.90\\r"
   Several requests may share one frame; answers may arrive split over several frames.
-- Write request:  "J<address>s<value>\\r" (lowercase s).  NOT USED by this driver:
-  this module must never build such a string until setpoint writes are implemented
-  and approved (see base.py for what may ever be written).
+- Write request:  "J<address>s<value>\\r" (lowercase s), value as plain text, exactly as the
+  web UI's setpoint dialog sends it (rightpanelsensors.js -> controlData.setpoint()).
+  This driver writes ONLY the three setpoint addresses in SETPOINT_ADDRESSES; every write
+  goes through _write_checked(), which validates against the controller's own range and
+  decimals and waits for the controller to report the new value.
 - No authentication is needed for reading.
 
 Addresses used here are identical on R1-sx (192.0.2.42) and R2-dx (192.0.2.41).
@@ -56,6 +58,19 @@ READ_MAP: dict[str, str] = {
     "base_flow":                f"2.12.{BASE_ACTUATOR}",
     "base_factor":              f"2.4.{BASE_ACTUATOR}",
 }
+
+# The only addresses this driver may ever write.
+SETPOINT_SENSORS = {"ph": PH, "temperature": TEMPERATURE, "stirrer": STIRRER}
+SETPOINT_ADDRESSES = frozenset(f"1.13.{i}" for i in SETPOINT_SENSORS.values())
+
+
+def build_write_request(address: str, text: str) -> bytes:
+    if address not in SETPOINT_ADDRESSES:
+        raise DriverError(f"refusing to write {address}: not a setpoint address")
+    if not text or any(c in text for c in "\rJSs"):
+        raise DriverError(f"refusing to write malformed value {text!r}")
+    return f"J{address}s{text}\r".encode("ascii")
+
 
 # sensorData.type() for a loop, as listed in the web UI (controllersetupstandard.js)
 CONTROL_TYPES = {0: "pid", 1: "adaptive", 2: "external", 3: "level", 4: "flow", 5: "p-adaptive", 6: "tcusp"}
@@ -125,7 +140,7 @@ class Ez2ControlDriver(ControllerDriver):
     """Reads one ez2-Control over its WebSocket. Keeps one connection open, reconnects on failure."""
 
     capabilities = DriverCapabilities(read_values=True, read_limits=True,
-                                      write_setpoints=False, write_ph_control=False)
+                                      write_setpoints=True, write_ph_control=False)
 
     def __init__(self, reactor_id: str, address: str, timeout_s: float = 5.0,
                  connect: Optional[Callable] = None, clock: Optional[Callable[[], datetime]] = None):
@@ -234,7 +249,49 @@ class Ez2ControlDriver(ControllerDriver):
         return snapshot_from_values(values, self._clock())
 
     def write_setpoint(self, parameter: str, value: float) -> None:
-        raise DriverError("ez2-Control driver is read-only for now: change setpoints on the controller")
+        """
+        Write one setpoint (pH, temperature, stirrer). Validates against the controller's own
+        sensor range and display decimals, then waits until the controller reports the new
+        value. services/commands.py adds the agreed ranges/max step and the read-back record.
+        """
+        import math
+        import time
+        if parameter not in SETPOINT_SENSORS:
+            raise DriverError(f"unknown setpoint {parameter!r}")
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise DriverError(f"invalid value {value!r}")
+        sensor = SETPOINT_SENSORS[parameter]
+        address = f"1.13.{sensor}"
+        with self._lock:
+            info = self._query({"max": f"1.6.{sensor}", "min": f"1.7.{sensor}", "decimals": f"1.58.{sensor}"})
+            lo, hi, dec = to_float(info.get("min")), to_float(info.get("max")), to_float(info.get("decimals"))
+            if lo is None or hi is None or dec is None:
+                raise DriverError(f"{parameter}: cannot read the controller's range/decimals, not writing")
+            dec = int(dec)
+            if not (lo <= value <= hi):
+                raise DriverError(f"{parameter} {value:g} outside the controller's range {lo:g}–{hi:g}")
+            text = f"{value:.{dec}f}"
+            if abs(float(text) - value) > 10 ** (-dec) / 1000:
+                raise DriverError(f"{parameter}: the controller accepts {dec} decimal(s); {value!r} would become {text}")
+            frame = build_write_request(address, text)
+            try:
+                self._open().send(frame)
+            except Exception:
+                self._drop()          # stale connection: one retry on a fresh one
+                try:
+                    self._open().send(frame)
+                except Exception as e:
+                    self._drop()
+                    raise DriverError(f"{self.url}: write failed: {e}") from e
+            log.info("%s: setpoint %s -> %s sent", self.reactor_id, parameter, text)
+            deadline = time.monotonic() + 3.0
+            while True:
+                got = to_float(self._query({"sp": address}).get("sp"))
+                if got is not None and abs(got - float(text)) < 10 ** (-dec) / 2:
+                    return
+                if time.monotonic() > deadline:
+                    return            # commands.py reports the mismatch from its own read-back
+                time.sleep(0.25)
 
     def write_ph_control(self, control: PhControl) -> None:
         raise DriverError("ez2-Control driver is read-only for now: set pH control on the controller")

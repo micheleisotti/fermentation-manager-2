@@ -21,7 +21,9 @@ Ethernet adapter has the static address 192.0.2.10/24 **without a gateway**; Wi-
   - read: `J<address>S\r` → answer `J<address>A<value>\r` (several per frame allowed;
     answers may be split over frames). Values like `1.0E+05` contain an `E`: a line is
     data if its `A` precedes any `E`.
-  - write: `J<address>s<value>\r` (lowercase `s`) — **not used yet**.
+  - write: `J<address>s<value>\r` (lowercase `s`), value as plain text, as the web UI's
+    setpoint dialog does (`rightpanelsensors.js` → `controlData.setpoint()`; the UI only
+    checks min ≤ value ≤ max of the sensor). FM2 writes **only** `1.13.0/2/13` (setpoints).
   - The controller **drops idle connections after a few seconds without a close frame**.
     The driver reconnects and retries once (cost ≈ 50–200 ms).
 - **HTTP history** `/Data/history.csv?<sensor>|<divider>`: ~500 lines
@@ -58,6 +60,7 @@ Pump activation % = `2.12.29 / 2.4.29 × 100`.
 ## Still open
 - [ ] Step size of the base counter under automatic pH control (pulses every 10 s):
       visible at the first real fermentation.
-- [ ] Writes (setpoints, then pH control mode/PID from planning): capture the web UI's
-      `s` requests, confirm on the display and by read-back, one at a time with Michele.
+- [ ] Setpoint writes: implemented (allow-list, controller range/decimals check, wait for
+      read-back); **to be confirmed live** on the controller display, one at a time with Michele.
+- [ ] pH control mode / PID from planning: not implemented (controller only).
 - [ ] Never automate actuator start/stop, dose counter reset or calibration.
