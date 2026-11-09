@@ -30,6 +30,22 @@ export function usePolling<T>(load: () => Promise<T>, ms: number, deps: unknown[
   return { data, error, refresh };
 }
 
+/** True while the CSS media query matches (e.g. "(max-width: 760px)"). */
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const on = () => setMatches(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [query]);
+  return matches;
+}
+
+/** Phones in portrait (narrow) or landscape (short touch screen). */
+export const PHONE_QUERY = "(max-width: 760px), (max-height: 500px) and (pointer: coarse)";
+
 export function fmt(v: number | null | undefined, digits = 2): string {
   return v === null || v === undefined || Number.isNaN(v) ? "—" : v.toFixed(digits);
 }

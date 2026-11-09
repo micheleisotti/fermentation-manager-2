@@ -24,6 +24,8 @@ const PATHS: Record<string, string> = {
   expand: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
   drop: "M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z",
   sliders: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M14 4v4M8 10v4M16 16v4",
+  chevron: "m6 9 6 6 6-6",
+  close: "M6 6l12 12M18 6 6 18",
 };
 
 export function Icon({ name, size = 22, color = "currentColor", width = 1.8 }: { name: string; size?: number; color?: string; width?: number }) {

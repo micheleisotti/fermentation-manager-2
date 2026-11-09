@@ -1,22 +1,25 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type Experiment, type Readings } from "../api";
-import { fmt, fmtDuration, usePolling } from "../hooks";
+import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling } from "../hooks";
 import { baseOption, trendsOption, TREND_VARS } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
 import { Planning } from "./Planning";
+import { PhoneFermentation } from "./PhoneExperiment";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
   const exp = usePolling(() => api.experiment(id), 15000, [id]);
   const all = usePolling(() => api.experiments(), 60000);
+  const phone = useMediaQuery(PHONE_QUERY);
   if (exp.error) return <div className="card">Experiment not found: {exp.error}</div>;
   if (!exp.data) return <div className="muted">Loading…</div>;
   const e = exp.data;
   const partner = (all.data ?? []).find((x) => e.parallel_partner_codes.includes(x.code));
-  return e.status === "planned"
-    ? <Planning key={e.id} existing={e} onChange={exp.refresh} />
+  if (e.status === "planned") return <Planning key={e.id} existing={e} onChange={exp.refresh} />;
+  return phone
+    ? <PhoneFermentation key={e.id} e={e} partner={partner} />
     : <FermentationView e={e} partner={partner} onChange={exp.refresh} />;
 }
 

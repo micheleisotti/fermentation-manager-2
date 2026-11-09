@@ -59,20 +59,34 @@ export const TREND_VARS: TrendVar[] = [
   { key: "base_pump_pct", label: "Base pump activation", unit: "%", digits: 0 },
 ];
 
+/** Pseudo-variable for the right axis: base rate bars per bin (needs opts.bins). */
+export const BASE_RATE_VAR: TrendVar = { key: "base_rate", label: "Base rate (15 min)", unit: "mL/min", digits: 3 };
+
 export function trendsOption(r: Readings | undefined, left: TrendVar, right: TrendVar | null,
-  opts: { setpoints: boolean; limits: boolean; partner?: Readings; partnerLabel?: string }): EChartsCoreOption {
-  const colors = [C.blue, C.orange];
+  opts: { setpoints: boolean; limits: boolean; partner?: Readings; partnerLabel?: string;
+    bins?: RateBin[]; xRange?: { min?: number; max?: number }; compact?: boolean }): EChartsCoreOption {
+  const colors = [C.blue, opts.compact ? C.greenDark : C.orange];
   const series: object[] = [];
   const yAxes: object[] = [];
   [left, right].forEach((v, i) => {
     if (!v) return;
     const color = colors[i];
-    const textColor = i === 0 ? C.blue : C.orangeText;
+    const textColor = i === 0 ? C.blue : opts.compact ? C.greenDark : C.orangeText;
+    if (v.key === "base_rate") {      // bars from the rate bins, on the right axis
+      yAxes.push({ ...axisBase, type: "value", min: 0, name: `${v.label} (${v.unit})`, nameLocation: "middle", nameGap: 44,
+        position: "right", axisLine: { show: true, lineStyle: { color: C.greenDark, width: 1.5 } },
+        axisLabel: { ...axisBase.axisLabel, color: C.greenDark } });
+      series.push({ type: "bar", name: v.label, yAxisIndex: i, barWidth: "60%",
+        data: (opts.bins ?? []).map((b) => ({ value: [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min],
+          itemStyle: { color: C.green, opacity: b.complete ? 0.55 : 0.25 } })) });
+      return;
+    }
     const marks: object[] = [];
     const lo = v.limits ? lastVal(col(r, v.limits[0])) : null, hi = v.limits ? lastVal(col(r, v.limits[1])) : null;
     if (opts.limits && v.limits) {
-      if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color: C.alert, type: "dotted", opacity: i ? 0.6 : 1 }, label: { formatter: `${v.label} low ${lo}`, color: C.alert, fontSize: 10, position: "insideEndTop" } });
-      if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color: C.alert, type: "dotted", opacity: i ? 0.6 : 1 }, label: { formatter: `${v.label} high ${hi}`, color: C.alert, fontSize: 10, position: "insideEndTop" } });
+      const label = (t: string) => (opts.compact ? { show: false } : { formatter: t, color: C.alert, fontSize: 10, position: "insideEndTop" });
+      if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color: C.alert, type: "dotted", opacity: i ? 0.6 : 1 }, label: label(`${v.label} low ${lo}`) });
+      if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color: C.alert, type: "dotted", opacity: i ? 0.6 : 1 }, label: label(`${v.label} high ${hi}`) });
     }
     yAxes.push({ ...axisBase, type: "value", name: `${v.label}${v.unit ? ` (${v.unit})` : ""}`, nameLocation: "middle",
       nameGap: 44, position: i ? "right" : "left",
@@ -95,11 +109,17 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
   });
   return {
     animation: false,
-    grid: { left: 64, right: right ? 64 : 24, top: 28, bottom: 64 },
-    legend: { bottom: 0, textStyle: { fontSize: 12 }, icon: "roundRect" },
-    tooltip: { trigger: "axis" },
-    dataZoom: [{ type: "inside" }],
-    xAxis: { ...axisBase, type: "value", min: 0, name: "Time since start (h)", nameLocation: "middle", nameGap: 26,
+    grid: opts.compact ? { left: 56, right: right ? 60 : 16, top: 12, bottom: 40 } : { left: 64, right: right ? 64 : 24, top: 28, bottom: 64 },
+    legend: opts.compact ? { show: false } : { bottom: 0, textStyle: { fontSize: 12 }, icon: "roundRect" },
+    tooltip: { trigger: "axis", confine: true,
+      formatter: (ps: { axisValue: number; marker: string; seriesName: string; value: [number, number | null] }[]) => {
+        const num = (x: number | null) => (x == null ? "—" : Number(x).toFixed(3).replace(/\.?0+$/, ""));
+        const t = ps[0]?.axisValue;
+        return [`t = ${t == null ? "—" : Number(t).toFixed(2)} h`,
+          ...ps.map((q) => `${q.marker}${q.seriesName} <b>${num(Array.isArray(q.value) ? q.value[1] : (q.value as number | null))}</b>`)].join("<br/>");
+      } },
+    dataZoom: [{ type: "inside", filterMode: "none" }],
+    xAxis: { ...axisBase, type: "value", min: opts.xRange?.min ?? 0, max: opts.xRange?.max, name: "Time since start (h)", nameLocation: "middle", nameGap: 26,
       axisLine: { lineStyle: { color: "#74777f" } }, splitLine: { show: true, lineStyle: { color: C.grid } } },
     yAxis: yAxes,
     series,
