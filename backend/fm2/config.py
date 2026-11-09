@@ -35,6 +35,8 @@ class SetpointRange:
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", str(Path.cwd() / "data"))))
+    frontend_dist: Path = field(default_factory=lambda: Path(_env(
+        "FRONTEND_DIST", str(Path(__file__).resolve().parents[2] / "frontend" / "dist"))))
     sampling_interval_s: float = float(_env("SAMPLING_INTERVAL_S", "30"))
     reactors: tuple[ReactorConfig, ...] = (
         ReactorConfig("R1", _env("R1_DRIVER", "simulator"), _env("R1_ADDRESS", "")),

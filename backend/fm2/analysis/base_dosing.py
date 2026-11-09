@@ -43,7 +43,8 @@ def rate_bins(t_h, cum_ml, bin_h: float = 0.25, max_gap_h: Optional[float] = Non
     o = np.argsort(t)
     t, c = t[o], c[o]
     c = np.maximum.accumulate(c)  # a counter never decreases; guards against read glitches
-    max_gap = max_gap_h if max_gap_h is not None else bin_h / 3
+    # A gap is "too long" relative to both the bin and the sampling interval actually used.
+    max_gap = max_gap_h if max_gap_h is not None else max(bin_h / 3, 3 * float(np.median(np.diff(t))))
     t_end = t[-1] if t_now_h is None else max(t_now_h, t[-1])
     out: list[RateBin] = []
     start = float(np.floor(t[0] / bin_h) * bin_h)

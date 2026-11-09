@@ -2,9 +2,10 @@ from .base import ControllerDriver, ControllerSnapshot, DriverCapabilities, Driv
 from .simulator import SimulatedController
 
 
-def make_driver(kind: str, reactor_id: str, address: str = "") -> ControllerDriver:
+def make_driver(kind: str, reactor_id: str, address: str = "", clock=None) -> ControllerDriver:
     if kind == "simulator":
-        return SimulatedController(reactor_id)
+        params = {"R2": {"lag_h": 5.5, "mu_max": 0.7}}.get(reactor_id, {})
+        return SimulatedController(reactor_id, **({"clock": clock} if clock else {}), **params)
     if kind == "ez2control":
         from .ez2control import Ez2ControlDriver
         return Ez2ControlDriver(reactor_id, address)
