@@ -24,7 +24,11 @@ from ..alerts import AlertParams
 from ..analysis import base_dosing, kinetics, stats
 from ..config import Settings
 import logging
+from pathlib import Path
 
+from ..backup import BackupError, BackupManager
+from ..notify import Notifier, NotifyError, send as notify_send
+from ..services.app_settings import AppSettings, SettingsError
 from ..db import add_missing_columns, make_engine, make_session_factory, session_scope
 from ..drivers.base import CHANNELS, DEFAULT_CHANNELS, EXTRA_FIELDS
 from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
@@ -44,7 +48,8 @@ def _utcnow() -> datetime:
 def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]] = None,
                clock: Callable[[], datetime] = _utcnow, start_acquisition: bool = True,
                db_path=None) -> FastAPI:
-    engine = make_engine(db_path or settings.db_path)
+    db_file = Path(db_path or settings.db_path)
+    engine = make_engine(db_file)
     Base.metadata.create_all(engine)
     for c in add_missing_columns(engine, Base):
         log.info("database: added column %s", c)
@@ -54,21 +59,31 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
             s.add_all(Variable(name=n, unit=u, category=c) for n, u, c in DEFAULT_VARIABLES)
 
     drivers = drivers or {r.reactor_id: make_driver(r.driver, r.reactor_id, r.address) for r in settings.reactors}
-    acq = Acquisition(drivers, sessions, settings.sampling_interval_s, clock=clock, alert_params=AlertParams(
-        out_of_limits_after_s=settings.alert_out_of_limits_after_s, rearm_s=settings.alert_out_of_limits_rearm_s,
-        ph_tolerance=settings.alert_ph_tolerance, temp_tolerance=settings.alert_temp_tolerance,
-        hold_s=settings.alert_setpoint_hold_s, silent_after_s=settings.alert_silent_after_s,
-        finished_fraction=settings.alert_finished_fraction_of_peak, finished_hold_s=settings.alert_finished_hold_s))
+    app_settings = AppSettings(sessions)
+    notifier = Notifier(app_settings)
+    acq = Acquisition(drivers, sessions, settings.sampling_interval_s, clock=clock,
+                      alert_params=app_settings.alert_params(), notifier=notifier)
+    backups = BackupManager(db_file, app_settings)
+
+    def _apply(section: str, _value: dict) -> None:
+        if section == "alerts":          # new thresholds apply to running experiments at once
+            acq.alert_params = app_settings.alert_params()
+            for st in acq.alert_states.values():
+                st.params = acq.alert_params
+    app_settings.on_change(_apply)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if start_acquisition:
             acq.start()
+            backups.start()
         yield
         acq.stop()
+        backups.stop()
 
     app = FastAPI(title="Fermentation Manager", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.sessions, app.state.acq, app.state.clock = settings, sessions, acq, clock
+    app.state.app_settings, app.state.notifier, app.state.backups = app_settings, notifier, backups
     app.include_router(router, prefix="/api")
     _mount_frontend(app, settings)
     return app
@@ -332,7 +347,7 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
     prof = _404(e.profile, "No profile selected")
     acq: Acquisition = request.app.state.acq
     driver = acq.drivers[e.reactor_id]
-    ranges = request.app.state.settings.setpoint_ranges
+    ranges = request.app.state.app_settings.setpoint_ranges()
     results = []
     chans = channels_of(e)
     for param, value in (("ph", prof.ph_setpoint), ("temperature", prof.temperature_setpoint),
@@ -462,7 +477,12 @@ def _close(exp_id: int, request: Request, db: Session, status: ExperimentStatus)
 
 @router.post("/experiments/{exp_id}/end", response_model=S.ExperimentOut)
 def end_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
-    return _close(exp_id, request, db, ExperimentStatus.completed)
+    out = _close(exp_id, request, db, ExperimentStatus.completed)
+    db.commit()
+    cfg = request.app.state.app_settings.get("backup")
+    if cfg["enabled"] and cfg["on_end_of_production"] and cfg["destination"]:
+        request.app.state.backups.run_in_background(f"end of production {out.code}")
+    return out
 
 
 @router.post("/experiments/{exp_id}/abort", response_model=S.ExperimentOut)
@@ -601,9 +621,10 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
                                              Experiment.status == ExperimentStatus.fermenting))
     alert_state = acq.alert_state_for(exp.id, reactor_id) if exp else None
+    _check_remote(request, body.origin)
     try:
         res = commands.write_setpoint(driver, body.parameter, body.value,
-                                      request.app.state.settings.setpoint_ranges, alert_state)
+                                      request.app.state.app_settings.setpoint_ranges(), alert_state)
     except commands.CommandRejected as ex:
         db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id,
                                parameter=body.parameter, requested_value=body.value, status="rejected",
@@ -617,6 +638,11 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     return res.__dict__
 
 
+def _check_remote(request: Request, origin: str) -> None:
+    if origin == "remote" and not request.app.state.app_settings.get("remote")["allow_remote_setpoints"]:
+        raise HTTPException(403, "Changes from remote devices are switched off (Settings › Remote access).")
+
+
 @router.post("/reactors/{reactor_id}/limits")
 def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Session = Depends(get_db)):
     """Change the process (alarm) limits of pH or temperature, with read-back; logged per limit."""
@@ -624,6 +650,7 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
     driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
     exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
                                              Experiment.status == ExperimentStatus.fermenting))
+    _check_remote(request, body.origin)
     try:
         results = commands.write_limits(driver, body.parameter, body.low, body.high)
     except commands.CommandRejected as ex:
@@ -782,3 +809,57 @@ def export_xlsx(exp_id: int, db: Session = Depends(get_db), resample_min: Option
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{e.code}.xlsx"'})
+
+
+# --- settings, notifications, backup --------------------------------------------------------
+
+@router.get("/settings")
+def get_settings(request: Request):
+    return request.app.state.app_settings.public()
+
+
+@router.put("/settings/{section}")
+def put_settings(section: str, body: dict, request: Request):
+    try:
+        request.app.state.app_settings.put(section, body)
+    except SettingsError as ex:
+        raise HTTPException(422, str(ex))
+    return request.app.state.app_settings.public()[section]
+
+
+@router.post("/settings/notifications/test")
+def test_notification(request: Request):
+    cfg = request.app.state.app_settings.get("notifications")
+    try:
+        notify_send(cfg, "FM2 test", "Test notification from Fermentation Manager 2.", "info")
+    except NotifyError as ex:
+        raise HTTPException(502, str(ex))
+    return {"sent": True, "channel": cfg["channel"]}
+
+
+@router.get("/backup/status")
+def backup_status(request: Request):
+    return request.app.state.backups.status()
+
+
+@router.post("/backup/run")
+def backup_run(request: Request):
+    try:
+        f = request.app.state.backups.run("manual")
+    except BackupError as ex:
+        raise HTTPException(502, str(ex))
+    return {"file": str(f), **request.app.state.backups.status()}
+
+
+@router.get("/system")
+def system_info(request: Request, db: Session = Depends(get_db)):
+    st: Settings = request.app.state.settings
+    acq: Acquisition = request.app.state.acq
+    return {
+        "version": __version__, "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
+        "experiments": db.scalar(select(func.count()).select_from(Experiment)),
+        "reactors": [{"reactor_id": r.reactor_id, "driver": r.driver, "address": r.address,
+                      "online": acq.live[r.reactor_id].last_error is None and acq.live[r.reactor_id].last_ok is not None,
+                      "capabilities": acq.drivers[r.reactor_id].capabilities.__dict__}
+                     for r in st.reactors if r.reactor_id in acq.drivers],
+    }

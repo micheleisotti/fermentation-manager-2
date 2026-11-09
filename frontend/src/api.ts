@@ -92,6 +92,13 @@ export const api = {
     req<CommandResult>(`/reactors/${reactor}/setpoints`, { method: "POST", body: JSON.stringify({ parameter, value, origin }) }),
   limits: (reactor: string, parameter: string, low: number | null, high: number | null, origin = "local") =>
     req<CommandResult[]>(`/reactors/${reactor}/limits`, { method: "POST", body: JSON.stringify({ parameter, low, high, origin }) }),
+  settings: () => req<AppSettings>("/settings"),
+  putSettings: <K extends keyof AppSettings>(section: K, value: AppSettings[K]) =>
+    req<AppSettings[K]>(`/settings/${section}`, { method: "PUT", body: JSON.stringify(value) }),
+  testNotification: () => req<{ sent: boolean; channel: string }>("/settings/notifications/test", { method: "POST" }),
+  backupStatus: () => req<BackupStatus>("/backup/status"),
+  backupRun: () => req<BackupStatus & { file: string }>("/backup/run", { method: "POST" }),
+  system: () => req<SystemInfo>("/system"),
   setpointLog: (id: number) => req<{ at: string; parameter: string; old: number | null; new: number; readback: number | null; status: string; origin: string }[]>(`/experiments/${id}/setpoint-log`),
 };
 
@@ -101,3 +108,17 @@ export function col(r: Readings | undefined, name: string): [number, number | nu
   const it = r.columns.indexOf("t_h"), ic = r.columns.indexOf(name);
   return r.rows.map((row) => [row[it] as number, row[ic]]);
 }
+
+export interface Range { min: number; max: number; max_step: number }
+export interface AppSettings {
+  remote: { allow_remote_setpoints: boolean; ranges: Record<"ph" | "temperature" | "stirrer", Range> };
+  alerts: { out_of_limits_after_min: number; rearm_min: number; ph_tolerance: number; temp_tolerance: number;
+    hold_min: number; silent_after_min: number; finished_fraction_pct: number; finished_hold_min: number };
+  notifications: { channel: "none" | "ntfy" | "telegram"; ntfy_server: string; ntfy_topic: string; ntfy_token: string;
+    telegram_token: string; telegram_chat_id: string; rules: Record<string, boolean> };
+  backup: { enabled: boolean; destination: string; every_h: number; keep: number; on_end_of_production: boolean; csv_per_experiment: boolean };
+}
+export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
+  last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
+export interface SystemInfo { version: string; data_dir: string; sampling_interval_s: number; experiments: number;
+  reactors: { reactor_id: string; driver: string; address: string; online: boolean; capabilities: Record<string, boolean> }[] }

@@ -259,3 +259,11 @@ DEFAULT_VARIABLES = [
     ("Riboflavin", "mg/L", VariableCategory.product),
     ("pH (manual)", "", VariableCategory.ph),
 ]
+
+
+class AppSetting(Base):
+    """Settings edited from the Settings page (one JSON value per section)."""
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
