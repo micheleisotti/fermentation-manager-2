@@ -117,6 +117,13 @@ class SimulatedController(ControllerDriver):
                 temperature_low_limit=self.limits["temperature"][0],
                 temperature_high_limit=self.limits["temperature"][1],
                 ph_control=self.ph_control,
+                extra={
+                    "heating_pct": round(max(0.0, min(100.0, (self.sp["temperature"] - self._temp) * 40 + 25)), 1),
+                    "cooling_pct": round(max(0.0, min(100.0, (self._temp - self.sp["temperature"]) * 40)), 1),
+                    "stirrer_out_rpm": self.sp["stirrer"],
+                    "do2": round(max(0.0, 100.0 - 25.0 * self._x + n(0, 0.5)), 1), "do2_setpoint": 30.0,
+                    "do2_low_limit": 20.0, "do2_high_limit": 120.0, "n2_pct": 0.0, "air_pct": 0.0,
+                },
             )
 
     def write_setpoint(self, parameter: str, value: float) -> None:

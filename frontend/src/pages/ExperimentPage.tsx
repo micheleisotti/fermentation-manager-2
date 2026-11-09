@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type Experiment, type Readings } from "../api";
+import { api, type Channel, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling } from "../hooks";
-import { baseOption, trendsOption, TREND_VARS } from "../components/charts";
+import { baseOption, trendsOption, varsFor } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
 import { DeleteExperiment } from "../components/DeleteExperiment";
@@ -68,8 +68,11 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const events = usePolling(() => api.events(e.id), 20000, [e.id]);
   const log = usePolling(() => api.setpointLog(e.id), 30000, [e.id]);
 
-  const [left, setLeft] = useState("ph");
-  const [right, setRight] = useState("temperature");
+  const ch = e.channels;
+  const vars = varsFor(ch);
+  const main = vars.filter((v) => ["ph", "temperature", "stirrer", "do2"].includes(v.key));
+  const [left, setLeft] = useState(main[0]?.key ?? vars[0]?.key ?? "ph");
+  const [right, setRight] = useState(main[1]?.key ?? "none");
   const [showSp, setShowSp] = useState(true);
   const [showLim, setShowLim] = useState(true);
   const [showPartner, setShowPartner] = useState(true);
@@ -77,9 +80,9 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const [dialog, setDialog] = useState<string | null>(null);
   const [limitsDialog, setLimitsDialog] = useState<string | null>(null);
 
-  const lv = TREND_VARS.find((v) => v.key === left)!;
-  const rv = TREND_VARS.find((v) => v.key === right) ?? null;
-  const trend = useMemo(() => trendsOption(readings.data, lv, rv, {
+  const lv = vars.find((v) => v.key === left) ?? vars[0];
+  const rv = vars.find((v) => v.key === right && v.key !== lv?.key) ?? null;
+  const trend = useMemo(() => !lv ? {} : trendsOption(readings.data, lv, rv, {
     setpoints: showSp, limits: showLim,
     partner: showPartner && partner ? partnerReadings.data : undefined, partnerLabel: partner ? `${lv.label} ${partner.reactor_id} (paired)` : undefined,
   }), [readings.data, partnerReadings.data, lv, rv, showSp, showLim, showPartner, partner]);
@@ -117,13 +120,13 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <span style={{ width: 14, height: 3, background: "#1d3786" }} />Left
                   <select value={left} onChange={(x) => setLeft(x.target.value)} style={{ height: 40, width: "auto" }}>
-                    {TREND_VARS.map((v) => <option key={v.key} value={v.key}>{v.label}</option>)}
+                    {vars.map((v) => <option key={v.key} value={v.key}>{v.label}</option>)}
                   </select>
                 </label>
                 <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <span style={{ width: 14, height: 3, background: "#f9b112" }} />Right
                   <select value={right} onChange={(x) => setRight(x.target.value)} style={{ height: 40, width: "auto" }}>
-                    {TREND_VARS.filter((v) => v.key !== left).map((v) => <option key={v.key} value={v.key}>{v.label}</option>)}
+                    {vars.filter((v) => v.key !== left).map((v) => <option key={v.key} value={v.key}>{v.label}</option>)}
                     <option value="none">None</option>
                   </select>
                 </label>
@@ -138,7 +141,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             <EChart option={trend} ariaLabel="Trends over time since start" />
           </section>
 
-          <section className="card" aria-labelledby="base">
+          {ch.includes("ph") && <section className="card" aria-labelledby="base">
             <div className="row between">
               <div className="stack" style={{ gap: 2 }}>
                 <h2 id="base" style={{ fontSize: 18 }}>Base dosing</h2>
@@ -157,7 +160,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               <DataValue value={fmt(s?.base_pump_pct, 0)} unit="%" label="Pump activation · now" />
             </div>
             <EChart option={base} className="chart short" ariaLabel="Base rate bins and cumulative base over time" />
-          </section>
+          </section>}
         </div>
 
         <aside className="side">
@@ -169,9 +172,9 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               </div>
               {[
                 { p: "ph", v: fmt(s.ph), u: "", l: `pH · set ${fmt(s.ph_setpoint)} · limits ${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}`, c: "#1d3786" },
-                { p: "temperature", v: fmt(s.temperature, 1), u: "°C", l: `T · set ${fmt(s.temperature_setpoint, 1)} · limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)}` },
+                { p: "temperature", v: fmt(s.temperature, 1), u: "°C", l: `T · set ${fmt(s.temperature_setpoint, 1)} · limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} · heating ${fmt(s.extra?.heating_pct, 0)} % · cooling ${fmt(s.extra?.cooling_pct, 0)} %` },
                 { p: "stirrer", v: fmt(s.stirrer, 0), u: "rpm", l: `Stirrer · set ${fmt(s.stirrer_setpoint, 0)}` },
-              ].map((row) => (
+              ].filter((row) => ch.includes(row.p as Channel)).map((row) => (
                 <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
                   <DataValue value={row.v} unit={row.u} label={row.l} color={row.c} />
                   <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
@@ -180,6 +183,12 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                   </span>
                 </div>
               ))}
+              {ch.includes("do2") && (
+                <div className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
+                  <DataValue value={fmt(s.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s.extra?.do2_setpoint, 1)} · N2 ${fmt(s.extra?.n2_pct, 0)} % · air ${fmt(s.extra?.air_pct, 0)} %`} />
+                  <span className="xs muted">set on the controller</span>
+                </div>
+              )}
               <span className="xs muted" style={{ padding: "4px 8px" }}>
                 pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the profile at planning; dose calibration, interlocks and actuators stay on the controller.
               </span>

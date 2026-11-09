@@ -62,6 +62,8 @@ class ControllerSnapshot:
     temperature_low_limit: Optional[float] = None
     temperature_high_limit: Optional[float] = None
     ph_control: PhControl = field(default_factory=PhControl)
+    # Optional channels (see CHANNELS): dO2 and actuator outputs, keyed by EXTRA_FIELDS
+    extra: dict = field(default_factory=dict)
 
     def setpoint(self, parameter: str) -> Optional[float]:
         return {"ph": self.ph_setpoint, "temperature": self.temperature_setpoint,
@@ -69,6 +71,18 @@ class ControllerSnapshot:
 
 
 SETPOINT_PARAMETERS = ("ph", "temperature", "stirrer")
+
+# Channels an experiment can use (chosen at planning). A channel switched off is still recorded,
+# but it is not shown and raises no alerts.
+CHANNELS = ("temperature", "ph", "stirrer", "do2")
+DEFAULT_CHANNELS = ("temperature", "ph", "stirrer")
+# Extra values carried in ControllerSnapshot.extra, with the channel they belong to.
+EXTRA_FIELDS = {
+    "heating_pct": "temperature", "cooling_pct": "temperature",
+    "stirrer_out_rpm": "stirrer",
+    "do2": "do2", "do2_setpoint": "do2", "do2_low_limit": "do2", "do2_high_limit": "do2",
+    "n2_pct": "do2", "air_pct": "do2",
+}
 
 
 class ControllerDriver(ABC):

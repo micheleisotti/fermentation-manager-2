@@ -44,8 +44,10 @@ from .base import (PH_MODE_PARAMS, ControllerDriver, ControllerSnapshot, DriverC
 log = logging.getLogger(__name__)
 
 # Sensor indices (second level of 1.x.<sensor>)
-PH, TEMPERATURE, STIRRER = 0, 2, 13
+PH, DO2, TEMPERATURE, STIRRER = 0, 1, 2, 13
 BASE_ACTUATOR = 29
+# Actuators (second level of 2.x.<actuator>), as configured on both units
+N2_VALVE, AIR_VALVE, STIRRER_ACT, HEATING, COOLING = 0, 1, 18, 19, 46
 
 # What read() asks for: key -> address
 READ_MAP: dict[str, str] = {
@@ -70,6 +72,20 @@ READ_MAP: dict[str, str] = {
     "base_cumulative_ml":       f"2.13.{BASE_ACTUATOR}",
     "base_flow":                f"2.12.{BASE_ACTUATOR}",
     "base_factor":              f"2.4.{BASE_ACTUATOR}",
+    # optional channels (stored in snapshot.extra)
+    "do2":                      f"1.15.{DO2}",
+    "do2_setpoint":             f"1.13.{DO2}",
+    "do2_high_limit":           f"1.4.{DO2}",
+    "do2_low_limit":            f"1.5.{DO2}",
+    "heating_out":              f"2.12.{HEATING}",
+    "heating_factor":           f"2.4.{HEATING}",
+    "cooling_out":              f"2.12.{COOLING}",
+    "cooling_factor":           f"2.4.{COOLING}",
+    "stirrer_out_rpm":          f"2.12.{STIRRER_ACT}",
+    "n2_out":                   f"2.12.{N2_VALVE}",
+    "n2_factor":                f"2.4.{N2_VALVE}",
+    "air_out":                  f"2.12.{AIR_VALVE}",
+    "air_factor":               f"2.4.{AIR_VALVE}",
 }
 
 # The only addresses this driver may ever write.
@@ -183,6 +199,18 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
            "cycle_time": f("ph_cycle_time"), "settling_time": f("ph_settling_time")}
     pid = {k: v for k, v in pid.items() if v is not None} or None
 
+    def pct(out_key: str, factor_key: str):
+        v, fac = f(out_key), f(factor_key)
+        return v / fac * 100.0 if (v is not None and fac) else None
+
+    extra = {
+        "do2": f("do2"), "do2_setpoint": f("do2_setpoint"),
+        "do2_low_limit": f("do2_low_limit"), "do2_high_limit": f("do2_high_limit"),
+        "heating_pct": pct("heating_out", "heating_factor"), "cooling_pct": pct("cooling_out", "cooling_factor"),
+        "stirrer_out_rpm": f("stirrer_out_rpm"),
+        "n2_pct": pct("n2_out", "n2_factor"), "air_pct": pct("air_out", "air_factor"),
+    }
+
     return ControllerSnapshot(
         ts=ts,
         ph=f("ph"), ph_setpoint=f("ph_setpoint"),
@@ -193,6 +221,7 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
         temperature_low_limit=f("temperature_low_limit"),
         temperature_high_limit=f("temperature_high_limit"),
         ph_control=PhControl(mode=mode, pid=pid),
+        extra={k: v for k, v in extra.items() if v is not None},
     )
 
 

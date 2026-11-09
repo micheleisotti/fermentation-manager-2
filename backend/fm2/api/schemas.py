@@ -74,6 +74,7 @@ class ExperimentIn(BaseModel):
     buffer_id: Optional[int] = None
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
+    channels: Optional[list[str]] = None
     notes: str = ""
     author: str = ""
 
@@ -87,6 +88,7 @@ class ExperimentPatch(BaseModel):
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
     reactor_id: Optional[str] = None
+    channels: Optional[list[str]] = None
     notes: Optional[str] = None
 
 
@@ -104,6 +106,7 @@ class ExperimentOut(ORM):
     profile_id: Optional[int]
     parallel_run_code: Optional[str] = None
     parallel_partner_codes: list[str] = []
+    channels: Optional[list[str]] = None      # filled by _exp_out (default set when None)
     notes: str
     started_at: Optional[datetime]
     ended_at: Optional[datetime]

@@ -27,6 +27,10 @@ R2_VALUES = {
     # pH loop: dead band, cycle time [s], settling time [s] (read on R2), and fake ranges
     "3.9.0": "0.10", "3.12.0": "10", "3.71.0": "300",
     "3.10.0": "2.00", "3.11.0": "0.00", "3.13.0": "3600", "3.14.0": "1",
+    # optional channels as read on R2: dO2 sensor, actuators (heating 19, cooling 46, stirrer 18, N2 0, air 1)
+    "1.15.1": "0.0", "1.13.1": "200.0", "1.4.1": "200.0", "1.5.1": "40.0",
+    "2.12.19": "35", "2.4.19": "100", "2.12.46": "0", "2.4.46": "100", "2.12.18": "400",
+    "2.12.0": "0", "2.4.0": "100", "2.12.1": "20", "2.4.1": "100",
 }
 
 
@@ -133,6 +137,9 @@ def test_read_snapshot(fake):
     assert snap.base_cumulative_ml == 1.61
     assert snap.base_pump_pct == pytest.approx(100.0)
     assert snap.ph_control.mode == "pid"
+    assert snap.extra == {"do2": 0.0, "do2_setpoint": 200.0, "do2_low_limit": 40.0, "do2_high_limit": 200.0,
+                          "heating_pct": 35.0, "cooling_pct": 0.0, "stirrer_out_rpm": 400.0,
+                          "n2_pct": 0.0, "air_pct": 20.0}
     assert snap.ph_control.pid == {"P": 100.0, "I": 2.0, "D": 10.0, "deadband": 0.1,
                                    "cycle_time": 10.0, "settling_time": 300.0}
     # second read reuses the connection

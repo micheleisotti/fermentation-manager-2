@@ -131,6 +131,8 @@ class Experiment(Base):
     # Plan as loaded at Start (frozen copy, so later profile edits don't rewrite history).
     plan_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
     parallel_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parallel_runs.id"))
+    # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)
+    channels: Mapped[Optional[list]] = mapped_column(JSON)
     notes: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # t = 0
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -163,6 +165,8 @@ class ControllerReading(Base):
     ph_high_limit: Mapped[Optional[float]] = mapped_column(Float)
     temperature_low_limit: Mapped[Optional[float]] = mapped_column(Float)
     temperature_high_limit: Mapped[Optional[float]] = mapped_column(Float)
+    # Optional channels (drivers.base.EXTRA_FIELDS): dO2, heating/cooling, stirrer output, gases
+    extra: Mapped[Optional[dict]] = mapped_column(JSON)
 
     __table_args__ = (Index("ix_readings_exp_t", "experiment_id", "t_h"),)
 

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow } from "../api";
+import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow, DEFAULT_CHANNELS, type Channel } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 import { DeleteExperiment } from "../components/DeleteExperiment";
@@ -80,13 +80,21 @@ function PlanCheckTable({ rows }: { rows: PlanCheckRow[] }) {
   );
 }
 
+const CHANNEL_INFO: { key: Channel; label: string; what: string }[] = [
+  { key: "temperature", label: "Temperature", what: "T sensor · heating / cooling" },
+  { key: "ph", label: "pH", what: "pH sensor · base pump · cumulative and mL/min" },
+  { key: "stirrer", label: "Stirrer", what: "speed sensor · motor" },
+  { key: "do2", label: "dO2", what: "dO2 probe · N2 and air valves" },
+];
+
 export function Planning({ existing, onChange }: { existing?: Experiment; onChange?: () => void }) {
   const nav = useNavigate();
   const [d, setD] = useState<ExperimentDraft>(() => existing ? {
     name: existing.name, reactor_id: existing.reactor_id, planned_date: existing.planned_date, strain: existing.strain,
     medium_id: existing.medium_id, buffer_id: existing.buffer_id, working_volume_ml: existing.working_volume_ml,
-    profile_id: existing.profile_id, notes: existing.notes,
-  } : { name: "", reactor_id: "R1", planned_date: today(), strain: "", notes: "" });
+    profile_id: existing.profile_id, notes: existing.notes, channels: existing.channels,
+  } : { name: "", reactor_id: "R1", planned_date: today(), strain: "", notes: "", channels: [...DEFAULT_CHANNELS] });
+  const [do2Notice, setDo2Notice] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ kind: "good" | "alert" | "warn"; text: string } | null>(null);
   const set = (patch: Partial<ExperimentDraft>) => { setD({ ...d, ...patch }); setDirty(true); };
@@ -190,6 +198,45 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
             </div>
           </section>
 
+          <section className="card" aria-labelledby="gch">
+            <div className="stack" style={{ gap: 2 }}>
+              <h2 id="gch" style={{ fontSize: 18 }}>Channels</h2>
+              <span className="small muted">What this experiment uses. Channels switched off are hidden and raise no alerts; the profile does not write them.
+                Everything is still recorded, so a channel can be switched on later.</span>
+            </div>
+            <div className="ch-grid" role="group" aria-label="Channels in use">
+              {CHANNEL_INFO.map((c) => {
+                const on = (d.channels ?? DEFAULT_CHANNELS).includes(c.key);
+                return (
+                  <label key={c.key} className={`ch ${on ? "on" : ""}`}>
+                    <input type="checkbox" checked={on} onChange={() => {
+                      const cur = d.channels ?? DEFAULT_CHANNELS;
+                      const next = on ? cur.filter((x) => x !== c.key) : [...cur, c.key];
+                      set({ channels: next });
+                      if (!on && c.key === "do2") setDo2Notice(true);
+                    }} />
+                    <span className="stack" style={{ gap: 2 }}>
+                      <span style={{ fontWeight: 600 }}>{c.label}</span>
+                      <span className="xs muted">{c.what}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            {(d.channels ?? DEFAULT_CHANNELS).length === 0 && <div className="banner warn">No channel selected: only manual measurements will be shown.</div>}
+          </section>
+          {do2Notice && (
+            <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget) setDo2Notice(false); }}>
+              <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="do2-t" aria-describedby="do2-d">
+                <h2 id="do2-t" style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>dO2: air is not configured yet</h2>
+                <div className="banner warn" id="do2-d"><Icon name="warn" color="#8a5a00" size={20} />
+                  <span>The dO2 probe and the N2 / air valves are recorded and shown, but the <b>air supply is not configured</b> on the
+                    controllers yet: the dO2 loop cannot aerate until it is set up on the controller.</span>
+                </div>
+                <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn filled" autoFocus onClick={() => setDo2Notice(false)}>OK</button></div>
+              </div>
+            </div>
+          )}
           <section className="card" aria-labelledby="g2">
             <h2 id="g2" style={{ fontSize: 18 }}>Medium and buffer</h2>
             <div className="row" style={{ alignItems: "flex-start" }}>

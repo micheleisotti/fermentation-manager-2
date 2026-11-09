@@ -174,3 +174,9 @@ body.no-rail .main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 .p-hint { margin-left: auto; align-self: center; }
 .p-rotate { display: none; text-align: center; }
 @media (orientation: portrait) { .p-rotate { display: block; } .p-hint { display: none; } }
+
+/* channels panel (planning) */
+.ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.ch { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--outline-variant); border-radius: 12px; cursor: pointer; }
+.ch.on { background: var(--primary-container); border-color: transparent; }
+.ch input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--primary); flex: 0 0 auto; }

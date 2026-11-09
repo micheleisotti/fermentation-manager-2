@@ -110,3 +110,19 @@ def test_probably_finished():
         cum += rate
         ev += kinds(st.observe(snap(cum=round(cum / 0.4) * 0.4), t))
     assert ev.count("probably_finished") == 1
+
+
+def test_channels_switched_off_raise_no_alerts():
+    from datetime import datetime, timedelta, timezone
+    from fm2.alerts import ReactorAlertState
+    from fm2.drivers.base import ControllerSnapshot
+    t0 = datetime(2026, 11, 9, tzinfo=timezone.utc)
+    snap = ControllerSnapshot(ts=t0, ph=7.5, ph_setpoint=6.0, ph_low_limit=5.8, ph_high_limit=6.3,
+                              temperature=45.0, temperature_setpoint=30.0, temperature_low_limit=28.0,
+                              temperature_high_limit=32.0)
+    st = ReactorAlertState("R1", channels=frozenset({"stirrer"}))
+    assert st.observe(snap, t0) == []                                  # pH and T both far outside: silent
+    st.channels = frozenset({"stirrer", "temperature"})                 # T switched on during the run
+    assert st.observe(snap, t0 + timedelta(minutes=5)) == []           # outside for < 3 min: not yet
+    ev = st.observe(snap, t0 + timedelta(minutes=9))
+    assert [e.kind for e in ev] == ["out_of_limits"] and "°C" in ev[0].message
