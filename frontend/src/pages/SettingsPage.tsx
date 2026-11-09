@@ -98,6 +98,7 @@ function AppearancePicker() {
   const [t, setT] = useState<Theme>(getTheme());
   const opts: { k: Theme; label: string; help: string }[] = [
     { k: "light", label: "Light", help: "Light page and cards" },
+    { k: "grey", label: "Grey", help: "Softer grey page (#DADFE1), white cards" },
     { k: "dim", label: "Dim", help: "Dark teal page, white cards and charts" },
     { k: "dark", label: "Dark", help: "Dark page and cards; charts on light panels" },
   ];

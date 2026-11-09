@@ -179,7 +179,7 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   hints; "Send test" asks to save first (the test uses saved settings).
 
 ## Appearance, licence, Telegram helper (10 Nov 2026)
-- Settings › Appearance (per device, localStorage `fm2.theme`): Light; Dim (dark teal-slate page derived
+- Settings › Appearance (per device, localStorage `fm2.theme`): Light; Grey (#DADFE1 page, white cards); Dim (dark teal-slate page derived
   from the palette's data slate #455e6f, white cards and charts); Dark (dark cards, charts on light
   panels so they read like the exports). Implemented with CSS variables (`html[data-theme]`).
 - Licence GPL-3.0-or-later: `LICENSE` (verbatim GPLv3), notice in README and Settings › Credits.

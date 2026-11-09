@@ -265,6 +265,10 @@ html[data-theme="dim"] .signin-card, html[data-theme="dim"] .note {
   --surface: #ffffff; --surface-dim: #f6f7f9; --surface-container: #eef0f4;
   --primary: #003366; --on-primary: #ffffff; --primary-container: #d6e0ee; --on-primary-container: #003366;
 }
+/* Grey: softer light-grey page from the palette (#DADFE1), white cards; text stays dark */
+html[data-theme="grey"] { --surface-dim: #dadfe1; --surface-container: #ccd3d6; --divider: #e3e7e9; }
+html[data-theme="grey"] .signin { background: var(--surface-dim); }
+
 /* Dim: dark teal-slate page (from the palette's data slate #455e6f), content cards stay white */
 html[data-theme="dim"] {
   --surface-dim: #2b4350; --surface-container: #22363f; --divider: #3b5562;
@@ -295,5 +299,6 @@ html[data-theme="dark"] img.logo-img, html[data-theme="dim"] img.logo-img { filt
 .theme-swatch { width: 44px; height: 32px; border-radius: 6px; flex: none; display: flex; align-items: center; justify-content: center; border: 1px solid var(--outline-variant); }
 .theme-swatch span { width: 24px; height: 14px; border-radius: 3px; }
 .theme-swatch.light { background: #f6f7f9; } .theme-swatch.light span { background: #fff; box-shadow: 0 0 0 1px #dadfe1; }
+.theme-swatch.grey { background: #dadfe1; } .theme-swatch.grey span { background: #fff; }
 .theme-swatch.dim { background: #2b4350; } .theme-swatch.dim span { background: #fff; }
 .theme-swatch.dark { background: #12191e; } .theme-swatch.dark span { background: #1c252c; box-shadow: 0 0 0 1px #3e4a52; }
