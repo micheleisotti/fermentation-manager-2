@@ -79,7 +79,18 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
     index = dist / "index.html"
     if not index.exists():
         return
-    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+    class HashedAssets(StaticFiles):
+        """Build outputs have content hashes in their names: safe to cache for a long time."""
+        async def get_response(self, path, scope):
+            r = await super().get_response(path, scope)
+            if r.status_code == 200:
+                r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return r
+
+    app.mount("/assets", HashedAssets(directory=dist / "assets"), name="assets")
+    # index.html (and the other un-hashed files) must be revalidated on every load, otherwise phones
+    # keep showing the previous build after an update.
+    no_cache = {"Cache-Control": "no-cache"}
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
@@ -87,8 +98,8 @@ def _mount_frontend(app: FastAPI, settings: Settings) -> None:
             raise HTTPException(404)
         f = (dist / path).resolve()
         if path and f.is_file() and dist.resolve() in f.parents:
-            return FileResponse(f)
-        return FileResponse(index)
+            return FileResponse(f, headers=no_cache)
+        return FileResponse(index, headers=no_cache)
 
 
 # --- dependencies ---------------------------------------------------------------------

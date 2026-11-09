@@ -212,3 +212,19 @@ def test_old_database_gets_new_columns(tmp_path):
     c = TestClient(app)
     profs = c.get("/api/profiles").json()
     assert profs[0]["name"] == "old" and profs[0]["ph_setpoint"] == 6.1 and profs[0]["ph_low_limit"] is None
+
+
+def test_frontend_cache_headers(tmp_path):
+    from fm2.api.app import create_app
+    from fm2.config import Settings
+    dist = tmp_path / "dist"; (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>app</html>")
+    (dist / "assets" / "index-abc123.js").write_text("console.log(1)")
+    app = create_app(Settings(data_dir=tmp_path, frontend_dist=dist), start_acquisition=False, db_path=tmp_path / "c.db",
+                     drivers={"R1": SimulatedController("R1"), "R2": SimulatedController("R2")})
+    c = TestClient(app)
+    for path in ("/", "/experiments/3"):
+        r = c.get(path)
+        assert r.status_code == 200 and "app" in r.text and r.headers["cache-control"] == "no-cache"
+    r = c.get("/assets/index-abc123.js")
+    assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
