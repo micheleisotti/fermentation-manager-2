@@ -5,6 +5,8 @@ the defaults below. Each section is validated on save and applied immediately (n
 
 from __future__ import annotations
 
+import re
+
 import copy
 import threading
 from typing import Any, Callable, Optional
@@ -56,6 +58,17 @@ DEFAULTS: dict[str, dict[str, Any]] = {
 SECRETS = {"notifications": ("telegram_token", "ntfy_token")}
 
 
+def normalize_telegram_token(t: str) -> str:
+    """Accept common paste mistakes: quotes, spaces, a 'bot' prefix or the whole API URL."""
+    t = t.strip().strip("'\"").replace(" ", "")
+    m = re.search(r"api\.telegram\.org/bot([^/]+)", t)
+    if m:
+        t = m.group(1)
+    if t.lower().startswith("bot") and ":" in t:
+        t = t[3:]
+    return t
+
+
 class SettingsError(ValueError):
     pass
 
@@ -104,8 +117,11 @@ def _validate(section: str, v: dict) -> dict:
         out["ntfy_server"] = (out["ntfy_server"] or "https://ntfy.sh").rstrip("/")
         if ch == "ntfy" and not out["ntfy_topic"]:
             raise SettingsError("ntfy: a topic is required")
+        out["telegram_token"] = normalize_telegram_token(out["telegram_token"])
         if ch == "telegram" and not (out["telegram_token"] and out["telegram_chat_id"]):
             raise SettingsError("Telegram: bot token and chat id are required")
+        if out["telegram_token"] and not re.fullmatch(r"\d{5,}:[A-Za-z0-9_-]{30,}", out["telegram_token"]):
+            raise SettingsError("Telegram: the bot token should look like 123456789:AAH… (as given by @BotFather)")
         rules = v.get("rules") or {}
         out["rules"] = {k: bool(rules.get(k, True)) for k in NOTIFY_RULES}
         return out

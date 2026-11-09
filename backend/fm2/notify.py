@@ -47,7 +47,13 @@ def send(cfg: dict, title: str, message: str, severity: str = "info",
         else:
             raise NotifyError("no notification channel configured")
         if r.status_code >= 400:
-            raise NotifyError(f"{ch}: HTTP {r.status_code} {r.text[:200]}")
+            hint = ""
+            if ch == "telegram" and r.status_code == 401:
+                hint = (" — the bot token is not valid: copy it again from @BotFather (/mybots → your bot → API Token;"
+                        " /revoke issues a new one and invalidates the old).")
+            elif ch == "telegram" and r.status_code in (400, 403):
+                hint = (" — check the chat id, and open the chat with your bot and press Start (a bot cannot write first).")
+            raise NotifyError(f"{ch}: HTTP {r.status_code} {r.text[:200]}{hint}")
     except httpx.HTTPError as e:
         raise NotifyError(f"{ch}: {e}") from e
     finally:

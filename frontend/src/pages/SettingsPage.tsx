@@ -56,7 +56,7 @@ function useSection<K extends keyof AppSettings>(all: AppSettings | undefined, k
       {msg && <span className={`banner ${msg.kind} small`} role="status" style={{ padding: "6px 12px" }}>{msg.text}</span>}
     </div>
   );
-  return { v, edit, footer, ver };
+  return { v, edit, footer, ver, dirty };
 }
 
 const NUM = { style: { fontFamily: "var(--font-mono)", width: 96 }, inputMode: "decimal" as const };
@@ -278,6 +278,7 @@ export function SettingsPage() {
               {notif.footer}
               <button className="btn outlined" disabled={n.channel === "none"} onClick={async () => {
                 setTestMsg(null);
+                if (notif.dirty) { setTestMsg({ kind: "warn", text: "Save the changes first: the test uses the saved settings." }); return; }
                 try { await api.testNotification(); setTestMsg({ kind: "good", text: "Test sent: check the phone." }); }
                 catch (x) { setTestMsg({ kind: "alert", text: (x as Error).message }); }
               }}>Send test notification</button>

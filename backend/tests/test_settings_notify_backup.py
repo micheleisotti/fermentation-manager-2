@@ -63,13 +63,13 @@ def test_settings_defaults_validation_and_live_apply(env):
 def test_secrets_are_masked(env):
     c, *_ = env
     n = c.get("/api/settings").json()["notifications"]
-    n.update(channel="telegram", telegram_token="123:SECRET", telegram_chat_id="42")
+    n.update(channel="telegram", telegram_token="123456789:AAHsecretSECRETsecret_secret-SECRETsec", telegram_chat_id="42")
     out = c.put("/api/settings/notifications", json=n).json()
     assert out["telegram_token"] == "••••••" and out["telegram_chat_id"] == "42"
     # sending the mask back keeps the stored token
     out["telegram_chat_id"] = "43"
     c.put("/api/settings/notifications", json=out)
-    assert c.app.state.app_settings.get("notifications")["telegram_token"] == "123:SECRET"
+    assert c.app.state.app_settings.get("notifications")["telegram_token"] == "123456789:AAHsecretSECRETsecret_secret-SECRETsec"
     n2 = dict(out); n2.update(channel="ntfy", ntfy_topic="")
     assert c.put("/api/settings/notifications", json=n2).status_code == 422   # topic required
 
@@ -166,3 +166,15 @@ def test_system_status_parsing(env):
     c, *_ = env
     st = c.get("/api/system/status").json()
     assert st["server"]["uptime_s"] >= 0 and st["remote"]["state"] in ("available", "not_available", "unknown")
+
+
+def test_telegram_token_normalised_and_checked():
+    from fm2.services.app_settings import normalize_telegram_token, _validate, SettingsError
+    tok = "123456789:AAHfakeFAKEfake_fake-fakeFAKEfake12345"
+    for raw in (tok, f" {tok} ", f"bot{tok}", f'"{tok}"', f"https://api.telegram.org/bot{tok}/getMe"):
+        assert normalize_telegram_token(raw) == tok
+    ok = _validate("notifications", {"channel": "telegram", "telegram_token": f"bot{tok}", "telegram_chat_id": "42"})
+    assert ok["telegram_token"] == tok
+    import pytest as _pt
+    with _pt.raises(SettingsError):
+        _validate("notifications", {"channel": "telegram", "telegram_token": "not-a-token", "telegram_chat_id": "42"})
