@@ -9,6 +9,7 @@ Usage (PowerShell, from C:\\FermentationManager):
 
 dump : saves the controller's web-UI scripts and the values of every address that answers
        into data\\inspect\\<ip>-<date-time>\\  (values.tsv + web\\...)
+sensor: every value of the given sensor indices (default 32 = Redox), e.g. sensor <ip> 32 1
 web  : saves only the web-UI scripts into data\\inspect\\<ip>-web\\
 watch: reads the given address families every second and prints only what changes
        (Ctrl+C to stop); also appends to data\\inspect\\watch-<ip>-<date>.log
@@ -191,11 +192,31 @@ def watch(ip, prefixes):
             time.sleep(max(0.0, 1.0 - (time.monotonic() - t0)))
 
 
+def sensor(ip, idx):
+    """All sensor (1.x), loop (3.x) and sensor-specific (5.idx.x) values of one sensor index."""
+    link = Link(ip)
+    addrs = [f"1.{p}.{idx}" for p in range(100)] + [f"3.{p}.{idx}" for p in range(100)] + \
+            [f"5.{idx}.{p}" for p in range(40)]
+    got = {}
+    for k in range(0, len(addrs), 32):
+        got.update(link.query(addrs[k:k + 32], quiet=0.4, limit=3.0))
+    out = HERE / f"sensor{idx}-{ip}-{datetime.now():%Y%m%d-%H%M}.tsv"
+    with open(out, "w", encoding="utf-8") as fh:
+        for a in addrs:
+            if a in got:
+                fh.write(f"{a}\t{got[a]}\n")
+                print(f"{a}\t{got[a]}")
+    print(f"saved {len(got)} values in {out}")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in ("dump", "watch", "web"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("dump", "watch", "web", "sensor"):
         print(__doc__)
         sys.exit(1)
-    if sys.argv[1] == "web":
+    if sys.argv[1] == "sensor":
+        for i in sys.argv[3:] or ["32"]:
+            sensor(sys.argv[2], int(i))
+    elif sys.argv[1] == "web":
         fetch_web(sys.argv[2], HERE / f"{sys.argv[2]}-web")
     elif sys.argv[1] == "dump":
         dump(sys.argv[2])
