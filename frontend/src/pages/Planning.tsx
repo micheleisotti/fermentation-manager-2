@@ -153,7 +153,9 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
           ? { ok: false, warn: true, text: check.error ? `Controller ${d.reactor_id}: check failed (${check.error})` : `Checking controller ${d.reactor_id}…` }
           : { ok: !!c.reachable, text: c.reachable ? `Controller ${d.reactor_id} reachable` : `Controller ${d.reactor_id} not reachable` },
       { ok: c?.reactor_free !== false, text: c?.reactor_free === false ? `${d.reactor_id} is recording another experiment` : `${d.reactor_id} free` },
-      { ok: mismatches.length === 0, warn: true, text: mismatches.length ? `${mismatches.length} setting(s) differ from the controller` : "Controller matches the plan" },
+      c?.reachable
+        ? { ok: mismatches.length === 0, warn: true, text: mismatches.length ? `${mismatches.length} setting(s) differ from the controller` : "Controller matches the plan" }
+        : { ok: false, warn: true, text: d.profile_id ? "Profile chosen: load it when the controller is on" : "Plan vs controller: compared when the controller is on" },
     ];
   }, [check.data, check.error, existing, dirty, d.reactor_id, mismatches.length]);
   const blocking = ready.some((r) => !r.ok && !r.warn);
@@ -251,25 +253,34 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
           </section>
 
           <section className="card" aria-labelledby="g3">
-            <div className="row between">
-              <div className="stack" style={{ gap: 2 }}>
-                <h2 id="g3" style={{ fontSize: 18 }}>Controller profile</h2>
-                <span className="small muted">Plan compared with what controller {d.reactor_id} reports now</span>
-              </div>
-              <label className="field" style={{ minWidth: 260 }}>Profile
-                <select value={d.profile_id ?? ""} onChange={(e) => set({ profile_id: e.target.value === "" ? null : Number(e.target.value) })}>
-                  <option value="">Custom (no profile)</option>
-                  {(profiles.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </label>
+            <div className="stack" style={{ gap: 2 }}>
+              <h2 id="g3" style={{ fontSize: 18 }}>Controller profile</h2>
+              <span className="small muted">Part of the plan: choose it now, even with the bioreactor off. It is written to the controller later, with “Load profile to controller”, before Start.</span>
             </div>
+            <label className="field" style={{ maxWidth: 420 }}>Profile
+              <select value={d.profile_id ?? ""} onChange={(e) => set({ profile_id: e.target.value === "" ? null : Number(e.target.value) })}>
+                <option value="">Custom (no profile: setpoints stay as set on the controller)</option>
+                {(profiles.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
             {profile && (
-              <span className="small muted">Profile: pH {profile.ph_setpoint ?? "—"} · T {profile.temperature_setpoint ?? "—"} °C · stirrer {profile.stirrer_setpoint ?? "—"} rpm
+              <span className="small muted">pH {profile.ph_setpoint ?? "—"} · T {profile.temperature_setpoint ?? "—"} °C · stirrer {profile.stirrer_setpoint ?? "—"} rpm
                 · pH control {profile.ph_control_mode ?? "—"}{profile.ph_pid && ` (${show(profile.ph_pid)})`}</span>
             )}
-            {!existing && <span className="small muted">Save the plan to compare it with the controller.</span>}
+            {(profiles.data ?? []).length === 0 && <span className="xs muted">No profiles yet: create one in Library › Controller profiles.</span>}
+          </section>
+
+          <section className="card" aria-labelledby="g3b">
+            <div className="stack" style={{ gap: 2 }}>
+              <h2 id="g3b" style={{ fontSize: 18 }}>Controller {d.reactor_id}: check and load</h2>
+              <span className="small muted">When the bioreactor is on: the plan is compared with what the controller reports now, and the profile can be loaded.</span>
+            </div>
+            {!existing && <span className="small muted">Create the experiment first; the check starts as soon as the plan is saved and the controller answers.</span>}
             {existing && dirty && <span className="small muted">Save the plan to refresh the comparison.</span>}
-            {check.data && !check.data.reachable && <div className="banner alert">Controller not reachable: {check.data.message}</div>}
+            {existing && check.data && !check.data.reachable && (
+              <div className="banner warn small"><Icon name="warn" color="#8a5a00" size={18} />
+                <span>Controller {d.reactor_id} is off or not reachable ({check.data.message}). That is fine while planning: switch it on before Start to compare and load the profile.</span></div>
+            )}
             {check.data?.reachable && <PlanCheckTable rows={check.data.rows} />}
             {existing && profile && mismatches.length > 0 && (
               <div className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
@@ -278,7 +289,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
               </div>
             )}
             <div className="row">
-              <button className="btn filled" disabled={!existing || dirty || !profile} onClick={async () => {
+              <button className="btn filled" disabled={!existing || dirty || !profile || !check.data?.reachable} onClick={async () => {
                 if (!existing) return;
                 try {
                   const r = await api.loadProfile(existing.id);
@@ -355,36 +366,24 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   );
 }
 
-/** Checks on the bioreactor and controller that the software cannot verify: all must be ticked to start. */
+/** Reminder before Start: preliminary operations on the bioreactor that the software cannot check. */
 function PreStartChecklist({ channels, mismatch, onCancel, onStart }: { channels: Channel[]; mismatch: boolean;
   onCancel: () => void; onStart: (done: string[]) => void }) {
-  const items = [
-    { k: "probes", t: "Probes calibrated", d: `On the controller: ${["pH", ...(channels.includes("do2") ? ["dO2"] : [])].join(" and ")} probe calibration done${channels.includes("temperature") ? ", temperature probe in place" : ""}.` },
-    ...(channels.includes("ph") ? [{ k: "dosing", t: "Dose monitoring calibrated", d: "Base pump / dose monitoring calibrated on the controller, base bottle connected and tubing primed." }] : []),
-    { k: "water", t: "Cooling and condenser water", d: "Cooling water and condenser water valves open." },
-  ];
-  const [done, setDone] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const all = items.every((i) => done.includes(i.k));
+  const probes = ["pH", ...(channels.includes("do2") ? ["dO2"] : [])].join(" and ");
   return (
     <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) onCancel(); }}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="pre-title" style={{ width: "min(540px, 100vw)" }}>
-        <h2 id="pre-title" style={{ fontSize: 20 }}>Check the bioreactor before starting</h2>
-        <span className="small muted">Basic operations on the bioreactor controller that the software cannot check. Tick each one to start.</span>
-        <div className="stack" style={{ gap: 8 }}>
-          {items.map((i) => (
-            <label key={i.k} className={`choice ${done.includes(i.k) ? "on" : ""}`}>
-              <input type="checkbox" checked={done.includes(i.k)}
-                onChange={() => setDone(done.includes(i.k) ? done.filter((x) => x !== i.k) : [...done, i.k])} />
-              <span className="stack" style={{ gap: 2 }}><b>{i.t}</b><span className="small muted">{i.d}</span></span>
-            </label>
-          ))}
+      <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="pre-title" aria-describedby="pre-d" style={{ width: "min(520px, 100vw)" }}>
+        <h2 id="pre-title" style={{ fontSize: 20 }}>Before starting</h2>
+        <div className="banner warn" id="pre-d"><Icon name="warn" color="#8a5a00" size={20} />
+          <span>Check basic operations on the bioreactor controller: <b>{probes} probe calibration</b>
+            {channels.includes("ph") && <>, <b>dose monitoring calibration</b></>}, <b>cooling and condenser water valves</b> open.</span>
         </div>
-        {mismatch && <div className="banner warn small" role="note">Some settings differ from the controller (see “Controller check”): starting anyway keeps the controller values.</div>}
+        {mismatch && <div className="banner warn small" role="note">Some settings differ from the controller (see “check and load”): starting anyway keeps the controller values.</div>}
         <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
           <button className="btn text" disabled={busy} onClick={onCancel}>Cancel</button>
-          <button className="btn filled" disabled={!all || busy} onClick={async () => {
-            setBusy(true); onStart(items.map((i) => i.t)); }}><Icon name="play" size={18} />{busy ? "Starting…" : "Start recording"}</button>
+          <button className="btn filled" autoFocus disabled={busy} onClick={() => { setBusy(true); onStart([]); }}>
+            <Icon name="play" size={18} />{busy ? "Starting…" : "Start recording"}</button>
         </div>
       </div>
     </div>
