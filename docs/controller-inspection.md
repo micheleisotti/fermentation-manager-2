@@ -173,6 +173,25 @@ start the Level loop.
 - One actuator belongs to at most one loop (`2.7` is a single sensor index); a sensor
   (stirrer) can additionally drive another loop in cascade.
 
+### Live confirmation (10 Nov 2026, 16:00, R2, watch mode at 1 s, Engineer on the display)
+- **pH loop** start/stop → `1.14.0` 0↔1 within 1 s. With pH 6.87 above SP 6.20 the acid
+  pump turned on at once: `2.49.28` (Addition 2 *active*) 0→1 together with the loop, back
+  to 0 when the loop stopped. `2.49.<a>` = actuator currently on.
+- **Addition 2 manual, ~1 s**: `2.49.28` 0→1→0; `2.12.28` and `2.13.28` stay 0 (not
+  calibrated, dose monitoring off): its additions are invisible in mL until calibrated.
+- **Alkali manual, ~1 s**: `2.12.29` 0→4.80→0, `2.49.29` 0→1→0, `2.13.29` 0.00→0.05→0.08→0.10
+  over 3 s (the counter keeps catching up after the pump stops). **The counter read 0.00
+  today, after 1.61 on 9 Nov**: it was reset between the two days (power cycle or reset on
+  the display): FM2 must treat a counter drop as a reset, not as negative dosing.
+- **Stirrer loop** start/stop → `1.14.13`; speed `1.15.13` and drive output `2.12.18` ramp
+  0→35→65 rpm in 3 s and back to 0 after stop (the drive briefly reads −10).
+- **Temperature loop** start/stop → `1.14.2`; no heating/cooling output change within the
+  2 s it was on (adaptive loop, slower cycle): not conclusive for `2.12.19`/`2.12.46`.
+- **Level**: touching the two wires of the disconnected probe gave **no change** of
+  `1.15.3` (stayed `NO CONT`). Skin resistance is probably too high for sensitivity Low;
+  repeat with tap water or a metal short across the contacts.
+- No reassignment was done: `2.7`/`2.8` unchanged.
+
 ### Proposal for FM2
 1. **Loop state on the live page and in alerts** (read only): `1.14` for pH, T, stirrer,
    dO2 and Level; an alert if a loop goes off during a run; `2.47` interlock per actuator.
@@ -192,9 +211,10 @@ start the Level loop.
 - [x] pH control type / loop parameters from a profile: confirmed live on R2-dx (cycle time 10 → 15).
 - [ ] Same checks on R1-sx (same firmware and addresses; not yet exercised).
 - [ ] Never automate actuator start/stop, dose counter reset or calibration.
-- [ ] Confirm the addresses above live (watch mode while toggling on the display): loop on/off
-      (`1.14`), Level contact (`1.15.3`), antifoam pulse (`2.12.30`, `2.49.30`, `2.13.30`),
-      Addition 2 reassignment (`2.7.28`, `2.8.28`).
+- [x] Loop on/off (`1.14`), actuator active (`2.49`), alkali output/counter: confirmed live on R2.
+- [ ] Level contact (`1.15.3`) with water or a metal short; antifoam pulse (`2.12.30`, `2.49.30`,
+      `2.13.30`) once assigned; Addition 2 reassignment (`2.7.28`, `2.8.28`); heating/cooling outputs.
+- [ ] Dose counters reset between days (1.61 → 0.00): find out when (power cycle?).
 - [ ] Same dump on R1-sx.
 - [ ] Decision (user): whether FM2 may ever start/stop loops (`1.14`) and whether timed
       Addition 2 doses driven by FM2 are wanted; today both are outside the driver's rules.
