@@ -13,6 +13,8 @@ Rules (as agreed in the mockups):
 - controller_silent: no successful reading for `silent_after_s`; "restored" when back.
 - external_setpoint_change: setpoint changed but not by a command from this software.
 - probably_finished: base rate (15-min window) below a fraction of its peak for `hold_s`.
+- counter_reset: the controller's base counter went back (power cycle or reset on the display);
+  FM2 continues the cumulative volume (see analysis.base_dosing.stitch_counter).
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from .analysis.base_dosing import CounterStitcher
 from .drivers.base import CHANNELS, ControllerSnapshot
 
 LIMITED = {"ph": ("ph", "ph_low_limit", "ph_high_limit", "pH", ""),
@@ -82,9 +85,11 @@ class ReactorAlertState:
     _observed_sp: dict = field(default_factory=dict)
     _expected_sp: dict = field(default_factory=dict)
     _cum: deque = field(default_factory=deque)
+    _counter: CounterStitcher = field(default_factory=CounterStitcher)
     _peak_rate: float = 0.0
     _low_since: Optional[datetime] = None
     _finished_sent: bool = False
+    _stitched: float = 0.0
 
     @property
     def _when(self) -> str:
@@ -122,6 +127,7 @@ class ReactorAlertState:
             events += self._limit_rule(param, snap, now, first)
             events += self._setpoint_rule(param, snap, now, first)
         if "ph" in self.channels:
+            events += self._counter_rule(snap)
             events += self._finished_rule(snap, now)
         return events
 
@@ -204,10 +210,23 @@ class ReactorAlertState:
             st.within_since = None
         return []
 
+    def _counter_rule(self, snap: ControllerSnapshot) -> list[AlertEvent]:
+        if self.pre_start or snap.base_cumulative_ml is None:
+            return []
+        before = self._counter.last
+        self._stitched, reset = self._counter.update(snap.base_cumulative_ml)
+        if not reset:
+            return []
+        return [AlertEvent("counter_reset", "info",
+                           f"{self.reactor_id}: base counter reset on the controller "
+                           f"({before:.2f} → {snap.base_cumulative_ml:.2f} mL); "
+                           f"the cumulative volume continues from {before:.2f} mL")]
+
     def _finished_rule(self, snap: ControllerSnapshot, now: datetime) -> list[AlertEvent]:
         if self.pre_start or snap.base_cumulative_ml is None or self._finished_sent:
             return []
-        self._cum.append((now, snap.base_cumulative_ml))
+        cum = self._stitched
+        self._cum.append((now, cum))
         horizon = self.params.rate_window_s
         while len(self._cum) > 2 and (now - self._cum[1][0]).total_seconds() >= horizon:
             self._cum.popleft()
@@ -215,7 +234,7 @@ class ReactorAlertState:
         span = (now - t0).total_seconds()
         if span < horizon * 0.9:
             return []
-        rate = (snap.base_cumulative_ml - c0) / (span / 60.0)  # mL/min
+        rate = (cum - c0) / (span / 60.0)  # mL/min
         self._peak_rate = max(self._peak_rate, rate)
         if self._peak_rate <= 0:
             return []

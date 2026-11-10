@@ -7,6 +7,13 @@ bins is "grainy" (0, 1, 2 doses per bin); 1-h bins show the trend more clearly.
 
 Gaps (missing readings, e.g. lost connection) are handled explicitly: a bin is marked
 incomplete instead of showing a fake drop in rate.
+
+Counter resets: the controller's dose counter can go back to 0 (power cycle, reset on the
+display; observed between 9 and 10 Nov 2026: 1.61 -> 0.00 mL). A drop larger than
+RESET_TOL_ML is treated as a reset and the series is continued ("stitched"): the value
+before the drop is added to every later reading. Doses between the last reading before
+the reset and the reset itself cannot be known (at most one polling interval).
+Smaller drops are read glitches and are flattened.
 """
 
 from __future__ import annotations
@@ -15,6 +22,49 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
+
+
+RESET_TOL_ML = 0.05   # counter has 2 decimals; anything below this is a read glitch
+
+
+def stitch_counter(cum_ml) -> np.ndarray:
+    """
+    Continue a cumulative counter across resets. Non-finite values stay non-finite and
+    do not break the series. Returns a float array of the same length.
+    """
+    c = np.asarray(cum_ml, dtype=float)
+    out = np.full(c.shape, np.nan)
+    offset, last = 0.0, None
+    for i, v in enumerate(c):
+        if not np.isfinite(v):
+            continue
+        if last is not None and v < last - RESET_TOL_ML:
+            offset += last
+        last = v
+        out[i] = v + offset
+    return out
+
+
+def count_resets(cum_ml) -> int:
+    c = np.asarray(cum_ml, dtype=float)
+    c = c[np.isfinite(c)]
+    return int(np.sum(np.diff(c) < -RESET_TOL_ML)) if len(c) > 1 else 0
+
+
+class CounterStitcher:
+    """Same rule as stitch_counter(), one value at a time (for live alert rules)."""
+
+    def __init__(self) -> None:
+        self.offset = 0.0
+        self.last: Optional[float] = None
+
+    def update(self, raw: float) -> tuple[float, bool]:
+        """Returns (continued value, True if a reset was detected at this reading)."""
+        reset = self.last is not None and raw < self.last - RESET_TOL_ML
+        if reset:
+            self.offset += self.last
+        self.last = raw
+        return raw + self.offset, reset
 
 
 @dataclass
@@ -41,7 +91,7 @@ def rate_bins(t_h, cum_ml, bin_h: float = 0.25, max_gap_h: Optional[float] = Non
     if len(t) < 2:
         return []
     o = np.argsort(t)
-    t, c = t[o], c[o]
+    t, c = t[o], stitch_counter(c[o])
     c = np.maximum.accumulate(c)  # a counter never decreases; guards against read glitches
     # A gap is "too long" relative to both the bin and the sampling interval actually used.
     max_gap = max_gap_h if max_gap_h is not None else max(bin_h / 3, 3 * float(np.median(np.diff(t))))
@@ -83,7 +133,7 @@ def summarize(t_h, cum_ml, final_od: Optional[float] = None, bin_h: float = 0.25
     if len(t) < 2:
         return BaseDosingSummary(None, None, None, None, None, None)
     o = np.argsort(t)
-    t, c = t[o], np.maximum.accumulate(c[o])
+    t, c = t[o], np.maximum.accumulate(stitch_counter(c[o]))
     total = float(c[-1] - c[0])
     bins = [b for b in rate_bins(t, c, bin_h) if b.complete and b.rate_ml_min is not None]
     peak = max(bins, key=lambda b: b.rate_ml_min) if bins else None

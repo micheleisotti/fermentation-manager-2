@@ -111,3 +111,25 @@ def test_fit_on_pooled_replicates_with_jittered_times():
     y = np.exp(kinetics.gompertz_modified(t, 4.0, 0.7, 2.5)) * (1 + rng.normal(0, 0.03, len(t)))
     fit = kinetics.fit_growth(t, y)
     assert fit.mu_max == pytest.approx(0.7, rel=0.1) and fit.lam == pytest.approx(2.5, abs=0.4) and fit.r_squared > 0.98
+
+
+def test_stitch_counter_continues_across_resets_and_ignores_glitches():
+    from fm2.analysis.base_dosing import CounterStitcher, count_resets, stitch_counter
+    raw = [0.0, 0.5, 1.61, 1.60, float("nan"), 0.0, 0.3, 0.9, 0.0, 0.2]
+    out = stitch_counter(raw)
+    assert count_resets(raw) == 2
+    assert np.isnan(out[4])
+    # 1.60 is a glitch (drop < 0.05): kept as read; reset at index 5 adds 1.60, at index 8 adds 0.9
+    assert list(np.round(out[[0, 2, 3, 5, 6, 7, 8, 9]], 2)) == [0.0, 1.61, 1.60, 1.60, 1.90, 2.50, 2.50, 2.70]
+    st = CounterStitcher()
+    live = [st.update(v) for v in (1.0, 1.5, 0.0, 0.4)]
+    assert [round(v, 2) for v, _ in live] == [1.0, 1.5, 1.5, 1.9] and [r for _, r in live] == [False, False, True, False]
+
+
+def test_summary_total_survives_counter_reset():
+    from fm2.analysis.base_dosing import summarize
+    t = np.arange(0, 4.01, 0.1)
+    cum = t * 1.0            # 1 mL/h
+    cum[t > 2.0] -= 2.0      # counter reset to 0 just after 2 h
+    s = summarize(t, cum)
+    assert s.total_ml == pytest.approx(3.9, abs=0.11)

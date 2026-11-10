@@ -778,14 +778,26 @@ READING_FIELDS = ["t_h", "ph", "ph_setpoint", "temperature", "temperature_setpoi
 
 
 def _readings_df(db: Session, exp_id: int, since_h: float = 0.0) -> pd.DataFrame:
-    """Controller readings, one column per field; optional-channel values become columns too."""
-    rows = db.execute(select(ControllerReading).where(ControllerReading.experiment_id == exp_id,
-                                                      ControllerReading.t_h >= since_h)
+    """
+    Controller readings, one column per field; optional-channel values become columns too.
+    base_cumulative_ml is continued across controller counter resets (stitch_counter); when a
+    reset happened, the raw counter is kept as base_counter_raw_ml. The whole series is read
+    so that the offset is right also for since_h > 0.
+    """
+    rows = db.execute(select(ControllerReading).where(ControllerReading.experiment_id == exp_id)
                       .order_by(ControllerReading.t_h)).scalars().all()
     cols = READING_FIELDS + list(EXTRA_FIELDS)
     df = pd.DataFrame([{f: getattr(r, f) for f in READING_FIELDS} | {k: (r.extra or {}).get(k) for k in EXTRA_FIELDS}
                        | {"ts": r.ts} for r in rows])
-    return df if not df.empty else pd.DataFrame(columns=cols + ["ts"])
+    if df.empty:
+        return pd.DataFrame(columns=cols + ["ts"])
+    raw = pd.to_numeric(df["base_cumulative_ml"], errors="coerce").to_numpy(dtype=float)
+    if base_dosing.count_resets(raw):
+        df["base_counter_raw_ml"] = raw
+        df["base_cumulative_ml"] = base_dosing.stitch_counter(raw)
+    if since_h > 0:
+        df = df[df["t_h"] >= since_h].reset_index(drop=True)
+    return df
 
 
 @router.get("/experiments/{exp_id}/readings")

@@ -126,3 +126,13 @@ def test_channels_switched_off_raise_no_alerts():
     assert st.observe(snap, t0 + timedelta(minutes=5)) == []           # outside for < 3 min: not yet
     ev = st.observe(snap, t0 + timedelta(minutes=9))
     assert [e.kind for e in ev] == ["out_of_limits"] and "°C" in ev[0].message
+
+
+def test_counter_reset_is_reported_once_and_rate_stays_positive():
+    st = ReactorAlertState("R1")
+    ev = []
+    for m, cum in enumerate([0.0, 1.0, 2.0, 3.0, 0.0, 0.5, 1.0]):
+        ev += st.observe(snap(cum=cum), T0 + timedelta(minutes=m))
+    resets = [e for e in ev if e.kind == "counter_reset"]
+    assert len(resets) == 1 and "3.00" in resets[0].message
+    assert st._stitched == 4.0 and st._peak_rate >= 0
