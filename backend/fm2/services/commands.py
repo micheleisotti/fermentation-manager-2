@@ -85,13 +85,19 @@ def write_setpoint(driver: ControllerDriver, parameter: str, value: float,
 
 
 def load_ph_control(driver: ControllerDriver, control: PhControl, experiment_status: str) -> None:
+    load_loop_control(driver, "ph", control, experiment_status)
+
+
+def load_loop_control(driver: ControllerDriver, loop: str, control: PhControl, experiment_status: str) -> None:
+    """Control type and loop parameters of pH or temperature: planning only, read back."""
+    label = {"ph": "pH", "temperature": "Temperature"}.get(loop, loop)
     if experiment_status not in ("planned", "preparing"):
-        raise CommandRejected("pH control mode and PID can only be loaded before Start")
-    driver.write_ph_control(control)
-    after = driver.read().ph_control
+        raise CommandRejected(f"{label} control mode and loop parameters can only be loaded before Start")
+    driver.write_loop_control(loop, control)
+    after = driver.read().control(loop)
     diffs = ph_control_differences(control, after)
     if diffs:
-        raise DriverError("pH control read-back does not match the profile: " + "; ".join(diffs))
+        raise DriverError(f"{label} control read-back does not match the plan: " + "; ".join(diffs))
 
 
 def ph_control_differences(plan: PhControl, ctrl: PhControl, tol: float = 1e-6) -> list[str]:
@@ -147,4 +153,37 @@ def write_limits(driver: ControllerDriver, parameter: str, low: Optional[float],
         out.append(CommandResult(f, old, v, rb, "confirmed" if ok else "mismatch",
                                  "Limit confirmed by the controller" if ok else f"Controller reports {rb!r} instead of {v:g}",
                                  warnings))
+    return out
+
+
+@dataclass
+class LoopResult:
+    loop: str
+    requested: bool
+    readback: Optional[bool]
+    status: str            # confirmed | mismatch | error | rejected
+    message: str = ""
+
+
+def switch_loops(driver: ControllerDriver, loops: list[str], on: bool, cascades: dict[str, list[str]],
+                 alert_state=None) -> list[LoopResult]:
+    """
+    Start or stop control loops, one by one, reading each back. `cascades` maps a loop to the loops
+    the controller switches with it (e.g. dO2 -> stirrer), so that alerts do not flag them as external.
+    """
+    out = []
+    for loop in loops:
+        if alert_state is not None:
+            alert_state.expect_loop(loop, on)
+            for other in cascades.get(loop, []):
+                alert_state.expect_loop(other, on)
+        try:
+            driver.write_loop_active(loop, on)
+            rb = driver.read().loops_active.get(loop)
+        except DriverError as ex:
+            out.append(LoopResult(loop, on, None, "error", str(ex)))
+            continue
+        ok = rb is not None and rb == on
+        out.append(LoopResult(loop, on, rb, "confirmed" if ok else "mismatch",
+                              "" if ok else f"controller reports the loop {'on' if rb else 'off' if rb is not None else 'unknown'}"))
     return out

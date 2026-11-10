@@ -426,3 +426,112 @@ def test_prepare_phase_and_plan_params(env):
     ev = c.get(f"/api/experiments/{e['id']}/events").json()
     assert any(x["kind"] == "prepared" and x["t_h"] < -1.4 for x in ev)
     assert c.get(f"/api/experiments/{e['id']}").json()["plan_snapshot"]["custom"] is True
+
+
+def test_counter_reset_is_stitched_in_readings_and_logged(env):
+    c, clock, app, drivers = env
+    e = c.post("/api/experiments", json={"name": "reset", "reactor_id": "R1", "strain": "Lp187"}).json()
+    c.post(f"/api/experiments/{e['id']}/start")
+    run_hours(app, clock, 8)
+    before = drivers["R1"]._base_ml
+    assert before > 0.5
+    drivers["R1"]._base_ml = 0.0          # counter reset on the controller (power cycle)
+    run_hours(app, clock, 2)
+    r = c.get(f"/api/experiments/{e['id']}/readings").json()
+    cols = r["columns"]
+    cum = [row[cols.index("base_cumulative_ml")] for row in r["rows"]]
+    assert "base_counter_raw_ml" in cols
+    assert all(b >= a - 1e-9 for a, b in zip(cum, cum[1:]))   # never goes back
+    assert cum[-1] >= before - 0.05
+    late = c.get(f"/api/experiments/{e['id']}/readings?since_h=9").json()
+    assert late["rows"][-1][late["columns"].index("base_cumulative_ml")] == pytest.approx(cum[-1])
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    assert sum(x["kind"] == "counter_reset" for x in ev) == 1
+    p = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    assert p["summary"]["total_base_ml"] >= before - 0.05
+
+
+def test_loop_config_temperature_profile_and_assignment_check(env):
+    from dataclasses import replace
+    c, clock, app, drivers = env
+    cfg = c.get("/api/reactors/R1/loop-config").json()
+    assert cfg["reachable"] and {lp["key"] for lp in cfg["loops"]} >= {"ph", "temperature", "do2", "level", "redox"}
+    do2 = next(lp for lp in cfg["loops"] if lp["key"] == "do2")
+    assert any("cascade" in w for w in do2["warnings"])
+    rec = cfg["assignments"]
+    prof = c.post("/api/profiles", json={"name": "T and pH", "ph_setpoint": 6.0, "ph_control_mode": "pid",
+                                         "ph_pid": {"P": 3.0, "I": 50.0, "D": 0.0},
+                                         "temperature_setpoint": 30.0, "temperature_control_mode": "pid",
+                                         "temperature_pid": {"P": 25.2, "I": 3053.5, "D": 28.3},
+                                         "loop_assignments": rec}).json()
+    assert prof["temperature_control_mode"] == "pid" and prof["loop_assignments"]["ph"][0]["name"] == "Alkali"
+    e = c.post("/api/experiments", json={"name": "loops", "reactor_id": "R1", "strain": "Lp187",
+                                        "profile_id": prof["id"]}).json()
+    chk = c.get(f"/api/experiments/{e['id']}/plan-check").json()
+    assert any(r["parameter"] == "temperature_control_mode" and not r["match"] for r in chk["rows"])
+    assert chk["assignment_differences"] == {}
+    r = c.post(f"/api/experiments/{e['id']}/load-profile").json()["results"]
+    assert {x["parameter"]: x["status"] for x in r}["temperature_control"] == "confirmed"
+    assert drivers["R1"].temperature_control.mode == "pid" and drivers["R1"].temperature_control.pid["P"] == 25.2
+
+    # someone removes Addition 2 from the pH loop on the display: pH loop parameters are no longer loaded
+    lc = drivers["R1"].loop_config
+    ph = next(lp for lp in lc.loops if lp.key == "ph")
+    drivers["R1"].loop_config = replace(lc, loops=tuple(replace(ph, actuators=ph.actuators[:1]) if lp is ph else lp
+                                                        for lp in lc.loops))
+    clock.advance(minutes=1)    # past the loop-config cache
+    from fm2.drivers.base import PhControl
+    drivers["R1"].ph_control = PhControl("pid", {"P": 1.0, "I": 60.0, "D": 0.0})
+    chk = c.get(f"/api/experiments/{e['id']}/plan-check").json()
+    assert "Addition 2" in chk["assignment_differences"]["ph"]
+    r = {x["parameter"]: x for x in c.post(f"/api/experiments/{e['id']}/load-profile").json()["results"]}
+    assert r["ph_control"]["status"] == "skipped" and r["temperature_control"]["status"] == "confirmed"
+    assert drivers["R1"].ph_control.pid == {"P": 1.0, "I": 60.0, "D": 0.0}   # untouched
+    app.state.acq.poll_once()
+    live = c.get("/api/reactors/live").json()[0]
+    assert live["temperature_control"]["mode"] == "pid"
+
+
+def test_start_stop_selected_loops_settings_and_external_switch(env):
+    c, clock, app, drivers = env
+    e = c.post("/api/experiments", json={"name": "loops on", "reactor_id": "R1", "strain": "Lp187",
+                                        "channels": ["temperature", "ph", "stirrer", "do2"]}).json()
+    c.post(f"/api/experiments/{e['id']}/prepare")
+    st = c.get("/api/reactors/R1/loops").json()
+    by = {lp["key"]: lp for lp in st["loops"]}
+    assert st["allowed"] == ["ph", "temperature", "stirrer"]
+    assert by["ph"]["allowed"] and by["ph"]["start_refused"] is None
+    assert "Settings" in by["do2"]["start_refused"] and by["do2"]["also_switches"] == ["Stirrer"]
+    assert "actuator" in by["level"]["start_refused"] or "Settings" in by["level"]["start_refused"]
+
+    r = c.post("/api/reactors/R1/loops", json={"loops": ["ph", "temperature"], "on": True}).json()
+    assert [x["status"] for x in r["results"]] == ["confirmed", "confirmed"]
+    assert drivers["R1"].loops_active["ph"] and drivers["R1"].loops_active["temperature"]
+    assert c.post("/api/reactors/R1/loops", json={"loops": ["do2"], "on": True}).status_code == 409   # not allowed
+    assert not drivers["R1"].loops_active["do2"]
+
+    # allow dO2 (lab PC only): starting it also starts the stirrer, no "external" alert for either
+    assert c.put("/api/settings/loops", json={"allowed": {"R1": ["ph", "temperature", "stirrer", "do2"]}}).status_code == 200
+    remote = TestClient(app, client=("100.101.102.103", 50000))
+    assert remote.put("/api/settings/loops", json={"allowed": {"R1": ["ph"]}}).status_code == 403
+    assert remote.post("/api/reactors/R1/loops", json={"loops": ["ph"], "on": False}).status_code == 403  # remote off by default
+    app.state.acq.poll_once()
+    assert c.post("/api/reactors/R1/loops", json={"loops": ["do2"], "on": True}).json()["results"][0]["status"] == "confirmed"
+    assert drivers["R1"].loops_active["stirrer"]
+    run_hours(app, clock, 0.05)
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    kinds = [x["kind"] for x in ev]
+    assert kinds.count("loop_started") == 3 and "loop_switched_on" not in kinds
+    assert any("in cascade" in x["message"] for x in ev)
+
+    # someone stops the pH loop on the display: one alert
+    drivers["R1"].loops_active["ph"] = False
+    run_hours(app, clock, 0.05)
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    off = [x for x in ev if x["kind"] == "loop_switched_off"]
+    assert len(off) == 1 and off[0]["severity"] == "alert" and "pH" in off[0]["message"]
+    r = c.post("/api/reactors/R1/loops", json={"loops": ["temperature"], "on": False}).json()
+    assert r["results"][0]["status"] == "confirmed" and not drivers["R1"].loops_active["temperature"]
+    run_hours(app, clock, 0.05)
+    assert not any(x["kind"] == "loop_switched_off" and "Temperature" in x["message"]
+                   for x in c.get(f"/api/experiments/{e['id']}/events").json())

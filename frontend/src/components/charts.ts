@@ -66,6 +66,12 @@ export const TREND_VARS: TrendVar[] = [
   { key: "stirrer_out_rpm", label: "Stirrer motor output", unit: "rpm", digits: 0, channel: "stirrer" },
   { key: "n2_pct", label: "N2 valve", unit: "%", digits: 0, channel: "do2" },
   { key: "air_pct", label: "Air valve", unit: "%", digits: 0, channel: "do2" },
+  { key: "acid_cumulative_ml", label: "Acid (Addition 2), cumulative", unit: "mL", digits: 1, channel: "ph" },
+  { key: "acid_pump_pct", label: "Acid pump activation", unit: "%", digits: 0, channel: "ph" },
+  { key: "level_contact", label: "Level / foam contact (1 = contact)", unit: "", digits: 0, channel: "level" },
+  { key: "antifoam_cumulative_ml", label: "Antifoam, cumulative", unit: "mL", digits: 1, channel: "level" },
+  { key: "antifoam_pct", label: "Antifoam pump activation", unit: "%", digits: 0, channel: "level" },
+  { key: "redox_mv", label: "Redox", unit: "mV", digits: 0, channel: "redox" },
 ];
 
 /** Variables of the channels in use (all when channels are unknown). */

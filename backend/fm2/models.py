@@ -102,6 +102,12 @@ class ControllerProfile(Base):
     ph_high_limit: Mapped[Optional[float]] = mapped_column(Float)
     temperature_low_limit: Mapped[Optional[float]] = mapped_column(Float)
     temperature_high_limit: Mapped[Optional[float]] = mapped_column(Float)
+    # Temperature loop: control type ("pid" | "adaptive") and loop parameters, like pH
+    temperature_control_mode: Mapped[Optional[str]] = mapped_column(String(20))
+    temperature_pid: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Actuators (and cascades) per loop the profile was made for, as read from a controller:
+    # {"ph": [{"id": 29, "name": "Alkali", "side": 1, "kind": "actuator"}, ...], ...} (loops.py)
+    loop_assignments: Mapped[Optional[dict]] = mapped_column(JSON)
     notes: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

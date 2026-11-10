@@ -17,9 +17,21 @@ export interface PlanParams {
   ph_setpoint: number | null; temperature_setpoint: number | null; stirrer_setpoint: number | null;
   ph_control_mode: string | null; ph_pid: Record<string, number | null> | null;
   ph_low_limit: number | null; ph_high_limit: number | null; temperature_low_limit: number | null; temperature_high_limit: number | null;
+  temperature_control_mode?: string | null; temperature_pid?: Record<string, number | null> | null;
+  loop_assignments?: LoopAssignments | null;
 }
 
-export type Channel = "temperature" | "ph" | "stirrer" | "do2";
+/** Per loop: actuators (and cascade loops) a profile was made for, as read from a controller. */
+export type LoopAssignments = Record<string, { id: number; name: string; side: number; kind: string }[]>;
+export interface LoopActuator { id: number; name: string; side: number; kind: string; pump: boolean; calibrated: boolean | null;
+  dose_monitoring: boolean | null; unit: string; side_label?: string }
+export interface LoopInfo { key: string; label: string; sensor: number; name: string; available: number; installed: boolean;
+  active: boolean | null; control_type: string | null; value: string | null; setpoint: number | null; has_actuator: boolean | null;
+  actuators: LoopActuator[]; drives: string | null; probe: string | null; warnings: string[] }
+export interface LoopConfigView { reachable: boolean; message?: string; loops: LoopInfo[]; unassigned_pumps: LoopActuator[];
+  assignments: LoopAssignments }
+
+export type Channel = "temperature" | "ph" | "stirrer" | "do2" | "level" | "redox";
 export const DEFAULT_CHANNELS: Channel[] = ["temperature", "ph", "stirrer"];
 
 export interface Snapshot {
@@ -28,12 +40,14 @@ export interface Snapshot {
   ph_low_limit: number | null; ph_high_limit: number | null;
   temperature_low_limit: number | null; temperature_high_limit: number | null;
   extra?: Partial<Record<"do2" | "do2_setpoint" | "do2_low_limit" | "do2_high_limit" | "heating_pct" | "cooling_pct" |
-    "stirrer_out_rpm" | "n2_pct" | "air_pct", number>>;
+    "stirrer_out_rpm" | "n2_pct" | "air_pct" | "acid_cumulative_ml" | "acid_pump_pct" | "level_contact" |
+    "antifoam_cumulative_ml" | "antifoam_pct" | "redox_mv", number>>;
 }
 
 export interface LiveReactor {
   reactor_id: string; online: boolean; last_reading_age_s: number | null; error: string | null;
   snapshot: Snapshot | null; ph_control: { mode: string | null; pid: Record<string, number> | null } | null;
+  temperature_control?: { mode: string | null; pid: Record<string, number> | null } | null;
   experiment: { id: number; code: string; strain: string; status: Status; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 
@@ -43,9 +57,11 @@ export interface Profile {
   ph_control_mode: string | null; ph_pid: Record<string, number> | null; notes: string;
   ph_low_limit: number | null; ph_high_limit: number | null;
   temperature_low_limit: number | null; temperature_high_limit: number | null;
+  temperature_control_mode: string | null; temperature_pid: Record<string, number> | null; loop_assignments: LoopAssignments | null;
 }
 export interface PlanCheckRow { parameter: string; plan: unknown; controller: unknown; match: boolean; read_only?: boolean }
-export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[] }
+export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[];
+  assignment_differences?: Record<string, string> }
 export type ExperimentDraft = { name: string; reactor_id: string; planned_date?: string | null; strain?: string;
   medium_id?: number | null; buffer_id?: number | null; working_volume_ml?: number | null; profile_id?: number | null; notes?: string;
   channels?: Channel[]; plan_params?: PlanParams | null };
@@ -158,6 +174,10 @@ export const api = {
     req<Experiment>(`/experiments/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   linkParallel: (id: number, partnerId: number) =>
     req<Experiment>(`/experiments/${id}/parallel`, { method: "POST", body: JSON.stringify({ partner_id: partnerId }) }),
+  loopsState: (reactor: string) => req<LoopsState>(`/reactors/${reactor}/loops`),
+  switchLoops: (reactor: string, loops: string[], on: boolean) => req<{ results: { loop: string; requested: boolean; readback: boolean | null; status: string; message: string }[] }>(
+    `/reactors/${reactor}/loops`, { method: "POST", body: JSON.stringify({ loops, on }) }),
+  loopConfig: (reactor: string, fresh = false) => req<LoopConfigView>(`/reactors/${reactor}/loop-config${fresh ? "?fresh=true" : ""}`),
   planCheck: (id: number) => req<PlanCheck>(`/experiments/${id}/plan-check`),
   loadProfile: (id: number) => req<{ results: { parameter: string; status: string; message?: string }[] }>(`/experiments/${id}/load-profile`, { method: "POST" }),
   media: () => req<Named[]>("/media"),
@@ -247,7 +267,10 @@ export interface AppSettings {
     telegram_token: string; telegram_chat_id: string; rules: Record<string, boolean> };
   backup: { enabled: boolean; destination: string; every_h: number; keep: number; on_end_of_production: boolean; csv_per_experiment: boolean;
     archive_destination: string; archive_format: "xlsx" | "zip"; archive_on_end: boolean };
+  loops: { allowed: Record<string, string[]>; allow_remote: boolean };
 }
+export interface SwitchLoop extends LoopInfo { allowed: boolean; start_refused: string | null; also_switches: string[] }
+export interface LoopsState { reachable: boolean; message?: string; allowed: string[]; loops: SwitchLoop[] }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
 export interface SystemInfo { version: string; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;

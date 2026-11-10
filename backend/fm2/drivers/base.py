@@ -8,8 +8,11 @@ driver will implement it once we have inspected what the controller exposes.
 Write operations are deliberately limited to what was agreed:
 - setpoints (pH, temperature, stirrer): any time, with read-back
 - process (alarm) limits of pH and temperature: any time, with read-back (decision 9 Nov 2026)
-- pH control mode and PID parameters: only from planning, before Start
-- actuators, dose counters, calibration, interlock limits: never (controller only)
+- pH and temperature control mode and loop parameters: only from planning, before Start
+- loop on/off (start/stop of a control loop, decision 10 Nov 2026): only loops allowed in
+  Settings, with confirmation, read-back and an event
+- actuators, actuator-to-loop assignments, dose counters, calibration, interlock limits:
+  never (controller only); assignments are read (read_loop_config) and shown in planning
 """
 
 from __future__ import annotations
@@ -40,7 +43,13 @@ class PhControl:
     pid: Optional[dict] = None
 
 
-# Parameters a profile loads for each pH control mode. In Adaptive, P/I/D are the starting
+LoopControl = PhControl   # same structure for the temperature loop
+
+# Loops whose control type and loop parameters a profile can load (decision 10 Nov 2026: the
+# "safe" loops pH and temperature).
+CONTROL_LOOPS = ("ph", "temperature")
+
+# Parameters a profile loads for each control mode (pH and temperature alike). In Adaptive, P/I/D are the starting
 # values the controller then adapts (decision 9 Nov 2026: load them in Adaptive too).
 PH_MODE_PARAMS = {"pid": ("P", "I", "D", "deadband", "cycle_time"),
                   "adaptive": ("P", "I", "D", "deadband", "cycle_time", "settling_time")}
@@ -62,8 +71,14 @@ class ControllerSnapshot:
     temperature_low_limit: Optional[float] = None
     temperature_high_limit: Optional[float] = None
     ph_control: PhControl = field(default_factory=PhControl)
+    temperature_control: PhControl = field(default_factory=PhControl)
+    # loop on/off as reported by the controller: {"ph": True, ...} (loops it could read)
+    loops_active: dict = field(default_factory=dict)
     # Optional channels (see CHANNELS): dO2 and actuator outputs, keyed by EXTRA_FIELDS
     extra: dict = field(default_factory=dict)
+
+    def control(self, loop: str) -> PhControl:
+        return {"ph": self.ph_control, "temperature": self.temperature_control}[loop]
 
     def setpoint(self, parameter: str) -> Optional[float]:
         return {"ph": self.ph_setpoint, "temperature": self.temperature_setpoint,
@@ -74,7 +89,7 @@ SETPOINT_PARAMETERS = ("ph", "temperature", "stirrer")
 
 # Channels an experiment can use (chosen at planning). A channel switched off is still recorded,
 # but it is not shown and raises no alerts.
-CHANNELS = ("temperature", "ph", "stirrer", "do2")
+CHANNELS = ("temperature", "ph", "stirrer", "do2", "level", "redox")
 DEFAULT_CHANNELS = ("temperature", "ph", "stirrer")
 # Extra values carried in ControllerSnapshot.extra, with the channel they belong to.
 EXTRA_FIELDS = {
@@ -82,7 +97,48 @@ EXTRA_FIELDS = {
     "stirrer_out_rpm": "stirrer",
     "do2": "do2", "do2_setpoint": "do2", "do2_low_limit": "do2", "do2_high_limit": "do2",
     "n2_pct": "do2", "air_pct": "do2",
+    # pH-high (acid) pump = Addition 2 when assigned to the pH loop
+    "acid_cumulative_ml": "ph", "acid_pump_pct": "ph",
+    "level_contact": "level", "antifoam_cumulative_ml": "level", "antifoam_pct": "level",
+    "redox_mv": "redox",
 }
+
+
+# --- loop configuration (read from the controller, shown in planning) ---------------------
+
+@dataclass(frozen=True)
+class LoopActuator:
+    id: int                   # actuator index, or sensor index for kind == "sensor" (cascade)
+    name: str
+    side: int                 # +n: n-th actuator acting below the setpoint, -n: above
+    kind: str = "actuator"    # "actuator" | "sensor" (another loop used as actuator, cascade)
+    pump: bool = False        # dosing pump (volume in mL once calibrated)
+    calibrated: Optional[bool] = None
+    dose_monitoring: Optional[bool] = None
+    unit: str = ""
+
+
+@dataclass(frozen=True)
+class LoopInfo:
+    key: str                  # "ph", "temperature", "stirrer", "do2", "level", "redox"
+    sensor: int
+    name: str
+    available: int            # 0 absent, 1 not installed, 3 installed, 4 selected as control loop
+    active: Optional[bool] = None
+    control_type: Optional[str] = None
+    value: Optional[str] = None
+    setpoint: Optional[float] = None
+    has_actuator: Optional[bool] = None
+    actuators: tuple = ()     # LoopActuator
+    drives: Optional[str] = None   # key of the loop this sensor drives in cascade
+    probe: Optional[str] = None    # level probe: "Foam"/"Level" and sensitivity
+
+
+@dataclass(frozen=True)
+class LoopConfig:
+    loops: tuple              # LoopInfo
+    unassigned_pumps: tuple = ()   # LoopActuator (side 0) installed but in no loop
+
 
 
 class ControllerDriver(ABC):
@@ -100,6 +156,20 @@ class ControllerDriver(ABC):
     @abstractmethod
     def write_ph_control(self, control: PhControl) -> None:
         """Write pH control mode and PID parameters (planning only). Raises DriverError."""
+
+    def write_loop_control(self, loop: str, control: PhControl) -> None:
+        """Control type and loop parameters of 'ph' or 'temperature' (planning only)."""
+        if loop == "ph":
+            return self.write_ph_control(control)
+        raise DriverError(f"this controller driver cannot load the {loop} loop parameters")
+
+    def write_loop_active(self, loop: str, on: bool) -> None:
+        """Switch one control loop on or off. Callers read back (snapshot.loops_active)."""
+        raise DriverError("this controller driver cannot switch loops")
+
+    def read_loop_config(self) -> LoopConfig:
+        """Loops, their actuators (and cascades) and calibration state. Raises DriverError."""
+        raise DriverError("this controller driver cannot read the loop configuration")
 
     def write_limits(self, parameter: str, low: Optional[float], high: Optional[float]) -> None:
         """

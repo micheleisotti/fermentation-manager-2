@@ -55,7 +55,18 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   logged). Alerts:
   out-of-limits (immediately at Start, then after 3 min, once per excursion),
   setpoint reached (once per setpoint; "already at setpoint" at Start), controller silent,
-  setpoint changed on controller, fermentation probably finished.
+  setpoint changed on controller, fermentation probably finished, base counter reset (info).
+- Loop configuration (10 Nov 2026, `fm2/loops.py`, `GET /api/reactors/{id}/loop-config`): read only, cached
+  20 s. Planning shows a compact box per channel in use (loop on/off, control type, actuators with side,
+  cascades, warnings: not installed, no actuator, pump not calibrated / dose monitoring off, dO2 probe ~0 % or
+  SP > 100 %, cascade starts another loop). Assignments are changed only on the controller display.
+  Profiles also hold the temperature loop (mode + P/I/D/dead band/cycle/settling, like pH) and optionally
+  `loop_assignments` recorded from R1/R2 ("Record from"): if the controller's actuators for a loop differ,
+  load-profile skips that loop's control settings (status "skipped") but loads setpoints and limits.
+  New channels: Level / antifoam (contact, antifoam mL and %), Redox (mV); acid (Addition 2) mL and % in pH.
+- Base counter resets (power cycle / reset on the display: seen 9→10 Nov, 1.61 → 0.00 mL): the raw
+  counter is stored as read; readings, charts, totals and exports use it continued across resets
+  (`base_dosing.stitch_counter`, drop > 0.05 mL = reset); exports then also carry `base_counter_raw_ml`.
 - Colours: green = running/good, blue = completed, red only for alerts/limits.
 - Analysis: Gompertz (Zwietering) on OD600 or AFU, base-dosing parameters, Welch + CI,
   ANOVA + Tukey; ggplot-style figures (points every 1/2/4 h, SD error bars, facets).
@@ -113,11 +124,13 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   matplotlib (PNG/SVG/PDF, width in mm, dpi, themes grey/bw/classic). **New dependency: run
   `pip install -e .` on the PC** after pulling.
 - Desktop navigation rail stays fixed while the page scrolls.
-- To do (Michele, 9 Nov): **loop on/off** from the experiment page — start the control of a loop (pH, T,
-  stirrer) or stop it (control off and its actuator stopped). Never manual actuator outputs: those stay
-  on the physical controller. Data recording stays separate. Needs an inspection session to find the
-  loop on/off address per loop; then confirmation dialog, read-back, change log, remote disabled by
-  default. Until then the driver never writes loop or actuator states.
+- **Loop on/off** (done 10 Nov, PR #23): Start / Stop selected loops on the experiment page writes
+  `1.14.<sensor>` (0/1, like the controller's own buttons) for pH, T, stirrer, dO2, level — only loops
+  enabled in Settings › Loop control (per reactor, lab PC only; default pH, T, stirrer; remote switching
+  off by default), set up on the controller and, to start, with an actuator; a loop that starts others
+  in cascade (dO2 → stirrer) needs those enabled too. Read-back, event per loop; alert
+  `loop_switched_off` when a loop of a channel in use goes off not by FM2 (info when switched on).
+  Never manual actuator outputs, assignments, dose counters, calibration: controller only.
 
 ## Analysis sessions (9 Nov 2026)
 - Analysis › sessions (mockup M3Analysis): conditions are session-only labels (ordered: A, B, ...);
@@ -200,8 +213,8 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 
 ## Preparation phase and editable plan values (10 Nov 2026, revised)
 - New status `preparing`. Planning → **Go to fermentation**: the same live page as a running experiment,
-  bar "● Not recording · t = —" with **Start selected loops / Stop selected loops** (popup, not implemented
-  yet, all disabled: loops = actuators only, sensors keep being read) and **Start experiment** (reminder
+  bar "● Not recording · t = —" with **Start selected loops / Stop selected loops** (loops = actuators
+  only, sensors keep being read) and **Start experiment** (reminder
   popup) in the place of End of experiment. Live values, setpoint/limit edits and alerts/notifications
   work (no base-dosing "finished" rule; at-start messages say "when monitoring began"); **nothing is
   recorded before Start**, so charts stay empty. Phase events get negative times at Start.
@@ -213,11 +226,11 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   (planned or preparing).
 
 ## Versioning
-- PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). Until the first
-  stable release: `2.0.0.devN` with N = number of the last merged PR (now 2.0.0.dev19). After the test
-  fermentations: release **2.0.0** (git tag `v2.0.0`), then semantic versioning — bug fixes 2.0.1,
-  new features 2.1.0 (e.g. loop control), incompatible changes (data/format) 3.0.0; work in between is
-  `2.1.0.devN`. The version is shown in Settings › Credits.
+- PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). 2.0.0.dev1–dev19
+  followed the merged PR numbers. Since the loop-control work (new functions) the line is **2.1.0.devN**,
+  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21; 2.1.0.dev2 = loop configuration in planning, PR #22; 2.1.0.dev3 = loop start/stop, PR #23).
+  Release 2.1.0 (git tag) after the test fermentations; then semantic versioning — bug fixes 2.1.1,
+  new features 2.2.0, incompatible changes (data/format) 3.0.0. The version is shown in Settings › Credits.
 
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.

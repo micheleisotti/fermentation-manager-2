@@ -26,6 +26,8 @@ from .. import __version__
 from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
 from ..analysis import base_dosing, kinetics, report, stats
+from ..services.app_settings import SWITCHABLE_LOOPS
+from .. import loops
 from ..config import Settings
 import logging
 from pathlib import Path
@@ -178,8 +180,9 @@ def who(request: Request, db: Session) -> str:
     return u.name if u else GUEST_NAME
 
 
-def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None) -> None:
-    db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity="info", message=message, t_h=t_h))
+def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None,
+           severity: str = "info") -> None:
+    db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity=severity, message=message, t_h=t_h))
 
 
 def channels_of(e: Experiment) -> list[str]:
@@ -196,7 +199,9 @@ def _check_channels(ch: Optional[list[str]]) -> Optional[list[str]]:
 
 
 PLAN_KEYS = ("ph_setpoint", "temperature_setpoint", "stirrer_setpoint", "ph_control_mode", "ph_pid",
-             "ph_low_limit", "ph_high_limit", "temperature_low_limit", "temperature_high_limit")
+             "ph_low_limit", "ph_high_limit", "temperature_low_limit", "temperature_high_limit",
+             "temperature_control_mode", "temperature_pid", "loop_assignments")
+LOOP_PLAN = {"ph": ("ph_control_mode", "ph_pid"), "temperature": ("temperature_control_mode", "temperature_pid")}
 
 
 def profile_params(p: Optional[ControllerProfile]) -> dict:
@@ -205,6 +210,8 @@ def profile_params(p: Optional[ControllerProfile]) -> dict:
     d = {k: getattr(p, k) for k in PLAN_KEYS}
     d["ph_control_mode"] = p.ph_control_mode.value if p.ph_control_mode else None
     d["ph_pid"] = dict(p.ph_pid) if p.ph_pid else None
+    d["temperature_pid"] = dict(p.temperature_pid) if p.temperature_pid else None
+    d["loop_assignments"] = dict(p.loop_assignments) if p.loop_assignments else None
     return d
 
 
@@ -221,17 +228,37 @@ def _clean_plan(d: Optional[dict]) -> Optional[dict]:
     out = {}
     for k in PLAN_KEYS:
         v = d.get(k)
-        if k == "ph_control_mode":
+        if k in ("ph_control_mode", "temperature_control_mode"):
             if v not in (None, "", "pid", "adaptive"):
-                raise HTTPException(422, "pH control mode must be pid or adaptive")
+                raise HTTPException(422, f"{k.split('_')[0]} control mode must be pid or adaptive")
             out[k] = v or None
-        elif k == "ph_pid":
+        elif k == "loop_assignments":
+            out[k] = _clean_assignments(v)
+        elif k in ("ph_pid", "temperature_pid"):
             out[k] = {kk: (None if vv in ("", None) else float(vv)) for kk, vv in (v or {}).items()} or None
         else:
             out[k] = None if v in ("", None) else float(v)
     for a, b in (("ph_low_limit", "ph_high_limit"), ("temperature_low_limit", "temperature_high_limit")):
         if out[a] is not None and out[b] is not None and out[a] >= out[b]:
             raise HTTPException(422, f"{a.replace('_', ' ')} must be lower than {b.replace('_', ' ')}")
+    return out
+
+
+def _clean_assignments(v) -> Optional[dict]:
+    """{loop: [{id, name, side, kind}]} as recorded from a controller (loops.assignments_of)."""
+    if not v:
+        return None
+    if not isinstance(v, dict):
+        raise HTTPException(422, "loop_assignments must be an object")
+    out = {}
+    for loop, items in v.items():
+        if loop not in LOOP_PLAN or not isinstance(items, list):
+            raise HTTPException(422, f"loop_assignments: unknown loop {loop!r}")
+        try:
+            out[loop] = [{"id": int(i["id"]), "name": str(i.get("name", "")), "side": int(i["side"]),
+                          "kind": str(i.get("kind", "actuator"))} for i in items]
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(422, f"loop_assignments: malformed entry for {loop}")
     return out
 
 
@@ -421,6 +448,10 @@ def create_profile(body: S.ProfileIn, request: Request, db: Session = Depends(ge
     data["author"] = who(request, db)
     if data["ph_control_mode"]:
         data["ph_control_mode"] = PhControlMode(data["ph_control_mode"])
+    if data["temperature_control_mode"] not in (None, "", "pid", "adaptive"):
+        raise HTTPException(422, "temperature control mode must be pid or adaptive")
+    data["temperature_control_mode"] = data["temperature_control_mode"] or None
+    data["loop_assignments"] = _clean_assignments(data["loop_assignments"])
     p = ControllerProfile(**data)
     db.add(p)
     db.flush()
@@ -559,12 +590,25 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
                                 **({"message": r.message} if r.status != "confirmed" else {})})
         except commands.CommandRejected as ex:
             results.append({"parameter": f"{param}_limits", "status": "error", "message": str(ex)})
-    if prof.ph_control_mode and "ph" in chans:
+    wanted = [loop for loop in LOOP_PLAN if getattr(prof, LOOP_PLAN[loop][0]) and loop in chans]
+    diffs: dict[str, str] = {}
+    if wanted and prof.loop_assignments:
         try:
-            commands.load_ph_control(driver, PhControl(prof.ph_control_mode, prof.ph_pid), e.status.value)
-            results.append({"parameter": "ph_control", "status": "confirmed"})
+            diffs = loops.assignment_differences(prof.loop_assignments, driver.read_loop_config())
+        except DriverError as ex:
+            diffs = {loop: f"cannot read the controller's assignments ({ex})" for loop in prof.loop_assignments}
+    for loop in wanted:
+        mode_key, pid_key = LOOP_PLAN[loop]
+        if loop in diffs:   # parameters tuned for other actuators: not loaded
+            results.append({"parameter": f"{loop}_control", "status": "skipped",
+                            "message": f"actuators differ ({diffs[loop]}): control type and loop parameters not loaded"})
+            continue
+        try:
+            commands.load_loop_control(driver, loop, PhControl(getattr(prof, mode_key), getattr(prof, pid_key)),
+                                       e.status.value)
+            results.append({"parameter": f"{loop}_control", "status": "confirmed"})
         except (DriverError, commands.CommandRejected) as ex:
-            results.append({"parameter": "ph_control", "status": "error", "message": str(ex)})
+            results.append({"parameter": f"{loop}_control", "status": "error", "message": str(ex)})
     return {"results": results}
 
 
@@ -589,17 +633,20 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
             ctrl = snap.setpoint(param)
             rows.append({"parameter": f"{param}_setpoint", "plan": planned, "controller": ctrl,
                          "match": planned is None or (ctrl is not None and abs(ctrl - planned) < 1e-6)})
-        if p.ph_control_mode and "ph" in chans:
-            rows.append({"parameter": "ph_control_mode", "plan": p.ph_control_mode,
-                         "controller": snap.ph_control.mode, "match": p.ph_control_mode == snap.ph_control.mode})
-            plan_ctl = PhControl(p.ph_control_mode, p.ph_pid)
-            param_diffs = [d for d in commands.ph_control_differences(plan_ctl, snap.ph_control)
+        for loop, (mode_key, pid_key) in LOOP_PLAN.items():
+            mode = getattr(p, mode_key, None)
+            if not mode or loop not in chans:
+                continue
+            ctl = snap.control(loop)
+            rows.append({"parameter": mode_key, "plan": mode, "controller": ctl.mode, "match": mode == ctl.mode})
+            pid = getattr(p, pid_key, None)
+            param_diffs = [d for d in commands.ph_control_differences(PhControl(mode, pid), ctl)
                            if not d.startswith("mode ")]
-            applicable = {k: v for k, v in (p.ph_pid or {}).items()
-                          if v is not None and k in commands.PH_MODE_PARAMS[p.ph_control_mode]}
+            applicable = {k: v for k, v in (pid or {}).items()
+                          if v is not None and k in commands.PH_MODE_PARAMS[mode]}
             if applicable:
-                rows.append({"parameter": "ph_pid", "plan": applicable,
-                             "controller": {k: (snap.ph_control.pid or {}).get(k) for k in applicable},
+                rows.append({"parameter": pid_key, "plan": applicable,
+                             "controller": {k: (ctl.pid or {}).get(k) for k in applicable},
                              "match": not param_diffs})
     for param in ("ph", "temperature"):
         if param not in chans:
@@ -613,7 +660,43 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
             rows.append({"parameter": f"{param}_limits", "plan": plan, "controller": ctrl, "match": match})
     busy = db.scalar(select(Experiment).where(Experiment.reactor_id == e.reactor_id,
                                               Experiment.status.in_(ACTIVE), Experiment.id != e.id))
-    return {"reachable": True, "reactor_free": busy is None, "rows": rows}
+    assignment_diffs: dict[str, str] = {}
+    if p and getattr(p, "loop_assignments", None):
+        try:
+            cfg = _loop_config(request, e.reactor_id)
+            assignment_diffs = {k: m for k, m in loops.assignment_differences(p.loop_assignments, cfg).items()
+                                if k in chans}
+        except DriverError:
+            pass
+    return {"reachable": True, "reactor_free": busy is None, "rows": rows, "assignment_differences": assignment_diffs}
+
+
+_LOOP_CACHE_S = 20.0
+
+
+def _loop_config(request: Request, reactor_id: str, fresh: bool = False):
+    """Loop configuration of a reactor, cached for a few seconds (it changes only on the display)."""
+    cache = request.app.state.__dict__.setdefault("loop_config_cache", {})
+    now = now_of(request)
+    hit = cache.get(reactor_id)
+    if hit and not fresh and (now - hit[0]).total_seconds() < _LOOP_CACHE_S:
+        return hit[1]
+    acq: Acquisition = request.app.state.acq
+    if reactor_id not in acq.drivers:
+        raise HTTPException(404, f"Unknown reactor {reactor_id}")
+    cfg = acq.drivers[reactor_id].read_loop_config()
+    cache[reactor_id] = (now, cfg)
+    return cfg
+
+
+@router.get("/reactors/{reactor_id}/loop-config")
+def loop_config(reactor_id: str, request: Request, fresh: bool = False):
+    """Loops, assigned actuators, cascades and calibration as set on the controller (read only)."""
+    try:
+        cfg = _loop_config(request, reactor_id, fresh)
+    except DriverError as ex:
+        return {"reachable": False, "message": str(ex), "loops": [], "unassigned_pumps": [], "assignments": {}}
+    return {"reachable": True, **loops.config_view(cfg), "assignments": loops.assignments_of(cfg)}
 
 
 ACTIVE = (ExperimentStatus.preparing, ExperimentStatus.fermenting)
@@ -778,14 +861,26 @@ READING_FIELDS = ["t_h", "ph", "ph_setpoint", "temperature", "temperature_setpoi
 
 
 def _readings_df(db: Session, exp_id: int, since_h: float = 0.0) -> pd.DataFrame:
-    """Controller readings, one column per field; optional-channel values become columns too."""
-    rows = db.execute(select(ControllerReading).where(ControllerReading.experiment_id == exp_id,
-                                                      ControllerReading.t_h >= since_h)
+    """
+    Controller readings, one column per field; optional-channel values become columns too.
+    base_cumulative_ml is continued across controller counter resets (stitch_counter); when a
+    reset happened, the raw counter is kept as base_counter_raw_ml. The whole series is read
+    so that the offset is right also for since_h > 0.
+    """
+    rows = db.execute(select(ControllerReading).where(ControllerReading.experiment_id == exp_id)
                       .order_by(ControllerReading.t_h)).scalars().all()
     cols = READING_FIELDS + list(EXTRA_FIELDS)
     df = pd.DataFrame([{f: getattr(r, f) for f in READING_FIELDS} | {k: (r.extra or {}).get(k) for k in EXTRA_FIELDS}
                        | {"ts": r.ts} for r in rows])
-    return df if not df.empty else pd.DataFrame(columns=cols + ["ts"])
+    if df.empty:
+        return pd.DataFrame(columns=cols + ["ts"])
+    raw = pd.to_numeric(df["base_cumulative_ml"], errors="coerce").to_numpy(dtype=float)
+    if base_dosing.count_resets(raw):
+        df["base_counter_raw_ml"] = raw
+        df["base_cumulative_ml"] = base_dosing.stitch_counter(raw)
+    if since_h > 0:
+        df = df[df["t_h"] >= since_h].reset_index(drop=True)
+    return df
 
 
 @router.get("/experiments/{exp_id}/readings")
@@ -853,8 +948,10 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
             "online": live.last_error is None and live.last_ok is not None,
             "last_reading_age_s": (now - live.last_ok).total_seconds() if live.last_ok else None,
             "error": live.last_error,
-            "snapshot": None if snap is None else {k: v for k, v in snap.__dict__.items() if k not in ("ts", "ph_control")},
+            "snapshot": None if snap is None else {k: v for k, v in snap.__dict__.items()
+                                                   if k not in ("ts", "ph_control", "temperature_control")},
             "ph_control": None if snap is None else snap.ph_control.__dict__,
+            "temperature_control": None if snap is None else snap.temperature_control.__dict__,
             "experiment": None if exp is None else {"id": exp.id, "code": exp.code, "strain": exp.strain,
                                                     "status": exp.status.value,
                                                     "t_h": _t_h(exp, now), "channels": channels_of(exp),
@@ -886,6 +983,81 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     return res.__dict__
 
 
+@router.get("/reactors/{reactor_id}/loops")
+def loops_state(reactor_id: str, request: Request):
+    """What the Start/Stop selected loops dialog needs: loops, their state, and whether FM2 may switch them."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    allowed = request.app.state.app_settings.allowed_loops(reactor_id)
+    try:
+        cfg = _loop_config(request, reactor_id, fresh=True)
+    except DriverError as ex:
+        return {"reachable": False, "message": str(ex), "allowed": allowed, "loops": []}
+    view = loops.config_view(cfg)["loops"]
+    out = []
+    for lp in view:
+        if lp["key"] not in SWITCHABLE_LOOPS:
+            continue
+        reason = _switch_refusal(lp, view, allowed, start=True)
+        out.append({**lp, "allowed": lp["key"] in allowed, "start_refused": reason,
+                    "also_switches": [o["label"] for o in view if o["drives"] == lp["key"]]})
+    return {"reachable": True, "allowed": allowed, "loops": out}
+
+
+def _switch_refusal(lp: dict, view: list[dict], allowed: list[str], start: bool) -> Optional[str]:
+    if lp["key"] not in allowed:
+        return "not enabled in Settings › Loop control"
+    if not lp["installed"] or lp["available"] < 4:
+        return "not set up as a control loop on the controller"
+    if start and not lp["actuators"]:
+        return "no actuator assigned on the controller"
+    if start:
+        for o in view:   # loops the controller starts with it (cascade) must be allowed too
+            if o["drives"] == lp["key"] and o["key"] not in allowed:
+                return f"it would also start the {o['label']} loop, which is not enabled in Settings"
+    return None
+
+
+@router.post("/reactors/{reactor_id}/loops")
+def switch_loops(reactor_id: str, body: S.LoopSwitchIn, request: Request, db: Session = Depends(get_db)):
+    """Start or stop the selected control loops (allowed ones only), with read-back and an event."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    _check_remote(request)
+    if not is_local(request) and not request.app.state.app_settings.get("loops")["allow_remote"]:
+        raise HTTPException(403, "Starting and stopping loops from remote devices is switched off (Settings › Loop control).")
+    if not body.loops:
+        raise HTTPException(422, "No loop selected")
+    allowed = request.app.state.app_settings.allowed_loops(reactor_id)
+    try:
+        cfg = _loop_config(request, reactor_id, fresh=True)
+    except DriverError as ex:
+        raise HTTPException(503, f"{reactor_id} not reachable: {ex}")
+    view = {lp["key"]: lp for lp in loops.config_view(cfg)["loops"]}
+    for key in body.loops:
+        if key not in view or key not in SWITCHABLE_LOOPS:
+            raise HTTPException(422, f"Unknown loop {key!r}")
+        why = _switch_refusal(view[key], list(view.values()), allowed, start=body.on)
+        if why:
+            raise HTTPException(409, f"{view[key]['label']}: {why}. Nothing was switched.")
+    cascades = {k: [o["key"] for o in view.values() if o["drives"] == k] for k in body.loops}
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
+    alert_state = acq.alert_state_for(exp.id, reactor_id, exp.status == ExperimentStatus.preparing) if exp else None
+    results = commands.switch_loops(driver, list(body.loops), body.on, cascades, alert_state)
+    request.app.state.__dict__.get("loop_config_cache", {}).pop(reactor_id, None)
+    author = who(request, db)
+    for r in results:
+        label = view[r.loop]["label"]
+        extra = cascades.get(r.loop)
+        msg = (f"{reactor_id}: {label} loop {'started' if body.on else 'stopped'} by {author}"
+               + (f" (with {', '.join(view[x]['label'] for x in extra)} in cascade)" if extra else "")
+               + ("" if r.status == "confirmed" else f" — NOT confirmed: {r.message}"))
+        if exp:
+            _event(db, exp, "loop_started" if body.on else "loop_stopped", msg, _t_h(exp, now_of(request)),
+                   severity="info" if r.status == "confirmed" else "alert")
+    return {"results": [r.__dict__ for r in results]}
+
+
 def is_local(request: Request) -> bool:
     """
     True for requests from the lab PC itself (loopback). Decided from the connection, never from
@@ -910,7 +1082,7 @@ def origin_of(request: Request) -> str:
     return "local" if is_local(request) else "remote"
 
 
-LOCAL_ONLY_SECTIONS = ("remote", "backup")
+LOCAL_ONLY_SECTIONS = ("remote", "backup", "loops")
 
 
 def _check_remote(request: Request, _declared: str = "") -> None:
