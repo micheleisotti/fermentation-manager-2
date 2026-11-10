@@ -361,3 +361,27 @@ def test_library_archive_and_end_outcome(env):
     assert any("aborted" in x["message"] and "contaminated" in x["message"] for x in c.get(f"/api/experiments/{e['id']}/events").json())
     assert c.patch(f"/api/experiments/{e['id']}", json={"archived": True}).json()["archived"] is True
     assert c.get(f"/api/experiments/{e['id']}").json()["n_sessions"] == 0
+
+
+def test_archive_copy_on_end_and_on_demand(env, tmp_path):
+    c, clock, app, _ = env
+    arch = tmp_path / "usb"
+    e = c.post("/api/experiments", json={"name": "Riboflavin: pH 6/7", "reactor_id": "R1"}).json()
+    c.post(f"/api/experiments/{e['id']}/start")
+    clock.advance(hours=1)
+    # no folder yet: the run ends anyway, the copy reports why it was not saved
+    out = c.post(f"/api/experiments/{e['id']}/end", json={"outcome": "completed", "save_copy": True}).json()
+    assert out["status"] == "completed" and "No archive folder" in out["copy"]["error"]
+    bk = c.get("/api/settings").json()["backup"]
+    bk["archive_destination"] = str(arch)
+    assert c.put("/api/settings/backup", json=bk).status_code == 200
+    r = c.post(f"/api/experiments/{e['id']}/archive-copy", json={})
+    assert r.status_code == 502 and "not found" in r.json()["detail"]   # USB stick "unplugged"
+    arch.mkdir()
+    r = c.post(f"/api/experiments/{e['id']}/archive-copy", json={"format": "zip"}).json()
+    name = r["path"].split("/")[-1].split("\\")[-1]
+    import re as _re
+    assert _re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{4}_FM-\d{3}_Riboflavin- pH 6-7\.zip", name), name
+    assert (arch / name).stat().st_size == r["bytes"] > 0
+    d = c.get(f"/api/experiments/{e['id']}/export.xlsx")
+    assert "filename*=UTF-8''" in d.headers["content-disposition"] and "_FM-" in d.headers["content-disposition"]

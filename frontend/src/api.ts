@@ -162,8 +162,11 @@ export const api = {
     req<{ deleted: string }>(`/experiments/${id}?confirm=${encodeURIComponent(code)}`, { method: "DELETE" }),
   deleteProfile: (id: number) => req<{ deleted: number; unlinked_experiments: string[] }>(`/profiles/${id}`, { method: "DELETE" }),
   start: (id: number) => req<Experiment>(`/experiments/${id}/start`, { method: "POST" }),
-  end: (id: number, outcome: "completed" | "aborted" = "completed", note = "") =>
-    req<Experiment>(`/experiments/${id}/end`, { method: "POST", body: JSON.stringify({ outcome, note }) }),
+  end: (id: number, outcome: "completed" | "aborted" = "completed", note = "", save_copy?: boolean) =>
+    req<Experiment & { copy?: { path?: string; bytes?: number; error?: string } | null }>(`/experiments/${id}/end`,
+      { method: "POST", body: JSON.stringify({ outcome, note, save_copy }) }),
+  archiveCopy: (id: number, body: { format?: string; blocks?: string[]; resample_min?: number | null; model?: string }) =>
+    req<{ path: string; bytes: number }>(`/experiments/${id}/archive-copy`, { method: "POST", body: JSON.stringify(body) }),
   setArchived: (id: number, archived: boolean) =>
     req<Experiment>(`/experiments/${id}`, { method: "PATCH", body: JSON.stringify({ archived }) }),
   namedAll: (kind: "media" | "buffers") => req<Named[]>(`/${kind}?include_archived=true`),
@@ -231,7 +234,8 @@ export interface AppSettings {
     hold_min: number; silent_after_min: number; finished_fraction_pct: number; finished_hold_min: number };
   notifications: { channel: "none" | "ntfy" | "telegram"; ntfy_server: string; ntfy_topic: string; ntfy_token: string;
     telegram_token: string; telegram_chat_id: string; rules: Record<string, boolean> };
-  backup: { enabled: boolean; destination: string; every_h: number; keep: number; on_end_of_production: boolean; csv_per_experiment: boolean };
+  backup: { enabled: boolean; destination: string; every_h: number; keep: number; on_end_of_production: boolean; csv_per_experiment: boolean;
+    archive_destination: string; archive_format: "xlsx" | "zip"; archive_on_end: boolean };
 }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }

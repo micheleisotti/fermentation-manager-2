@@ -187,6 +187,17 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Telegram: clearer labels (bot token vs your own chat id) and "Find it" (getUpdates via
   POST /settings/notifications/telegram-chats, bots skipped).
 
+## Experiment copies to an archive folder (10 Nov 2026)
+- Settings › Data and backup › Experiment copies: archive folder (e.g. a USB stick, `E:\FM2-archive`),
+  format XLSX / CSV zip, "offer a copy at End of experiment" (default on). Local-only section.
+- End of experiment dialog: "Save a copy of the data to …" (ticked by default when a folder is set); the run
+  ends even if the copy fails (stick unplugged), and the dialog says why.
+- Analysis › Export: "Download" (browser) and "Save to archive" (written by the lab PC, any device).
+- File names: `YYYY-MM-DD_HHMM_<code>_<name>.<ext>` (local time; characters invalid on Windows replaced);
+  downloads use the same name. Each copy is a new file (never overwritten) and is logged as an event.
+- No periodic backup during a run (decided): every reading is committed to SQLite (WAL) as it arrives and
+  the service resumes recording after a power cut; set "Restore on AC power loss" in the PC BIOS.
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.

@@ -68,6 +68,9 @@ Three levels, increasing complexity:
   continuously and private lab data should not be published by mistake. Keep backups on a network share /
   second disk / rclone, use OSF for curated datasets.
 - Effort: settings (token, default project) + one upload client + a dialog: about one work session.
+- Plan (10 Nov 2026): OSF becomes a second "archive destination" next to the archive folder: same
+  End-of-experiment and "Save to archive" actions; optional snapshot of the running experiment every N min
+  as a new version of one file. Per-user destinations only with real sign-in (PIN required) and roles.
 
 ## 8. Other open items
 - Loop on/off from the software (pH, T, stirrer), never manual actuator outputs — see HANDOFF.

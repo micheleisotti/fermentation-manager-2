@@ -306,6 +306,8 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
   const [width, setWidth] = useState("174");
   const [dpi, setDpi] = useState("300");
   const [theme, setTheme] = useState("grey");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<{ ok: boolean; text: string } | null>(null);
   const w = Number(width);
   const widthOk = Number.isFinite(w) && w >= 40 && w <= 500;
   const dataUrl = `/api/experiments/${e.id}/export.${format}?blocks=${blocks.join(",")}&model=${model}${resample ? `&resample_min=${resample}` : ""}`;
@@ -335,8 +337,20 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
       </fieldset>
       <Segmented label="Data format" value={format} onChange={setFormat}
         options={[{ value: "zip", label: "CSV (zip)" }, { value: "xlsx", label: "XLSX · one sheet per block" }]} />
-      <a className={`btn filled ${blocks.length ? "" : "disabled"}`} href={blocks.length ? dataUrl : undefined} download
-        aria-disabled={!blocks.length} style={{ justifyContent: "center" }}>Export data</a>
+      <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
+        <a className="btn filled" href={blocks.length ? dataUrl : undefined} download
+          aria-disabled={!blocks.length} style={{ justifyContent: "center", flex: "1 1 0" }}>Download</a>
+        <button className="btn tonal" style={{ justifyContent: "center", flex: "1 1 0" }} disabled={!blocks.length || saving}
+          title="Written by the lab PC into the archive folder (Settings › Data and backup), e.g. a USB stick"
+          onClick={async () => {
+            setSaving(true); setSaved(null);
+            try { const r = await api.archiveCopy(e.id, { format, blocks, resample_min: resample ? Number(resample) : null, model }); setSaved({ ok: true, text: r.path }); }
+            catch (x) { setSaved({ ok: false, text: (x as Error).message }); }
+            finally { setSaving(false); }
+          }}>{saving ? "Saving…" : "Save to archive"}</button>
+      </div>
+      {saved && <div className={`banner ${saved.ok ? "good" : "warn"} small`} role="status">
+        {saved.ok ? <>Saved: <span className="mono">{saved.text}</span></> : saved.text}</div>}
       <div style={{ height: 1, background: "var(--surface-container)" }} />
       <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0, gap: 10 }}>
         <legend className="small muted" style={{ paddingBottom: 6 }}>Figure (the panels shown above)</legend>

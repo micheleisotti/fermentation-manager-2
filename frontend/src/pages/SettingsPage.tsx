@@ -395,6 +395,22 @@ export function SettingsPage() {
                 <div key={x.t} className="row between" style={{ minHeight: 52, borderBottom: "1px solid var(--divider)", flexWrap: "nowrap" }}><span>{x.t}</span>{x.c}</div>
               ))}
             </div>
+            <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 500 }}>Experiment copies</h3>
+              <span className="small muted">A copy of one experiment (controller data, manual variables, parameters, metadata) written by this PC,
+                e.g. on a USB stick. File name: date_time_code_name, e.g. <span className="mono">2026-11-10_1432_FM-031_Riboflavin pH 6.xlsx</span>.</span>
+              <div className="row" style={{ gap: 12 }}>
+                <label className="field" style={{ flex: "2 1 260px" }}>Archive folder
+                  <input className="mono" value={b.archive_destination} placeholder="e.g. E:\FM2-archive" onChange={(e) => bk.edit((x) => { x.archive_destination = e.target.value; })} /></label>
+                <label className="field" style={{ flex: "1 1 160px" }}>Format
+                  <select value={b.archive_format} onChange={(e) => bk.edit((x) => { x.archive_format = e.target.value as "xlsx"; })}>
+                    <option value="xlsx">XLSX (one sheet per block)</option><option value="zip">CSV (zip)</option></select></label>
+              </div>
+              <div className="row between" style={{ minHeight: 52, flexWrap: "nowrap" }}>
+                <span>Offer a copy at “End of experiment” (ticked by default)</span>
+                <Switch on={b.archive_on_end} label="Copy at end of experiment" onChange={(v) => bk.edit((x) => { x.archive_on_end = v; })} />
+              </div>
+            </div>
             <div className="row" style={{ gap: 12, alignItems: "center" }}>
               {bk.footer}
               <button className="btn outlined" disabled={busy || !all.data.backup.destination} onClick={async () => {

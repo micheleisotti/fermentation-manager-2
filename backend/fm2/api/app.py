@@ -6,6 +6,8 @@ FastAPI application. One service process hosts the API, the acquisition thread a
 from __future__ import annotations
 
 import io
+import re
+import os
 import ipaddress
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -603,6 +605,14 @@ def end_experiment(exp_id: int, request: Request, body: Optional[S.EndIn] = None
     status = ExperimentStatus.completed if body.outcome == "completed" else ExperimentStatus.aborted
     out = _close(exp_id, request, db, status, body.note)
     db.commit()
+    cfgb = request.app.state.app_settings.get("backup")
+    want = body.save_copy if body.save_copy is not None else (cfgb.get("archive_on_end") and bool(cfgb.get("archive_destination")))
+    if want:
+        try:
+            out.copy = save_experiment_copy(db, request, exp_id)
+            db.commit()
+        except HTTPException as ex:   # the run is ended anyway; report why the copy was not saved
+            out.copy = {"error": ex.detail}
     cfg = request.app.state.app_settings.get("backup")
     if cfg["enabled"] and cfg["on_end_of_production"] and cfg["destination"]:
         request.app.state.backups.run_in_background(f"end of experiment {out.code} ({body.outcome})")
@@ -1342,6 +1352,65 @@ def _naive(df: pd.DataFrame, cols) -> pd.DataFrame:
     return df
 
 
+def _write_export(tables: dict[str, pd.DataFrame], fmt: str, code: str) -> tuple[io.BytesIO, str]:
+    buf = io.BytesIO()
+    if fmt == "xlsx":
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            for name, df in tables.items():
+                df.to_excel(xw, sheet_name=name[:31], index=False)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        import zipfile
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, df in tables.items():
+                z.writestr(f"{code}_{name.lower().replace(' ', '_')}.csv", df.to_csv(index=False))
+        media = "application/zip"
+    buf.seek(0)
+    return buf, media
+
+
+def archive_file_name(e: Experiment, fmt: str, when: Optional[datetime] = None) -> str:
+    """'2026-11-10_1432_FM-031_Riboflavin pH 6.0.xlsx': local date and time, code, name (safe for Windows)."""
+    when = (when or datetime.now().astimezone()).astimezone()
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", e.name).strip(" .-")[:80] or "experiment"
+    return f"{when:%Y-%m-%d_%H%M}_{e.code}_{name}.{fmt}"
+
+
+def save_experiment_copy(db: Session, request: Request, exp_id: int, fmt: Optional[str] = None,
+                         blocks=None, resample_min: Optional[float] = None, model: str = "gompertz") -> dict:
+    """Write the experiment export into the archive folder (Settings › Data and backup), from the PC itself."""
+    e = _404(db.get(Experiment, exp_id))
+    cfg = request.app.state.app_settings.get("backup")
+    dest = cfg.get("archive_destination", "")
+    if not dest:
+        raise HTTPException(422, "No archive folder set: Settings › Data and backup (on the lab PC).")
+    folder = Path(dest)
+    if not folder.is_dir():
+        raise HTTPException(502, f"Archive folder not found or not reachable: {dest} (USB stick unplugged?)")
+    fmt = fmt or cfg.get("archive_format", "xlsx")
+    if fmt not in ("xlsx", "zip"):
+        raise HTTPException(422, "Format must be xlsx or zip")
+    sel = [b for b in (blocks or EXPORT_BLOCKS) if b in EXPORT_BLOCKS] or list(EXPORT_BLOCKS)
+    buf, _ = _write_export(export_tables(db, exp_id, sel, resample_min, model), fmt, e.code)
+    target = folder / archive_file_name(e, fmt)
+    tmp = target.with_name(target.name + ".part")
+    try:
+        tmp.write_bytes(buf.getvalue())
+        os.replace(tmp, target)
+    except OSError as ex:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(502, f"Could not write to {dest}: {ex}")
+    _event(db, e, "archived_copy", f"Copy of {e.code} saved to {target} by {who(request, db)}")
+    return {"path": str(target), "bytes": target.stat().st_size}
+
+
+@router.post("/experiments/{exp_id}/archive-copy")
+def archive_copy(exp_id: int, body: S.ArchiveIn, request: Request, db: Session = Depends(get_db)):
+    if body.resample_min is not None and not (0.05 <= body.resample_min <= 1440):
+        raise HTTPException(422, "Resampling interval out of range")
+    return save_experiment_copy(db, request, exp_id, body.format, body.blocks, body.resample_min, body.model)
+
+
 def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: Optional[float] = None,
                   model: str = "gompertz") -> dict[str, pd.DataFrame]:
     """One table per export sheet/CSV. Times: hours since start plus absolute UTC timestamps."""
@@ -1416,21 +1485,15 @@ def export_data(exp_id: int, fmt: str, db: Session = Depends(get_db), resample_m
     if resample_min is not None and not (0.05 <= resample_min <= 1440):
         raise HTTPException(422, "Resampling interval out of range")
     tables = export_tables(db, exp_id, sel, resample_min, model)
-    buf = io.BytesIO()
-    if fmt == "xlsx":
-        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-            for name, df in tables.items():
-                df.to_excel(xw, sheet_name=name[:31], index=False)
-        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    else:
-        import zipfile
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for name, df in tables.items():
-                z.writestr(f"{e.code}_{name.lower().replace(' ', '_')}.csv", df.to_csv(index=False))
-        media = "application/zip"
-    buf.seek(0)
-    return StreamingResponse(buf, media_type=media,
-                             headers={"Content-Disposition": f'attachment; filename="{e.code}.{fmt}"'})
+    buf, media = _write_export(tables, fmt, e.code)
+    return StreamingResponse(buf, media_type=media, headers={"Content-Disposition": _attachment(archive_file_name(e, fmt))})
+
+
+def _attachment(name: str) -> str:
+    """Content-Disposition with an ASCII fallback and the UTF-8 name (accents in experiment names)."""
+    from urllib.parse import quote
+    ascii_name = name.encode("ascii", "replace").decode().replace("?", "_").replace('"', "")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
 
 
 # --- users (identity for signatures, optional PIN) ---------------------------------------------

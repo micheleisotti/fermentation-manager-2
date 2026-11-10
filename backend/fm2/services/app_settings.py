@@ -53,6 +53,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "backup": {
         "enabled": False, "destination": "", "every_h": 24, "keep": 14,
         "on_end_of_production": True, "csv_per_experiment": True,
+        # Experiment copies (data export) saved by the PC, e.g. on a USB stick: E:\FM2-archive
+        "archive_destination": "", "archive_format": "xlsx", "archive_on_end": True,
     },
 }
 SECRETS = {"notifications": ("telegram_token", "ntfy_token")}
@@ -132,9 +134,14 @@ def _validate(section: str, v: dict) -> dict:
         enabled = bool(v.get("enabled", False))
         if enabled and not dest:
             raise SettingsError("Choose a backup destination before enabling automatic backups")
+        afmt = str(v.get("archive_format", "xlsx"))
+        if afmt not in ("xlsx", "zip"):
+            raise SettingsError("Archive format must be xlsx or zip")
         return {"enabled": enabled, "destination": dest, "every_h": every, "keep": keep,
                 "on_end_of_production": bool(v.get("on_end_of_production", True)),
-                "csv_per_experiment": bool(v.get("csv_per_experiment", True))}
+                "csv_per_experiment": bool(v.get("csv_per_experiment", True)),
+                "archive_destination": str(v.get("archive_destination", "") or "").strip(),
+                "archive_format": afmt, "archive_on_end": bool(v.get("archive_on_end", True))}
     raise SettingsError(f"unknown settings section {section!r}")
 
 

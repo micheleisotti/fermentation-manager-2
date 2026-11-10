@@ -103,15 +103,28 @@ export function EndExperimentButton({ e, onDone, compact = false }: { e: Experim
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [cfg, setCfg] = useState<{ dest: string; on: boolean } | null>(null);
+  const [copy, setCopy] = useState(true);
+  const [result, setResult] = useState<{ path?: string; error?: string } | null>(null);
+  const openDialog = async () => {
+    setOpen(true); setResult(null); setErr(null);
+    try {
+      const b = (await api.settings()).backup;
+      setCfg({ dest: b.archive_destination, on: b.archive_on_end }); setCopy(!!b.archive_destination && b.archive_on_end);
+    } catch { setCfg({ dest: "", on: false }); setCopy(false); }
+  };
   const go = async () => {
     setBusy(true); setErr(null);
-    try { await api.end(e.id, outcome, note); setOpen(false); onDone(); }
+    try {
+      const r = await api.end(e.id, outcome, note, cfg?.dest ? copy : false);
+      if (r.copy) setResult(r.copy); else { setOpen(false); onDone(); }
+    }
     catch (x) { setErr((x as Error).message); }
     finally { setBusy(false); }
   };
   return (
     <>
-      <button className="btn outlined" style={{ color: "var(--ink)", ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={() => setOpen(true)}>
+      <button className="btn outlined" style={{ color: "var(--ink)", ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={openDialog}>
         <Icon name="stop" size={16} />End of experiment</button>
       {open && (
         <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) setOpen(false); }}>
@@ -129,11 +142,28 @@ export function EndExperimentButton({ e, onDone, compact = false }: { e: Experim
             </div>
             <label className="field">Note {outcome === "aborted" ? "(why it was aborted)" : "(optional)"}
               <textarea rows={2} value={note} onChange={(x) => setNote(x.target.value)} /></label>
+            {cfg?.dest ? (
+              <label className="row" style={{ gap: 10, flexWrap: "nowrap" }}>
+                <input type="checkbox" checked={copy} onChange={(x) => setCopy(x.target.checked)} style={{ width: 20, height: 20, flex: "none" }} />
+                <span>Save a copy of the data to <span className="mono">{cfg.dest}</span></span>
+              </label>
+            ) : cfg && <span className="xs muted">To save a copy (e.g. on a USB stick) at the end, set an archive folder in Settings › Data and backup.</span>}
             {err && <div className="banner alert small">{err}</div>}
+            {result && (
+              <div className={`banner ${result.error ? "warn" : "good"} small`} role="status">
+                {result.error ? <>Experiment ended, but the copy was not saved: {result.error}</> : <>Experiment ended. Copy saved: <span className="mono">{result.path}</span></>}
+              </div>
+            )}
+            {result ? (
+              <div className="row" style={{ justifyContent: "flex-end" }}>
+                <button className="btn filled" onClick={() => { setOpen(false); onDone(); }}>Close</button>
+              </div>
+            ) : (
             <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
               <button className="btn text" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
               <button className="btn filled" disabled={busy} onClick={go}>{busy ? "Ending…" : outcome === "completed" ? "End as completed" : "End as aborted"}</button>
             </div>
+            )}
           </div>
         </div>
       )}

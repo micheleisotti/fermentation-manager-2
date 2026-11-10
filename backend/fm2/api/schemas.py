@@ -54,6 +54,14 @@ class NamedPatch(BaseModel):
 class EndIn(BaseModel):
     outcome: str = "completed"     # "completed" | "aborted"
     note: str = ""
+    save_copy: Optional[bool] = None   # None = use Settings › Data and backup › archive_on_end
+
+
+class ArchiveIn(BaseModel):
+    format: Optional[str] = None       # xlsx | zip (default from settings)
+    blocks: Optional[list[str]] = None
+    resample_min: Optional[float] = None
+    model: str = "gompertz"
 
 
 class ProfileIn(BaseModel):
@@ -138,6 +146,7 @@ class ExperimentOut(ORM):
     end_note: Optional[str] = None
     author: str = ""
     n_sessions: int = 0
+    copy: Optional[dict] = None   # result of the copy saved at End of experiment (path or error)
 
 
 class ParallelIn(BaseModel):
