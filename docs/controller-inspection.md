@@ -237,5 +237,6 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
       `2.13.30`) once assigned; Addition 2 reassignment (`2.7.28`, `2.8.28`); cooling output.
 - [ ] Dose counters reset between days (1.61 → 0.00): find out when (power cycle?).
 - [x] Same dump on R1-sx (differences listed above).
-- [ ] Decision (user): whether FM2 may ever start/stop loops (`1.14`) and whether timed
-      Addition 2 doses driven by FM2 are wanted; today both are outside the driver's rules.
+- [x] Decision (Michele, 10 Nov): FM2 may start/stop loops (`1.14`), only those enabled in Settings
+      (implemented in PR #23).
+- [ ] Decision (user): whether timed Addition 2 doses driven by FM2 are wanted (outside the driver's rules).
