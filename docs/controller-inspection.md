@@ -154,6 +154,25 @@ start the Level loop.
   counter. Automating them from FM2 means FM2 driving an actuator: a deliberate decision
   outside the current rules (see "Still open").
 
+### Availability, redox, dO2 and gas valves
+- `1.11.<s>` / `2.21.<a>` (available): 0 absent · 1 present in firmware, **not installed**
+  (Service → Install sensors/actuators) · 3 installed · 4 installed **and** selected as a control
+  loop (sensors, System configuration → Control loop selection) or in use (actuators).
+  R2: pH, dO2, T, Level, stirrer = 4; Analog/Digital In = 1; N2 and Air valve, Antifoam = 3;
+  O2/CO2 valves and all MFCs = 1.
+- **Redox = sensor 32**: `1.11.32` = 1 (not installed; licensed `1.39.32` = 1), unit empty,
+  value 0.000, factory slope/offset 1.034/0.756. Installing it needs the Service level. As a
+  non-digital sensor the controller would offer PID/Adaptive loops on it, but FM2 treats it as
+  a read-only mV channel.
+- **dO2 (sensor 1)**: loop PID (P 7, I 1500), off; setpoint `1.13.1` = **200 %** (odd: check
+  before use); value 0.0 % (raw −0.1) with the probe connected: not polarised/calibrated.
+  Its only actuator is the **stirrer in cascade**: `1.52.13` = 1, `1.53.13` = +1 (stirrer is
+  sensor 13 used as the dO2 loop's actuator on the below-setpoint side).
+- **Gas**: actuators 0 N2 Valve and 1 Air Valve (on/off, % = duty over `2.51` = 5 s), installed
+  but in no loop; `2.10.1` (Air low limit) = 100 %: check before assigning. No MFCs.
+- One actuator belongs to at most one loop (`2.7` is a single sensor index); a sensor
+  (stirrer) can additionally drive another loop in cascade.
+
 ### Proposal for FM2
 1. **Loop state on the live page and in alerts** (read only): `1.14` for pH, T, stirrer,
    dO2 and Level; an alert if a loop goes off during a run; `2.47` interlock per actuator.
