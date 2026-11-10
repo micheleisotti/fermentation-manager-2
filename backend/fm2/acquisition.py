@@ -92,9 +92,9 @@ class Acquisition:
             t0 = exp.prepared_at if pre else exp.started_at
             if t0 is None:
                 return
-            # preparing: hours since "Go to fermentation"; shifted to negative times at Start
+            # preparing: hours since "Go to fermentation" (events only; shifted to negative times at Start)
             t_h = (now - _as_utc(t0)).total_seconds() / 3600.0
-            if snap is not None:
+            if snap is not None and not pre:   # nothing is recorded before Start: live values and alerts only
                 s.add(ControllerReading(
                     experiment_id=exp.id, ts=now, t_h=t_h,
                     ph=snap.ph, ph_setpoint=snap.ph_setpoint,

@@ -10,8 +10,7 @@ import { LimitsDialog } from "../components/LimitsDialog";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 import { ModeTabs } from "./ExperimentAnalysis";
-import { ArchiveButton, EndExperimentButton, ExpTags, StartExperimentButton } from "./ExperimentsList";
-import { ControllerCheckCard } from "./Planning";
+import { ArchiveButton, EndExperimentButton, ExpTags, LoopButtons, StartExperimentButton } from "./ExperimentsList";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -58,6 +57,9 @@ function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment
         </div>
         <div className="row" style={{ gap: 12 }}>
           <ModeTabs e={e} current="fermentation" />
+          {e.status === "preparing" && <button className="btn text" onClick={async () => {
+            if (window.confirm(`Back to planning? ${e.code} leaves the live page (nothing has been recorded yet).`)) { await api.unprepare(e.id); onArchive?.(); }
+          }}>Back to planning</button>}
           <ArchiveButton e={e} onDone={onArchive ?? (() => undefined)} />
           <DeleteExperiment e={e} />
         </div>
@@ -111,20 +113,17 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
       {preparing && (
         <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
           <div className="row" style={{ gap: 24 }}>
-            <span className="row" style={{ gap: 8, color: "var(--data-orange-text)", fontWeight: 600 }}><span className="dot" style={{ width: 10, height: 10, background: "#f9b112" }} />Preparing · not recording yet</span>
-            <span className="small">Monitoring for <span className="mono">{fmtDuration(r?.experiment?.t_h)}</span> · alerts on</span>
+            <span className="row" style={{ gap: 8, color: "var(--data-orange-text)", fontWeight: 600 }}><span className="dot" style={{ width: 10, height: 10, background: "#f9b112" }} />Not recording</span>
+            <span>t = <span className="mono" style={{ fontSize: 20, fontWeight: 600 }}>—</span></span>
             <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn text" onClick={async () => {
-              if (window.confirm(`Back to planning? Monitoring stops and the readings taken while preparing ${e.code} are discarded.`)) { await api.unprepare(e.id); onChange(); }
-            }}>Back to planning</button>
+            <LoopButtons e={e} />
             <StartExperimentButton e={e} onDone={onChange} />
           </div>
         </div>
       )}
-      {preparing && <ControllerCheckCard e={e} />}
       {running && !preparing && (
         <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
           <div className="row" style={{ gap: 24 }}>
@@ -133,7 +132,10 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
-          <EndExperimentButton e={e} onDone={onChange} />
+          <div className="row" style={{ gap: 8 }}>
+            <LoopButtons e={e} />
+            <EndExperimentButton e={e} onDone={onChange} />
+          </div>
         </div>
       )}
 

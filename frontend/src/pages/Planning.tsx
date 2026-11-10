@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow, type PlanParams, type Profile, DEFAULT_CHANNELS, type Channel } from "../api";
+import { api, type Experiment, type ExperimentDraft, type LiveReactor, type Named, type PlanCheckRow, type PlanParams, type Profile, DEFAULT_CHANNELS, type Channel } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 import { DeleteExperiment } from "../components/DeleteExperiment";
@@ -111,6 +111,8 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   useEffect(() => { if (partnerId === "" && candidates[0]) setPartnerId(candidates[0].id); }, [candidates, partnerId]);
 
   const profile = profiles.data?.find((p) => p.id === d.profile_id);
+  const live = usePolling(api.live, 10000);
+  const liveR = live.data?.find((x) => x.reactor_id === d.reactor_id);
   const modified = !!profile && !!d.plan_params && !sameParams(d.plan_params, fromProfile(profile));
   const mismatches = (check.data?.rows ?? []).filter((r) => !r.match && !r.read_only);
   const pidDiffers = mismatches.some((r) => r.parameter === "ph_control_mode" || r.parameter === "ph_pid");
@@ -253,12 +255,12 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
           </section>
 
           <section className="card" aria-labelledby="g3">
-            <div className="stack" style={{ gap: 2 }}>
-              <h2 id="g3" style={{ fontSize: 18 }}>Controller profile</h2>
-              <span className="small muted">Part of the plan: choose it now, even with the bioreactor off, and adjust any value for this experiment. It is written to the controller later, before Start.</span>
-            </div>
-            <div className="row" style={{ gap: 12, alignItems: "flex-end" }}>
-              <label className="field" style={{ flex: "1 1 260px", maxWidth: 420 }}>Profile
+            <div className="row between" style={{ alignItems: "flex-end" }}>
+              <div className="stack" style={{ gap: 2 }}>
+                <h2 id="g3" style={{ fontSize: 18 }}>Controller {d.reactor_id}: plan, check and load</h2>
+                <span className="small muted">Plan values come from the profile and can be edited here; when the bioreactor is on they are compared with what the controller reports and can be loaded.</span>
+              </div>
+              <label className="field" style={{ minWidth: 260 }}>Profile
                 <select value={d.profile_id ?? ""} onChange={(e) => {
                   const id = e.target.value === "" ? null : Number(e.target.value);
                   const p = profiles.data?.find((x) => x.id === id);
@@ -268,45 +270,17 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                   {(profiles.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               </label>
-              <PlanSource d={d} profile={profile} />
             </div>
-            <PlanParamsTable value={d.plan_params ?? null} channels={d.channels ?? DEFAULT_CHANNELS} onChange={(v) => set({ plan_params: v })} />
-            <div className="row" style={{ gap: 8 }}>
-              {(modified || (!profile && hasValues(d.plan_params))) && (
-                <button className="btn tonal" onClick={async () => {
-                  const name = window.prompt("Name of the new profile", profile ? `${profile.name} (modified)` : "")?.trim();
-                  if (!name || !d.plan_params) return;
-                  try {
-                    const np = await api.createProfile({ name, notes: "", ...d.plan_params } as never);
-                    profiles.refresh(); set({ profile_id: np.id });
-                    setMsg({ kind: "good", text: `Profile “${name}” saved in the Library.` });
-                  } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-                }}>Save as new profile</button>
-              )}
-              {modified && profile && <button className="btn text" onClick={() => set({ plan_params: fromProfile(profile) })}>Reset to “{profile.name}”</button>}
-            </div>
-            {(profiles.data ?? []).length === 0 && <span className="xs muted">No profiles yet: fill in the values here and save them as a profile, or create one in Library › Controller profiles.</span>}
-          </section>
-
-          <section className="card" aria-labelledby="g3b">
-            <div className="stack" style={{ gap: 2 }}>
-              <h2 id="g3b" style={{ fontSize: 18 }}>Controller {d.reactor_id}: check and load</h2>
-              <span className="small muted">When the bioreactor is on: the plan is compared with what the controller reports now, and the profile can be loaded.</span>
-            </div>
-            {!existing && <span className="small muted">Create the experiment first; the check starts as soon as the plan is saved and the controller answers.</span>}
-            {existing && dirty && <span className="small muted">Save the plan to refresh the comparison.</span>}
-            {existing && check.data && !check.data.reachable && (
-              <div className="banner warn small"><Icon name="warn" color="#8a5a00" size={18} />
-                <span>Controller {d.reactor_id} is off or not reachable ({check.data.message}). That is fine while planning: switch it on before Start to compare and load the profile.</span></div>
-            )}
-            {check.data?.reachable && <PlanCheckTable rows={check.data.rows} />}
+            <div className="row" style={{ gap: 8 }}><PlanSource d={d} profile={profile} /></div>
+            <PlanControllerTable value={d.plan_params ?? null} channels={d.channels ?? DEFAULT_CHANNELS} reactor={liveR}
+              onChange={(v) => set({ plan_params: v })} />
             {existing && hasValues(d.plan_params) && mismatches.length > 0 && (
               <div className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
                 <span><b>{pidDiffers ? "pH control differs." : "Setpoints differ."}</b> {pidDiffers && "The controller may have been left in another mode by a previous user. "}
-                  Loading the profile writes setpoints, process limits, pH control mode and loop parameters to the controller, then reads them back.</span>
+                  Loading writes setpoints, process limits, pH control mode and loop parameters to the controller, then reads them back.</span>
               </div>
             )}
-            <div className="row">
+            <div className="row" style={{ gap: 8 }}>
               <button className="btn filled" disabled={!existing || dirty || !hasValues(d.plan_params) || !check.data?.reachable} onClick={async () => {
                 if (!existing) return;
                 try {
@@ -314,11 +288,12 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                   const bad = r.results.filter((x) => x.status !== "confirmed");
                   setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.parameter} (${b.message ?? b.status})`).join(", ")}` }
                     : { kind: "good", text: "Plan loaded and confirmed by the controller." });
-                  check.refresh();
+                  check.refresh(); live.refresh();
                 } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-              }}>Load to controller</button>
-              <span className="xs muted">Limits left empty in the profile stay as they are on the controller; actuators, interlocks and calibration stay on the controller. pH control mode and loop parameters can be loaded only here, before Start.</span>
+              }}>Load profile to controller</button>
+              {modified && profile && <button className="btn text" onClick={() => set({ plan_params: fromProfile(profile) })}>Reset to “{profile.name}”</button>}
             </div>
+            <span className="xs muted">{!existing ? "Create the experiment to load the plan. " : dirty ? "Save the plan to load it. " : ""}Limits left empty stay as they are on the controller; actuators, interlocks and calibration stay on the controller. pH control mode and loop parameters can be loaded only before Start.</span>
           </section>
 
           <section className="card" aria-labelledby="g4">
@@ -426,86 +401,116 @@ function PlanSource({ d, profile }: { d: ExperimentDraft; profile?: Profile }) {
 const EMPTY_PLAN: PlanParams = { ph_setpoint: null, temperature_setpoint: null, stirrer_setpoint: null, ph_control_mode: null, ph_pid: null,
   ph_low_limit: null, ph_high_limit: null, temperature_low_limit: null, temperature_high_limit: null };
 
-/** Schematic, editable table of the plan's controller values (no controller column: that is the check step). */
-function PlanParamsTable({ value, channels, onChange }: { value: PlanParams | null; channels: Channel[]; onChange: (v: PlanParams) => void }) {
+type Cell = number | string | null | undefined;
+interface PlanRow { id: string; group: string; label: string; plan: Cell | [Cell, Cell]; ctrl: Cell | [Cell, Cell]; kind: "num" | "pair" | "mode";
+  set: (v: Cell | [Cell, Cell]) => PlanParams }
+
+const fmtCell = (v: Cell | [Cell, Cell]) => Array.isArray(v) ? (v[0] == null && v[1] == null ? "—" : `${v[0] ?? "·"}–${v[1] ?? "·"}`)
+  : v === null || v === undefined || v === "" ? "—" : String(v);
+const same = (a: Cell, b: Cell) => typeof a === "number" && typeof b === "number" ? Math.abs(a - b) < 1e-6 : a === b;
+
+/**
+ * The plan's controller values (editable, from the profile) next to what the controller reports now.
+ * With the controller off the Controller column stays empty and Check says so.
+ */
+function PlanControllerTable({ value, channels, reactor, onChange }: {
+  value: PlanParams | null; channels: Channel[]; reactor?: LiveReactor; onChange: (v: PlanParams) => void }) {
   const v = value ?? EMPTY_PLAN;
-  const n = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
-  const cell = (key: keyof PlanParams, label: string) => (
-    <input className="cell-input mono" inputMode="decimal" aria-label={label} style={{ width: 90, textAlign: "right" }}
-      value={(v[key] as number | null) ?? ""} onChange={(e) => onChange({ ...v, [key]: n(e.target.value) })} />
-  );
-  const pidCell = (k: string, label: string) => (
-    <input className="cell-input mono" inputMode="decimal" aria-label={label} style={{ width: 90, textAlign: "right" }}
-      value={v.ph_pid?.[k] ?? ""} onChange={(e) => onChange({ ...v, ph_pid: { ...(v.ph_pid ?? {}), [k]: n(e.target.value) } })} />
-  );
-  const keys = MODE_KEYS[v.ph_control_mode ?? ""] ?? [];
+  const snap = reactor?.online ? reactor.snapshot : null;
+  const pc = reactor?.online ? reactor.ph_control : null;
+  const [edit, setEdit] = useState<{ id: string; a: string; b: string } | null>(null);
+  const rows: PlanRow[] = [];
+  if (channels.includes("ph")) {
+    rows.push({ id: "ph_sp", group: "pH controller", label: "pH setpoint", kind: "num", plan: v.ph_setpoint, ctrl: snap?.ph_setpoint,
+      set: (x) => ({ ...v, ph_setpoint: x as number | null }) });
+    rows.push({ id: "ph_mode", group: "pH controller", label: "pH control mode", kind: "mode", plan: v.ph_control_mode, ctrl: pc?.mode,
+      set: (x) => ({ ...v, ph_control_mode: (x as string) || null }) });
+    for (const p of PID_PARAMS.filter((q) => (MODE_KEYS[v.ph_control_mode ?? ""] ?? []).includes(q.k))) {
+      rows.push({ id: `pid_${p.k}`, group: "pH controller", label: `pH loop · ${p.label}${p.unit ? ` (${p.unit})` : ""}`, kind: "num",
+        plan: v.ph_pid?.[p.k] ?? null, ctrl: pc?.pid?.[p.k], set: (x) => ({ ...v, ph_pid: { ...(v.ph_pid ?? {}), [p.k]: x as number | null } }) });
+    }
+    rows.push({ id: "ph_lim", group: "pH controller", label: "pH process limits", kind: "pair", plan: [v.ph_low_limit, v.ph_high_limit],
+      ctrl: snap ? [snap.ph_low_limit, snap.ph_high_limit] : undefined,
+      set: (x) => { const [lo, hi] = x as [Cell, Cell]; return { ...v, ph_low_limit: lo as number | null, ph_high_limit: hi as number | null }; } });
+  }
+  if (channels.includes("temperature")) {
+    rows.push({ id: "t_sp", group: "Temperature controller", label: "Temperature setpoint (°C)", kind: "num", plan: v.temperature_setpoint,
+      ctrl: snap?.temperature_setpoint, set: (x) => ({ ...v, temperature_setpoint: x as number | null }) });
+    rows.push({ id: "t_lim", group: "Temperature controller", label: "T process limits (°C)", kind: "pair",
+      plan: [v.temperature_low_limit, v.temperature_high_limit], ctrl: snap ? [snap.temperature_low_limit, snap.temperature_high_limit] : undefined,
+      set: (x) => { const [lo, hi] = x as [Cell, Cell]; return { ...v, temperature_low_limit: lo as number | null, temperature_high_limit: hi as number | null }; } });
+  }
+  if (channels.includes("stirrer")) {
+    rows.push({ id: "st_sp", group: "Stirrer", label: "Stirrer setpoint (rpm)", kind: "num", plan: v.stirrer_setpoint, ctrl: snap?.stirrer_setpoint,
+      set: (x) => ({ ...v, stirrer_setpoint: x as number | null }) });
+  }
+  const n = (t: string): number | null => (t.trim() === "" ? null : Number(t.replace(",", ".")));
+  const empty = (x: Cell | [Cell, Cell]) => Array.isArray(x) ? x[0] == null && x[1] == null : x === null || x === undefined || x === "";
+  const check = (r: PlanRow) => {
+    if (!snap) return <span className="status preparing" style={{ borderStyle: "solid" }}>Controller off</span>;
+    if (empty(r.plan)) return <span className="status planned">From controller</span>;
+    const ok = Array.isArray(r.plan)
+      ? r.plan.every((x, i) => x == null || same(x, (r.ctrl as [Cell, Cell])?.[i])) : same(r.plan, r.ctrl as Cell);
+    return <span className={`status ${ok ? "completed" : "aborted"}`} style={ok ? { background: "#d3efe7", color: "var(--ink)" } : undefined}>{ok ? "Match" : "Differs"}</span>;
+  };
+  const save = (r: PlanRow) => {
+    if (!edit) return;
+    if (r.kind === "pair") {
+      const lo = n(edit.a), hi = n(edit.b);
+      if (lo !== null && hi !== null && lo >= hi) { window.alert("The low limit must be lower than the high limit."); return; }
+      onChange(r.set([lo, hi]));
+    } else onChange(r.set(r.kind === "mode" ? edit.a : n(edit.a)));
+    setEdit(null);
+  };
+  const groups = [...new Set(rows.map((r) => r.group))];
   return (
     <div className="table-wrap">
-      <table className="data plan-table">
-        <thead><tr><th>Parameter</th><th className="num">Setpoint</th><th className="num">Low limit</th><th className="num">High limit</th></tr></thead>
+      <table className="data" style={{ minWidth: 640 }}>
+        <thead><tr><th>Parameter</th><th style={{ textAlign: "right" }}>Plan</th><th /><th style={{ textAlign: "right" }}>Controller</th><th>Check</th></tr></thead>
         <tbody>
-          {channels.includes("ph") && <tr><td>pH</td><td className="num">{cell("ph_setpoint", "pH setpoint")}</td>
-            <td className="num">{cell("ph_low_limit", "pH low limit")}</td><td className="num">{cell("ph_high_limit", "pH high limit")}</td></tr>}
-          {channels.includes("temperature") && <tr><td>Temperature <span className="muted">(°C)</span></td><td className="num">{cell("temperature_setpoint", "Temperature setpoint")}</td>
-            <td className="num">{cell("temperature_low_limit", "Temperature low limit")}</td><td className="num">{cell("temperature_high_limit", "Temperature high limit")}</td></tr>}
-          {channels.includes("stirrer") && <tr><td>Stirrer <span className="muted">(rpm)</span></td><td className="num">{cell("stirrer_setpoint", "Stirrer setpoint")}</td>
-            <td className="num muted">—</td><td className="num muted">—</td></tr>}
-          {channels.includes("ph") && (
-            <>
-              <tr><td colSpan={4} className="kicker" style={{ paddingTop: 14 }}>pH control</td></tr>
-              <tr><td>Mode</td><td colSpan={3}>
-                <select value={v.ph_control_mode ?? ""} onChange={(e) => onChange({ ...v, ph_control_mode: e.target.value || null })} style={{ height: 36 }} aria-label="pH control mode">
-                  <option value="">Leave as on the controller</option><option value="pid">PID</option><option value="adaptive">Adaptive</option>
-                </select></td></tr>
-              {keys.length > 0 && (
-                <tr><td colSpan={4}>
-                  <div className="row" style={{ gap: 10 }}>
-                    {PID_PARAMS.filter((p) => keys.includes(p.k)).map((p) => (
-                      <label key={p.k} className="field" style={{ flex: "0 0 auto" }}>{p.label}{p.unit ? ` (${p.unit})` : ""}{pidCell(p.k, p.label)}</label>
-                    ))}
-                  </div>
-                </td></tr>
-              )}
-            </>
-          )}
+          {groups.map((g) => (
+            <Fragment key={g}>
+              <tr><td colSpan={5} className="kicker" style={{ paddingTop: 16 }}>{g}</td></tr>
+              {rows.filter((r) => r.group === g).map((r) => (
+                <tr key={r.id}>
+                  <td style={{ paddingLeft: 24 }}>{r.label}</td>
+                  {edit?.id === r.id ? (
+                    <td className="num" colSpan={2}>
+                      <span className="row" style={{ gap: 6, justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                        {r.kind === "mode" ? (
+                          <select autoFocus value={edit.a} onChange={(e) => setEdit({ ...edit, a: e.target.value })} style={{ height: 34 }} aria-label={r.label}>
+                            <option value="">Leave as on the controller</option><option value="pid">pid</option><option value="adaptive">adaptive</option>
+                          </select>
+                        ) : (
+                          <>
+                            <input autoFocus className="cell-input mono" inputMode="decimal" style={{ width: 80, textAlign: "right" }} aria-label={r.kind === "pair" ? `${r.label} low` : r.label}
+                              value={edit.a} onChange={(e) => setEdit({ ...edit, a: e.target.value })} onKeyDown={(k) => { if (k.key === "Enter") save(r); if (k.key === "Escape") setEdit(null); }} />
+                            {r.kind === "pair" && <>–<input className="cell-input mono" inputMode="decimal" style={{ width: 80, textAlign: "right" }} aria-label={`${r.label} high`}
+                              value={edit.b} onChange={(e) => setEdit({ ...edit, b: e.target.value })} onKeyDown={(k) => { if (k.key === "Enter") save(r); if (k.key === "Escape") setEdit(null); }} /></>}
+                          </>
+                        )}
+                        <button className="btn filled" style={{ height: 34, padding: "0 14px" }} onClick={() => save(r)}>OK</button>
+                        <button className="btn text" style={{ height: 34 }} onClick={() => setEdit(null)}>Cancel</button>
+                      </span>
+                    </td>
+                  ) : (
+                    <>
+                      <td className="mono" style={{ textAlign: "right" }}>{fmtCell(r.plan)}</td>
+                      <td style={{ width: 1 }}><button className="btn text" style={{ height: 32, padding: "0 10px" }} aria-label={`Edit ${r.label}`} onClick={() => {
+                        const p = r.plan;
+                        setEdit(Array.isArray(p) ? { id: r.id, a: p[0] == null ? "" : String(p[0]), b: p[1] == null ? "" : String(p[1]) }
+                          : { id: r.id, a: p == null ? "" : String(p), b: "" });
+                      }}>Edit</button></td>
+                    </>
+                  )}
+                  <td className="mono" style={{ textAlign: "right" }}>{snap ? fmtCell(r.ctrl as Cell) : ""}</td>
+                  <td>{check(r)}</td>
+                </tr>
+              ))}
+            </Fragment>
+          ))}
         </tbody>
       </table>
-      <span className="xs muted">Empty = leave the controller's value. Limits are alarm limits only. {v.ph_control_mode === "adaptive" && "In Adaptive, P, I and D are starting values."}</span>
     </div>
-  );
-}
-
-/** Live page, preparing phase: plan vs controller, and loading the plan once the bioreactor is ready. */
-export function ControllerCheckCard({ e }: { e: Experiment }) {
-  const check = usePolling(() => api.planCheck(e.id), 15000, [e.id]);
-  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const mism = (check.data?.rows ?? []).filter((r) => !r.match && !r.read_only).length;
-  return (
-    <section className="card" aria-labelledby="cc">
-      <div className="row between">
-        <div className="stack" style={{ gap: 2 }}>
-          <h2 id="cc" style={{ fontSize: 18 }}>Plan vs controller {e.reactor_id}</h2>
-          <span className="small muted">Load the plan when the bioreactor is ready; values are read back after writing.</span>
-        </div>
-        <button className="btn filled" disabled={busy || !check.data?.reachable || !hasValues(e.plan_params)} onClick={async () => {
-          setBusy(true); setMsg(null);
-          try {
-            const r = await api.loadProfile(e.id);
-            const bad = r.results.filter((x) => x.status !== "confirmed");
-            setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.parameter} (${b.message ?? b.status})`).join(", ")}` }
-              : { kind: "good", text: "Plan loaded and confirmed by the controller." });
-            check.refresh();
-          } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-          finally { setBusy(false); }
-        }}>{busy ? "Loading…" : "Load to controller"}</button>
-      </div>
-      {check.data && !check.data.reachable && <div className="banner warn small"><Icon name="warn" color="#8a5a00" size={18} />
-        <span>Controller {e.reactor_id} is off or not reachable ({check.data.message}).</span></div>}
-      {check.data?.reachable && <PlanCheckTable rows={check.data.rows} />}
-      {check.data?.reachable && mism > 0 && <span className="small" style={{ color: "var(--data-orange-text)" }}>{mism} setting(s) differ from the plan.</span>}
-      {!hasValues(e.plan_params) && <span className="small muted">No profile or controller values in the plan: setpoints stay as set on the controller.</span>}
-      {msg && <div className={`banner ${msg.kind} small`} role="status">{msg.text}</div>}
-    </section>
   );
 }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type Experiment, type Status } from "../api";
+import { api, type Channel, type Experiment, type Status } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 
@@ -210,6 +210,50 @@ export function StartExperimentButton({ e, onDone, compact = false }: { e: Exper
                 catch (x) { setErr((x as Error).message); }
                 finally { setBusy(false); }
               }}><Icon name="play" size={18} />{busy ? "Starting…" : "Start experiment"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+const LOOPS: { ch: Channel; label: string; parts: string }[] = [
+  { ch: "ph", label: "pH loop", parts: "base pump" },
+  { ch: "temperature", label: "Temperature loop", parts: "heating and cooling" },
+  { ch: "stirrer", label: "Stirrer loop", parts: "stirrer motor" },
+  { ch: "do2", label: "dO2 loop", parts: "N2 and air valves" },
+];
+
+/**
+ * "Start / Stop selected loops": control loops only (actuators driven by the loop rules); sensors keep
+ * being read either way. Not implemented yet: the dialog says so and nothing can be selected.
+ */
+export function LoopButtons({ e, compact = false }: { e: Experiment; compact?: boolean }) {
+  const [open, setOpen] = useState<"start" | "stop" | null>(null);
+  const loops = LOOPS.filter((l) => e.channels.includes(l.ch));
+  const st = compact ? { flex: "1 1 0", justifyContent: "center" } : undefined;
+  return (
+    <>
+      <button className="btn outlined" style={st} onClick={() => setOpen("start")}>Start selected loops</button>
+      <button className="btn outlined" style={st} onClick={() => setOpen("stop")}>Stop selected loops</button>
+      {open && (
+        <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget) setOpen(null); }}>
+          <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="loops-t" style={{ width: "min(520px, 100vw)" }}>
+            <h2 id="loops-t" style={{ fontSize: 20 }}>{open === "start" ? "Start" : "Stop"} control loops on {e.reactor_id}</h2>
+            <div className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
+              <span><b>Not implemented yet.</b> Switch the loops on and off on the physical controller.</span></div>
+            <div className="stack" style={{ gap: 8 }}>
+              {loops.map((l) => (
+                <label key={l.ch} className="choice" style={{ opacity: 0.55, cursor: "not-allowed" }}>
+                  <input type="checkbox" disabled />
+                  <span className="stack" style={{ gap: 2 }}><b>{l.label}</b><span className="small muted">Actuators: {l.parts}</span></span>
+                </label>
+              ))}
+            </div>
+            <span className="xs muted">Only the control loops (actuators) are affected: sensors and probes keep being read and shown live.</span>
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button className="btn filled" autoFocus onClick={() => setOpen(null)}>Close</button>
             </div>
           </div>
         </div>

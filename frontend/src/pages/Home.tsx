@@ -92,7 +92,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
         <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={20} /><span>{alert.message}</span></div>
       )}
       <div className="row between small muted">
-        <span>{exp.status === "preparing" ? "Preparing, not recording · monitoring for " : "t = "}<span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span> · last reading{" "}
+        <span>{exp.status === "preparing" ? <>Not recording · t = —</> : <>t = <span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span></>} · last reading{" "}
           <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
         <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
       </div>

@@ -198,20 +198,26 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - No periodic backup during a run (decided): every reading is committed to SQLite (WAL) as it arrives and
   the service resumes recording after a power cut; set "Restore on AC power loss" in the PC BIOS.
 
-## Preparation phase and editable plan values (10 Nov 2026)
-- New status `preparing` between planned and fermenting. Planning → **Go to fermentation** (POST /prepare):
-  the live page opens, readings are stored and alerts/notifications run (limits, setpoint reached,
-  controller silent; no base-dosing "finished" rule), but t = 0 is not set. **Start experiment** (popup
-  reminder: probe calibration, dose monitoring calibration, cooling/condenser water) sets t = 0 and
-  shifts preparation readings/events to negative times (analysis and export use t ≥ 0). **Back to
-  planning** (POST /unprepare) discards preparation readings. One preparing/fermenting experiment per reactor.
-- Plan values: `Experiment.plan_params` (setpoints, limits, pH mode + loop parameters) copied from the
-  chosen profile and editable in a schematic table in Planning; edited → "Custom · based on <profile>,
-  not saved" with "Save as new profile" / "Reset". Load to controller and plan-check use the plan values
-  (allowed while planned or preparing; pH mode/PID too). `plan_snapshot` at Start records them (+ custom flag).
-- Preparing page: status bar (monitoring time, Back to planning, Start experiment) and a
-  "Plan vs controller" card (comparison table + Load to controller). Phone: Start button.
-- Future loop on/off (pH, T, stirrer) belongs in this phase.
+## Preparation phase and editable plan values (10 Nov 2026, revised)
+- New status `preparing`. Planning → **Go to fermentation**: the same live page as a running experiment,
+  bar "● Not recording · t = —" with **Start selected loops / Stop selected loops** (popup, not implemented
+  yet, all disabled: loops = actuators only, sensors keep being read) and **Start experiment** (reminder
+  popup) in the place of End of experiment. Live values, setpoint/limit edits and alerts/notifications
+  work (no base-dosing "finished" rule; at-start messages say "when monitoring began"); **nothing is
+  recorded before Start**, so charts stay empty. Phase events get negative times at Start.
+  "Back to planning" in the header. One preparing/fermenting experiment per reactor.
+- Planning: one table "Controller Rx: plan, check and load" — Parameter | Plan | Edit | Controller | Check;
+  PID parameters as separate rows; controller off → Controller column empty, Check "Controller off".
+  Values are the plan's (`Experiment.plan_params`, copied from the profile); any edit → "Custom · based on
+  <profile>, not saved" (Reset available). Load profile to controller / plan-check use the plan values
+  (planned or preparing).
+
+## Versioning
+- PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). Until the first
+  stable release: `2.0.0.devN` with N = number of the last merged PR (now 2.0.0.dev19). After the test
+  fermentations: release **2.0.0** (git tag `v2.0.0`), then semantic versioning — bug fixes 2.0.1,
+  new features 2.1.0 (e.g. loop control), incompatible changes (data/format) 3.0.0; work in between is
+  `2.1.0.devN`. The version is shown in Settings › Credits.
 
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.

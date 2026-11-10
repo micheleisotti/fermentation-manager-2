@@ -418,12 +418,11 @@ def test_prepare_phase_and_plan_params(env):
         j = c.get(url).json()
         i = j["columns"].index("t_h")
         return [row[i] for row in j["rows"]]
-    n_pre = len(tcol(f"/api/experiments/{e['id']}/readings"))
-    assert n_pre >= 3
-    # Start: pre-start readings move to negative times; analysis uses t >= 0 only
+    assert tcol(f"/api/experiments/{e['id']}/readings?since_h=-10") == []   # nothing recorded before Start
     e = c.post(f"/api/experiments/{e['id']}/start").json()
     assert e["status"] == "fermenting"
     rd = tcol(f"/api/experiments/{e['id']}/readings?since_h=-10")
-    assert min(rd) < -1.4 and max(rd) >= 0
-    assert all(t >= 0 for t in tcol(f"/api/experiments/{e['id']}/readings"))
+    assert rd and min(rd) >= 0
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    assert any(x["kind"] == "prepared" and x["t_h"] < -1.4 for x in ev)
     assert c.get(f"/api/experiments/{e['id']}").json()["plan_snapshot"]["custom"] is True

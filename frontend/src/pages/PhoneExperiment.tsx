@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { EndExperimentButton, StartExperimentButton } from "./ExperimentsList";
+import { EndExperimentButton, LoopButtons, StartExperimentButton } from "./ExperimentsList";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, usePolling } from "../hooks";
 import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
@@ -128,7 +128,7 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
         <span className="stack" style={{ gap: 0, minWidth: 0 }}>
           <span style={{ fontSize: 17, fontWeight: 500 }}><span className="mono">{e.code}</span> · {e.strain || e.name}</span>
           <span className="xs muted">
-            {preparing ? <>Preparing · not recording · monitoring for <span className="mono">{fmtDuration(r?.experiment?.t_h)}</span></>
+            {preparing ? <>Not recording · t = —</>
               : e.started_at ? <>t = <span className="mono">{fmtDuration(running ? r?.experiment?.t_h : null)}</span>{running ? " since start" : ""}</> : "Not started"}
             {running && <> · reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</>}
           </span>
@@ -215,6 +215,7 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
         </Collapsible>
       )}
 
+      {running && <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><LoopButtons e={e} compact /></div>}
       {preparing && <StartExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
       {running && !preparing && <EndExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
 

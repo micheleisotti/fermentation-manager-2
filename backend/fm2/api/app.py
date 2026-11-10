@@ -627,8 +627,8 @@ def _busy(db: Session, e: Experiment) -> Optional[Experiment]:
 @router.post("/experiments/{exp_id}/prepare", response_model=S.ExperimentOut)
 def prepare_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
     """
-    "Go to fermentation": the live page opens and the reactor is monitored with alerts, but the
-    run is not recorded yet (t = 0 is Start). Readings are kept and shifted to negative times at Start.
+    "Go to fermentation": the live page opens and the reactor is monitored with alerts, but nothing is
+    recorded until Start (t = 0). Events of this phase get negative times at Start.
     """
     e = _404(db.get(Experiment, exp_id))
     if e.status != ExperimentStatus.planned:
@@ -647,7 +647,7 @@ def prepare_experiment(exp_id: int, request: Request, db: Session = Depends(get_
 
 @router.post("/experiments/{exp_id}/unprepare", response_model=S.ExperimentOut)
 def unprepare_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
-    """Back to planning: pre-start readings are discarded; events are kept."""
+    """Back to planning (nothing was recorded; events are kept)."""
     e = _404(db.get(Experiment, exp_id))
     if e.status != ExperimentStatus.preparing:
         raise HTTPException(409, "Only an experiment in preparation can go back to planning")
