@@ -490,3 +490,48 @@ def test_loop_config_temperature_profile_and_assignment_check(env):
     app.state.acq.poll_once()
     live = c.get("/api/reactors/live").json()[0]
     assert live["temperature_control"]["mode"] == "pid"
+
+
+def test_start_stop_selected_loops_settings_and_external_switch(env):
+    c, clock, app, drivers = env
+    e = c.post("/api/experiments", json={"name": "loops on", "reactor_id": "R1", "strain": "Lp187",
+                                        "channels": ["temperature", "ph", "stirrer", "do2"]}).json()
+    c.post(f"/api/experiments/{e['id']}/prepare")
+    st = c.get("/api/reactors/R1/loops").json()
+    by = {lp["key"]: lp for lp in st["loops"]}
+    assert st["allowed"] == ["ph", "temperature", "stirrer"]
+    assert by["ph"]["allowed"] and by["ph"]["start_refused"] is None
+    assert "Settings" in by["do2"]["start_refused"] and by["do2"]["also_switches"] == ["Stirrer"]
+    assert "actuator" in by["level"]["start_refused"] or "Settings" in by["level"]["start_refused"]
+
+    r = c.post("/api/reactors/R1/loops", json={"loops": ["ph", "temperature"], "on": True}).json()
+    assert [x["status"] for x in r["results"]] == ["confirmed", "confirmed"]
+    assert drivers["R1"].loops_active["ph"] and drivers["R1"].loops_active["temperature"]
+    assert c.post("/api/reactors/R1/loops", json={"loops": ["do2"], "on": True}).status_code == 409   # not allowed
+    assert not drivers["R1"].loops_active["do2"]
+
+    # allow dO2 (lab PC only): starting it also starts the stirrer, no "external" alert for either
+    assert c.put("/api/settings/loops", json={"allowed": {"R1": ["ph", "temperature", "stirrer", "do2"]}}).status_code == 200
+    remote = TestClient(app, client=("100.101.102.103", 50000))
+    assert remote.put("/api/settings/loops", json={"allowed": {"R1": ["ph"]}}).status_code == 403
+    assert remote.post("/api/reactors/R1/loops", json={"loops": ["ph"], "on": False}).status_code == 403  # remote off by default
+    app.state.acq.poll_once()
+    assert c.post("/api/reactors/R1/loops", json={"loops": ["do2"], "on": True}).json()["results"][0]["status"] == "confirmed"
+    assert drivers["R1"].loops_active["stirrer"]
+    run_hours(app, clock, 0.05)
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    kinds = [x["kind"] for x in ev]
+    assert kinds.count("loop_started") == 3 and "loop_switched_on" not in kinds
+    assert any("in cascade" in x["message"] for x in ev)
+
+    # someone stops the pH loop on the display: one alert
+    drivers["R1"].loops_active["ph"] = False
+    run_hours(app, clock, 0.05)
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    off = [x for x in ev if x["kind"] == "loop_switched_off"]
+    assert len(off) == 1 and off[0]["severity"] == "alert" and "pH" in off[0]["message"]
+    r = c.post("/api/reactors/R1/loops", json={"loops": ["temperature"], "on": False}).json()
+    assert r["results"][0]["status"] == "confirmed" and not drivers["R1"].loops_active["temperature"]
+    run_hours(app, clock, 0.05)
+    assert not any(x["kind"] == "loop_switched_off" and "Temperature" in x["message"]
+                   for x in c.get(f"/api/experiments/{e['id']}/events").json())

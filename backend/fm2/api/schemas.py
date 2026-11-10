@@ -57,6 +57,11 @@ class EndIn(BaseModel):
     save_copy: Optional[bool] = None   # None = use Settings › Data and backup › archive_on_end
 
 
+class LoopSwitchIn(BaseModel):
+    loops: list[str]
+    on: bool
+
+
 class StartIn(BaseModel):
     checklist: Optional[list[str]] = None   # pre-start checks the user ticked (logged in the Start event)
 

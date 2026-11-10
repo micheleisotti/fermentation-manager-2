@@ -13,6 +13,8 @@ Rules (as agreed in the mockups):
 - controller_silent: no successful reading for `silent_after_s`; "restored" when back.
 - external_setpoint_change: setpoint changed but not by a command from this software.
 - probably_finished: base rate (15-min window) below a fraction of its peak for `hold_s`.
+- loop_switched_off / loop_switched_on: a control loop of a channel in use changed state without
+  a command from this software (alert when it goes off, info when it comes on).
 - counter_reset: the controller's base counter went back (power cycle or reset on the display);
   FM2 continues the cumulative volume (see analysis.base_dosing.stitch_counter).
 """
@@ -26,6 +28,8 @@ from typing import Optional
 
 from .analysis.base_dosing import CounterStitcher
 from .drivers.base import CHANNELS, ControllerSnapshot
+
+LOOP_LABELS = {"ph": "pH", "temperature": "Temperature", "stirrer": "Stirrer", "do2": "dO2", "level": "Level"}
 
 LIMITED = {"ph": ("ph", "ph_low_limit", "ph_high_limit", "pH", ""),
            "temperature": ("temperature", "temperature_low_limit", "temperature_high_limit", "T", " °C")}
@@ -90,6 +94,8 @@ class ReactorAlertState:
     _low_since: Optional[datetime] = None
     _finished_sent: bool = False
     _stitched: float = 0.0
+    _loops: dict = field(default_factory=dict)
+    _expected_loops: dict = field(default_factory=dict)
 
     @property
     def _when(self) -> str:
@@ -98,6 +104,10 @@ class ReactorAlertState:
     # -- called by the command service before writing a setpoint ---------------------
     def expect_setpoint(self, parameter: str, value: float) -> None:
         self._expected_sp[parameter] = float(value)
+
+    def expect_loop(self, loop: str, on: bool) -> None:
+        """Called before FM2 switches a loop (and the loops it drives in cascade)."""
+        self._expected_loops[loop] = bool(on)
 
     def observe(self, snap: Optional[ControllerSnapshot], now: datetime) -> list[AlertEvent]:
         events: list[AlertEvent] = []
@@ -121,6 +131,7 @@ class ReactorAlertState:
         self._first = False
 
         events += self._external_changes(snap, first)
+        events += self._loop_rule(snap)
         for param in ("ph", "temperature"):
             if param not in self.channels:
                 continue
@@ -209,6 +220,27 @@ class ReactorAlertState:
         else:
             st.within_since = None
         return []
+
+    def _loop_rule(self, snap: ControllerSnapshot) -> list[AlertEvent]:
+        out = []
+        for loop, on in (snap.loops_active or {}).items():
+            before = self._loops.get(loop)
+            self._loops[loop] = on
+            expected = self._expected_loops.get(loop)
+            if expected is not None and expected == on:
+                del self._expected_loops[loop]
+                continue
+            if before is None or before == on or loop not in self.channels:
+                continue
+            label = LOOP_LABELS.get(loop, loop)
+            if on:
+                out.append(AlertEvent("loop_switched_on", "info",
+                                      f"{self.reactor_id}: {label} loop switched on at the controller", loop))
+            else:
+                out.append(AlertEvent("loop_switched_off", "alert",
+                                      f"{self.reactor_id}: {label} loop switched OFF at the controller "
+                                      f"(not by this software): its actuators no longer act", loop))
+        return out
 
     def _counter_rule(self, snap: ControllerSnapshot) -> list[AlertEvent]:
         if self.pre_start or snap.base_cumulative_ml is None:

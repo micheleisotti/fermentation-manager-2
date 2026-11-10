@@ -28,7 +28,13 @@ NOTIFY_RULES = {
     "silent": ("controller_silent", "controller_restored"),
     "external": ("external_setpoint_change",),
     "finished": ("probably_finished",),
+    "loops": ("loop_switched_off", "loop_switched_on"),
 }
+
+# Loops FM2 may switch on/off (1.14 on the ez2-Control). Which ones are allowed is set per reactor
+# in Settings › Loop control (lab PC only); default: pH, temperature, stirrer.
+SWITCHABLE_LOOPS = ("ph", "temperature", "stirrer", "do2", "level")
+DEFAULT_ALLOWED_LOOPS = ["ph", "temperature", "stirrer"]
 
 DEFAULTS: dict[str, dict[str, Any]] = {
     "remote": {
@@ -48,7 +54,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "ntfy_server": "https://ntfy.sh", "ntfy_topic": "", "ntfy_token": "",
         "telegram_token": "", "telegram_chat_id": "",
         "rules": {"limits": True, "setpoint_ph": True, "setpoint_t": True, "silent": True,
-                  "external": True, "finished": True},
+                  "external": True, "finished": True, "loops": True},
     },
     "backup": {
         "enabled": False, "destination": "", "every_h": 24, "keep": 14,
@@ -56,6 +62,8 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # Experiment copies (data export) saved by the PC, e.g. on a USB stick: E:\FM2-archive
         "archive_destination": "", "archive_format": "xlsx", "archive_on_end": True,
     },
+    # {reactor_id: [loops FM2 may start/stop]}; a reactor not listed uses DEFAULT_ALLOWED_LOOPS
+    "loops": {"allowed": {}, "allow_remote": False},
 }
 SECRETS = {"notifications": ("telegram_token", "ntfy_token")}
 
@@ -142,6 +150,16 @@ def _validate(section: str, v: dict) -> dict:
                 "csv_per_experiment": bool(v.get("csv_per_experiment", True)),
                 "archive_destination": str(v.get("archive_destination", "") or "").strip(),
                 "archive_format": afmt, "archive_on_end": bool(v.get("archive_on_end", True))}
+    if section == "loops":
+        allowed = v.get("allowed") or {}
+        if not isinstance(allowed, dict):
+            raise SettingsError("allowed must map each reactor to a list of loops")
+        out = {}
+        for rid, loops in allowed.items():
+            if not isinstance(loops, list) or any(x not in SWITCHABLE_LOOPS for x in loops):
+                raise SettingsError(f"{rid}: loops must be among {', '.join(SWITCHABLE_LOOPS)}")
+            out[str(rid)] = [x for x in SWITCHABLE_LOOPS if x in loops]
+        return {"allowed": out, "allow_remote": bool(v.get("allow_remote", False))}
     raise SettingsError(f"unknown settings section {section!r}")
 
 
@@ -198,6 +216,9 @@ class AppSettings:
     def setpoint_ranges(self) -> dict[str, SetpointRange]:
         r = self.get("remote")["ranges"]
         return {p: SetpointRange(x["min"], x["max"], x["max_step"]) for p, x in r.items()}
+
+    def allowed_loops(self, reactor_id: str) -> list[str]:
+        return list(self.get("loops")["allowed"].get(reactor_id, DEFAULT_ALLOWED_LOOPS))
 
     def alert_params(self) -> AlertParams:
         a = self.get("alerts")

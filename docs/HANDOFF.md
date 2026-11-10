@@ -124,11 +124,13 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   matplotlib (PNG/SVG/PDF, width in mm, dpi, themes grey/bw/classic). **New dependency: run
   `pip install -e .` on the PC** after pulling.
 - Desktop navigation rail stays fixed while the page scrolls.
-- To do (Michele, 9 Nov): **loop on/off** from the experiment page — start the control of a loop (pH, T,
-  stirrer) or stop it (control off and its actuator stopped). Never manual actuator outputs: those stay
-  on the physical controller. Data recording stays separate. Needs an inspection session to find the
-  loop on/off address per loop; then confirmation dialog, read-back, change log, remote disabled by
-  default. Until then the driver never writes loop or actuator states.
+- **Loop on/off** (done 10 Nov, PR #23): Start / Stop selected loops on the experiment page writes
+  `1.14.<sensor>` (0/1, like the controller's own buttons) for pH, T, stirrer, dO2, level — only loops
+  enabled in Settings › Loop control (per reactor, lab PC only; default pH, T, stirrer; remote switching
+  off by default), set up on the controller and, to start, with an actuator; a loop that starts others
+  in cascade (dO2 → stirrer) needs those enabled too. Read-back, event per loop; alert
+  `loop_switched_off` when a loop of a channel in use goes off not by FM2 (info when switched on).
+  Never manual actuator outputs, assignments, dose counters, calibration: controller only.
 
 ## Analysis sessions (9 Nov 2026)
 - Analysis › sessions (mockup M3Analysis): conditions are session-only labels (ordered: A, B, ...);
@@ -211,8 +213,8 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 
 ## Preparation phase and editable plan values (10 Nov 2026, revised)
 - New status `preparing`. Planning → **Go to fermentation**: the same live page as a running experiment,
-  bar "● Not recording · t = —" with **Start selected loops / Stop selected loops** (popup, not implemented
-  yet, all disabled: loops = actuators only, sensors keep being read) and **Start experiment** (reminder
+  bar "● Not recording · t = —" with **Start selected loops / Stop selected loops** (loops = actuators
+  only, sensors keep being read) and **Start experiment** (reminder
   popup) in the place of End of experiment. Live values, setpoint/limit edits and alerts/notifications
   work (no base-dosing "finished" rule; at-start messages say "when monitoring began"); **nothing is
   recorded before Start**, so charts stay empty. Phase events get negative times at Start.
@@ -226,7 +228,7 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 ## Versioning
 - PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). 2.0.0.dev1–dev19
   followed the merged PR numbers. Since the loop-control work (new functions) the line is **2.1.0.devN**,
-  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21; 2.1.0.dev2 = loop configuration in planning, PR #22).
+  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21; 2.1.0.dev2 = loop configuration in planning, PR #22; 2.1.0.dev3 = loop start/stop, PR #23).
   Release 2.1.0 (git tag) after the test fermentations; then semantic versioning — bug fixes 2.1.1,
   new features 2.2.0, incompatible changes (data/format) 3.0.0. The version is shown in Settings › Credits.
 

@@ -300,7 +300,7 @@ def test_write_request_allowlist():
     # dose counter, actuator on, calibration, loop on, stirrer/dO2 loop parameters and control type,
     # actuator assignment (2.7) and loop add/remove (3.51-3.53), interlock limits (1.20/1.21),
     # stirrer alarm limits, dO2 limits
-    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.0", "3.0.13", "3.0.1", "1.19.1", "1.19.13", "3.72.0",
+    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.32", "1.14.5", "3.0.13", "3.0.1", "1.19.1", "1.19.13", "3.72.0",
                  "2.7.28", "2.8.28", "3.51.0", "3.52.0", "3.53.0", "2.20.29",
                  "1.20.0", "1.21.0", "1.4.13", "1.5.1"):
         with pytest.raises(DriverError):
@@ -315,6 +315,11 @@ def test_write_request_allowlist():
     assert build_write_request("3.0.2", "50.0") == b"J3.0.2s50.0\r"
     with pytest.raises(DriverError):
         build_write_request("1.19.2", "2")
+    # loop on/off (decision 10 Nov 2026): 0/1 on the five loops only
+    assert build_write_request("1.14.0", "1") == b"J1.14.0s1\r"
+    for bad in ("2", "-1", "1.0"):
+        with pytest.raises(DriverError):
+            build_write_request("1.14.13", bad)
 
 
 def test_setpoint_command_end_to_end(fake):
@@ -468,3 +473,13 @@ def test_temperature_loop_control_write(fake):
     assert snap.temperature_control.mode == "pid" and snap.temperature_control.pid["P"] == 25.2
     with pytest.raises(DriverError):
         drv.write_loop_control("stirrer", PhControl("pid", {"P": 1.0}))
+
+
+def test_loop_on_off_write_and_read_back(fake):
+    fake.values.update({"1.14.0": "0", "1.14.2": "0", "1.14.13": "0", "1.14.1": "0", "1.14.3": "0"})
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    assert drv.read().loops_active == {"ph": False, "temperature": False, "stirrer": False, "do2": False, "level": False}
+    drv.write_loop_active("ph", True)
+    assert fake.writes == [("1.14.0", "1")] and drv.read().loops_active["ph"] is True
+    with pytest.raises(DriverError):
+        drv.write_loop_active("redox", True)

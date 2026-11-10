@@ -174,6 +174,9 @@ export const api = {
     req<Experiment>(`/experiments/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   linkParallel: (id: number, partnerId: number) =>
     req<Experiment>(`/experiments/${id}/parallel`, { method: "POST", body: JSON.stringify({ partner_id: partnerId }) }),
+  loopsState: (reactor: string) => req<LoopsState>(`/reactors/${reactor}/loops`),
+  switchLoops: (reactor: string, loops: string[], on: boolean) => req<{ results: { loop: string; requested: boolean; readback: boolean | null; status: string; message: string }[] }>(
+    `/reactors/${reactor}/loops`, { method: "POST", body: JSON.stringify({ loops, on }) }),
   loopConfig: (reactor: string, fresh = false) => req<LoopConfigView>(`/reactors/${reactor}/loop-config${fresh ? "?fresh=true" : ""}`),
   planCheck: (id: number) => req<PlanCheck>(`/experiments/${id}/plan-check`),
   loadProfile: (id: number) => req<{ results: { parameter: string; status: string; message?: string }[] }>(`/experiments/${id}/load-profile`, { method: "POST" }),
@@ -264,7 +267,10 @@ export interface AppSettings {
     telegram_token: string; telegram_chat_id: string; rules: Record<string, boolean> };
   backup: { enabled: boolean; destination: string; every_h: number; keep: number; on_end_of_production: boolean; csv_per_experiment: boolean;
     archive_destination: string; archive_format: "xlsx" | "zip"; archive_on_end: boolean };
+  loops: { allowed: Record<string, string[]>; allow_remote: boolean };
 }
+export interface SwitchLoop extends LoopInfo { allowed: boolean; start_refused: string | null; also_switches: string[] }
+export interface LoopsState { reachable: boolean; message?: string; allowed: string[]; loops: SwitchLoop[] }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
 export interface SystemInfo { version: string; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;

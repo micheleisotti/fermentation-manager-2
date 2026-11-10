@@ -53,6 +53,7 @@ class SimulatedController(ControllerDriver):
         self.ph_control = PhControl(mode="pid", pid={"P": 1.0, "I": 60.0, "D": 0.0})
         self.temperature_control = PhControl(mode="adaptive", pid={"P": 50.0, "I": 6000.0, "D": 20.0,
                                                                    "settling_time": 1500.0})
+        self.loops_active = {"ph": False, "temperature": False, "stirrer": False, "do2": False, "level": False}
         # loop configuration as found on R2-dx (10 Nov 2026); tests may replace it
         self.loop_config = LoopConfig(loops=(
             LoopInfo("ph", 0, "pH", 4, False, "pid", "6.87", 6.0, True, (
@@ -134,6 +135,7 @@ class SimulatedController(ControllerDriver):
                 temperature_low_limit=self.limits["temperature"][0],
                 temperature_high_limit=self.limits["temperature"][1],
                 ph_control=self.ph_control, temperature_control=self.temperature_control,
+                loops_active=dict(self.loops_active),
                 extra={
                     "heating_pct": round(max(0.0, min(100.0, (self.sp["temperature"] - self._temp) * 40 + 25)), 1),
                     "cooling_pct": round(max(0.0, min(100.0, (self._temp - self.sp["temperature"]) * 40)), 1),
@@ -170,10 +172,22 @@ class SimulatedController(ControllerDriver):
         with self._lock:
             setattr(self, f"{loop}_control", control)
 
+    def write_loop_active(self, loop: str, on: bool) -> None:
+        if loop not in self.loops_active:
+            raise DriverError(f"cannot switch the {loop!r} loop")
+        with self._lock:
+            self.loops_active[loop] = bool(on)
+            # like the controller: a loop drives the loops it uses in cascade (dO2 -> stirrer)
+            for lp in self.loop_config.loops:
+                if lp.drives == loop and lp.key in self.loops_active:
+                    self.loops_active[lp.key] = bool(on)
+
     def read_loop_config(self) -> LoopConfig:
         if self.fail_reads:
             raise DriverError(f"{self.reactor_id}: no response (simulated)")
-        return self.loop_config
+        from dataclasses import replace
+        return replace(self.loop_config, loops=tuple(
+            replace(lp, active=self.loops_active.get(lp.key, lp.active)) for lp in self.loop_config.loops))
 
     # -- helpers for tests -------------------------------------------------------
     @property
