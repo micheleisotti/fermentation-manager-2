@@ -554,8 +554,9 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/experiments/{exp_id}/start", response_model=S.ExperimentOut)
-def start_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
+def start_experiment(exp_id: int, request: Request, body: Optional[S.StartIn] = None, db: Session = Depends(get_db)):
     e = _404(db.get(Experiment, exp_id))
+    checks = (body.checklist if body else None) or []
     if e.status != ExperimentStatus.planned:
         raise HTTPException(409, "Only planned experiments can be started")
     busy = db.scalar(select(Experiment).where(Experiment.reactor_id == e.reactor_id,
@@ -567,7 +568,8 @@ def start_experiment(exp_id: int, request: Request, db: Session = Depends(get_db
     if hasattr(driver, "on_experiment_start"):
         driver.on_experiment_start()  # simulator only: fresh culture
     e.status, e.started_at = ExperimentStatus.fermenting, now_of(request)
-    _event(db, e, "started", f"{e.code} started by {who(request, db)}", 0.0)
+    _event(db, e, "started", f"{e.code} started by {who(request, db)}"
+           + (f" · pre-start checks confirmed: {'; '.join(checks)}" if checks else ""), 0.0)
     if e.profile:
         p = e.profile
         e.plan_snapshot = {"profile": p.name, "ph_setpoint": p.ph_setpoint,

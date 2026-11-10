@@ -57,6 +57,10 @@ class EndIn(BaseModel):
     save_copy: Optional[bool] = None   # None = use Settings › Data and backup › archive_on_end
 
 
+class StartIn(BaseModel):
+    checklist: Optional[list[str]] = None   # pre-start checks the user ticked (logged in the Start event)
+
+
 class ArchiveIn(BaseModel):
     format: Optional[str] = None       # xlsx | zip (default from settings)
     blocks: Optional[list[str]] = None

@@ -98,6 +98,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   const [do2Notice, setDo2Notice] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ kind: "good" | "alert" | "warn"; text: string } | null>(null);
+  const [checking, setChecking] = useState(false);
   const set = (patch: Partial<ExperimentDraft>) => { setD({ ...d, ...patch }); setDirty(true); };
 
   const profiles = usePolling(api.profiles, 600000);
@@ -338,15 +339,54 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
               </span>
             ))}
             <button className="btn filled" style={{ height: 48, justifyContent: "center" }} disabled={!existing || blocking}
-              onClick={async () => {
-                if (!existing) return;
-                if (mismatches.length && !window.confirm("Some settings differ from the controller. Start anyway?")) return;
-                try { await api.start(existing.id); onChange?.(); } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-              }}><Icon name="play" size={18} />Start recording</button>
+              onClick={() => { if (existing) setChecking(true); }}><Icon name="play" size={18} />Start recording</button>
+            {checking && existing && (
+              <PreStartChecklist channels={d.channels ?? DEFAULT_CHANNELS} mismatch={mismatches.length > 0} onCancel={() => setChecking(false)}
+                onStart={async (done) => {
+                  try { await api.start(existing.id, done); setChecking(false); onChange?.(); }
+                  catch (x) { setChecking(false); setMsg({ kind: "alert", text: (x as Error).message }); }
+                }} />
+            )}
             <span className="xs muted">t = 0 is the moment you press Start.</span>
           </section>
         </aside>
       </div>
     </>
+  );
+}
+
+/** Checks on the bioreactor and controller that the software cannot verify: all must be ticked to start. */
+function PreStartChecklist({ channels, mismatch, onCancel, onStart }: { channels: Channel[]; mismatch: boolean;
+  onCancel: () => void; onStart: (done: string[]) => void }) {
+  const items = [
+    { k: "probes", t: "Probes calibrated", d: `On the controller: ${["pH", ...(channels.includes("do2") ? ["dO2"] : [])].join(" and ")} probe calibration done${channels.includes("temperature") ? ", temperature probe in place" : ""}.` },
+    ...(channels.includes("ph") ? [{ k: "dosing", t: "Dose monitoring calibrated", d: "Base pump / dose monitoring calibrated on the controller, base bottle connected and tubing primed." }] : []),
+    { k: "water", t: "Cooling and condenser water", d: "Cooling water and condenser water valves open." },
+  ];
+  const [done, setDone] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const all = items.every((i) => done.includes(i.k));
+  return (
+    <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) onCancel(); }}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="pre-title" style={{ width: "min(540px, 100vw)" }}>
+        <h2 id="pre-title" style={{ fontSize: 20 }}>Check the bioreactor before starting</h2>
+        <span className="small muted">Basic operations on the bioreactor controller that the software cannot check. Tick each one to start.</span>
+        <div className="stack" style={{ gap: 8 }}>
+          {items.map((i) => (
+            <label key={i.k} className={`choice ${done.includes(i.k) ? "on" : ""}`}>
+              <input type="checkbox" checked={done.includes(i.k)}
+                onChange={() => setDone(done.includes(i.k) ? done.filter((x) => x !== i.k) : [...done, i.k])} />
+              <span className="stack" style={{ gap: 2 }}><b>{i.t}</b><span className="small muted">{i.d}</span></span>
+            </label>
+          ))}
+        </div>
+        {mismatch && <div className="banner warn small" role="note">Some settings differ from the controller (see “Controller check”): starting anyway keeps the controller values.</div>}
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button className="btn text" disabled={busy} onClick={onCancel}>Cancel</button>
+          <button className="btn filled" disabled={!all || busy} onClick={async () => {
+            setBusy(true); onStart(items.map((i) => i.t)); }}><Icon name="play" size={18} />{busy ? "Starting…" : "Start recording"}</button>
+        </div>
+      </div>
+    </div>
   );
 }

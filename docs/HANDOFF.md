@@ -198,6 +198,11 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - No periodic backup during a run (decided): every reading is committed to SQLite (WAL) as it arrives and
   the service resumes recording after a power cut; set "Restore on AC power loss" in the PC BIOS.
 
+## Pre-start checklist (10 Nov 2026)
+- "Start recording" opens a checklist (all items must be ticked): probes calibrated (pH, dO2 if used,
+  T probe), dose monitoring calibrated (only with the pH channel), cooling and condenser water valves open.
+  The ticked items are logged in the "started by …" event.
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.

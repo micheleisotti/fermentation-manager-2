@@ -311,14 +311,14 @@ def test_users_pin_and_signatures(env):
 
     # the server, not the browser, decides the signature
     e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "author": "Someone else"}, headers=h).json()
-    c.post(f"/api/experiments/{e['id']}/start", headers=h)
+    c.post(f"/api/experiments/{e['id']}/start", json={"checklist": ["Probes calibrated"]}, headers=h)
     od = c.get("/api/variables").json()[0]["id"]
     mm = c.post(f"/api/experiments/{e['id']}/measurements", json={"variable_id": od, "value": 0.1, "author": "Michele"}).json()
     assert mm["author"] == "Guest"   # no token → Guest, whatever the body says
     c.post("/api/reactors/R1/setpoints", json={"parameter": "temperature", "value": 31}, headers=h)
     assert any(x["author"] == "Michele" for x in c.get(f"/api/experiments/{e['id']}/setpoint-log").json())
     ev = c.get(f"/api/experiments/{e['id']}/events").json()
-    assert any("started by Michele" in x["message"] for x in ev)
+    assert any("started by Michele" in x["message"] and "Probes calibrated" in x["message"] for x in ev)
 
     # PIN-protected user can be changed only when signed in as them; PIN change invalidates old tokens
     assert c.put(f"/api/users/{mid}", json={"archived": True}).status_code == 403

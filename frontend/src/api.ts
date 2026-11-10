@@ -161,7 +161,8 @@ export const api = {
   deleteExperiment: (id: number, code: string) =>
     req<{ deleted: string }>(`/experiments/${id}?confirm=${encodeURIComponent(code)}`, { method: "DELETE" }),
   deleteProfile: (id: number) => req<{ deleted: number; unlinked_experiments: string[] }>(`/profiles/${id}`, { method: "DELETE" }),
-  start: (id: number) => req<Experiment>(`/experiments/${id}/start`, { method: "POST" }),
+  start: (id: number, checklist?: string[]) =>
+    req<Experiment>(`/experiments/${id}/start`, { method: "POST", body: JSON.stringify({ checklist: checklist ?? null }) }),
   end: (id: number, outcome: "completed" | "aborted" = "completed", note = "", save_copy?: boolean) =>
     req<Experiment & { copy?: { path?: string; bytes?: number; error?: string } | null }>(`/experiments/${id}/end`,
       { method: "POST", body: JSON.stringify({ outcome, note, save_copy }) }),
