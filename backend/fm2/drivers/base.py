@@ -9,6 +9,8 @@ Write operations are deliberately limited to what was agreed:
 - setpoints (pH, temperature, stirrer): any time, with read-back
 - process (alarm) limits of pH and temperature: any time, with read-back (decision 9 Nov 2026)
 - pH and temperature control mode and loop parameters: only from planning, before Start
+- loop on/off (start/stop of a control loop, decision 10 Nov 2026): only loops allowed in
+  Settings, with confirmation, read-back and an event
 - actuators, actuator-to-loop assignments, dose counters, calibration, interlock limits:
   never (controller only); assignments are read (read_loop_config) and shown in planning
 """
@@ -70,6 +72,8 @@ class ControllerSnapshot:
     temperature_high_limit: Optional[float] = None
     ph_control: PhControl = field(default_factory=PhControl)
     temperature_control: PhControl = field(default_factory=PhControl)
+    # loop on/off as reported by the controller: {"ph": True, ...} (loops it could read)
+    loops_active: dict = field(default_factory=dict)
     # Optional channels (see CHANNELS): dO2 and actuator outputs, keyed by EXTRA_FIELDS
     extra: dict = field(default_factory=dict)
 
@@ -158,6 +162,10 @@ class ControllerDriver(ABC):
         if loop == "ph":
             return self.write_ph_control(control)
         raise DriverError(f"this controller driver cannot load the {loop} loop parameters")
+
+    def write_loop_active(self, loop: str, on: bool) -> None:
+        """Switch one control loop on or off. Callers read back (snapshot.loops_active)."""
+        raise DriverError("this controller driver cannot switch loops")
 
     def read_loop_config(self) -> LoopConfig:
         """Loops, their actuators (and cascades) and calibration state. Raises DriverError."""

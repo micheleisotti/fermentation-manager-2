@@ -13,6 +13,7 @@ const SECTIONS = [
   { id: "appearance", label: "Appearance" },
   { id: "bioreactors", label: "Bioreactors" },
   { id: "remote", label: "Remote access" },
+  { id: "loops", label: "Loop control" },
   { id: "alerts", label: "Notifications" },
   { id: "backup", label: "Data and backup" },
   { id: "credits", label: "Credits and license" },
@@ -60,6 +61,12 @@ function useSection<K extends keyof AppSettings>(all: AppSettings | undefined, k
   );
   return { v, edit, footer, ver, dirty };
 }
+
+const DEFAULT_LOOPS = ["ph", "temperature", "stirrer"];
+const LOOP_ROWS: [string, string, string][] = [
+  ["ph", "pH", "base / acid pumps"], ["temperature", "Temperature", "heating, cooling"], ["stirrer", "Stirrer", "motor"],
+  ["do2", "dO2", "actuators as assigned on the controller (gases, stirrer in cascade)"], ["level", "Level / antifoam", "antifoam pump"],
+];
 
 const NUM = { style: { fontFamily: "var(--font-mono)", width: 96 }, inputMode: "decimal" as const };
 const num = (s: string) => (s.trim() === "" ? NaN : Number(s.replace(",", ".")));
@@ -188,6 +195,7 @@ export function SettingsPage() {
   const alerts = useSection(all.data, "alerts", all.refresh);
   const notif = useSection(all.data, "notifications", all.refresh);
   const bk = useSection(all.data, "backup", all.refresh);
+  const lc = useSection(all.data, "loops", all.refresh);
   const [testMsg, setTestMsg] = useState<{ kind: string; text: string } | null>(null);
   const [bkMsg, setBkMsg] = useState<{ kind: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -199,7 +207,7 @@ export function SettingsPage() {
 
   const [finding, setFinding] = useState(false);
   if (all.error) return <div className="banner alert">Settings not available: {all.error}</div>;
-  if (!all.data || !remote.v || !alerts.v || !notif.v || !bk.v) return <div className="muted">Loading…</div>;
+  if (!all.data || !remote.v || !alerts.v || !notif.v || !bk.v || !lc.v) return <div className="muted">Loading…</div>;
   const r = remote.v, a = alerts.v, n = notif.v, b = bk.v;
   const local = sys.data?.client_local ?? false;
   const st: BackupStatus | undefined = backup.data;
@@ -212,6 +220,7 @@ export function SettingsPage() {
     { k: "setpoint_t", t: "Setpoint reached — temperature", d: `Within ±${a.temp_tolerance} °C for ${a.hold_min} min, once per setpoint` },
     { k: "silent", t: "Controller not responding", d: `No reading for ${a.silent_after_min} min, and when readings resume` },
     { k: "external", t: "Setpoint changed on the controller", d: "A change not made from this software" },
+    { k: "loops", t: "Control loop switched at the controller", d: "A loop of a channel in use switched off (alert) or on, not by this software" },
     { k: "finished", t: "Fermentation probably finished", d: `Base rate below ${a.finished_fraction_pct} % of its peak for ${a.finished_hold_min} min` },
   ];
   const ALERT_FIELDS: { k: keyof typeof a; label: string; unit: string }[] = [
@@ -295,6 +304,42 @@ export function SettingsPage() {
             </div>
             <span className="xs muted">The controller's own sensor ranges always apply on top.</span>
             {local && remote.footer}
+            </fieldset>
+          </Section>
+
+          <Section id="loops" title="Loop control" sub="Which control loops can be started and stopped from this software (Start / Stop selected loops on the fermentation page).">
+            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
+            <fieldset className="plain" disabled={!local}>
+              <div className="row between" style={{ flexWrap: "nowrap", gap: 16 }}>
+                <span className="stack" style={{ gap: 0 }}>Allow starting and stopping loops from remote devices
+                  <span className="xs muted">Off: only from the lab PC. Setpoint changes have their own switch (Remote access)</span></span>
+                <Switch on={lc.v.allow_remote} label="Allow remote loop switching" onChange={(v) => lc.edit((x) => { x.allow_remote = v; })} />
+              </div>
+              <div className="table-wrap">
+                <table className="data" style={{ minWidth: 520 }}>
+                  <thead><tr><th>Loop</th>{(sys.data?.reactors ?? []).map((x) => <th key={x.reactor_id} style={{ textAlign: "center" }}>{x.reactor_id}</th>)}</tr></thead>
+                  <tbody>
+                    {LOOP_ROWS.map(([k, label, note]) => (
+                      <tr key={k}>
+                        <td>{label}<br /><span className="xs muted">{note}</span></td>
+                        {(sys.data?.reactors ?? []).map((x) => {
+                          const cur = lc.v!.allowed[x.reactor_id] ?? DEFAULT_LOOPS;
+                          return (
+                            <td key={x.reactor_id} style={{ textAlign: "center" }}>
+                              <input type="checkbox" aria-label={`${label} on ${x.reactor_id}`} checked={cur.includes(k)}
+                                onChange={() => lc.edit((y) => { y.allowed[x.reactor_id] = cur.includes(k) ? cur.filter((z) => z !== k) : [...cur, k]; })} />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <span className="xs muted">Loops not enabled here are shown but cannot be switched from this software. Actuator assignments, cascades and
+                calibration are set on the controller's display. Starting a loop also starts the loops it drives in cascade (e.g. dO2 → stirrer):
+                that is allowed only if they are enabled too.</span>
+              {local && lc.footer}
             </fieldset>
           </Section>
 

@@ -105,6 +105,12 @@ READ_MAP: dict[str, str] = {
     "antifoam_out":             f"2.12.{ANTIFOAM_ACTUATOR}",
     "antifoam_factor":          f"2.4.{ANTIFOAM_ACTUATOR}",
     "redox":                    f"1.15.{REDOX}",
+    # loop on/off
+    "loop_ph":                  f"1.14.{PH}",
+    "loop_temperature":         f"1.14.{TEMPERATURE}",
+    "loop_stirrer":             f"1.14.{STIRRER}",
+    "loop_do2":                 f"1.14.{DO2}",
+    "loop_level":               f"1.14.{LEVEL}",
 }
 
 # The only addresses this driver may ever write.
@@ -141,7 +147,13 @@ LOOP_PARAM_LIMITS = {loop: {"P": (f"3.2.{s}", f"3.1.{s}"), "I": (f"3.5.{s}", f"3
 LIMIT_SENSORS = {"ph": PH, "temperature": TEMPERATURE}
 LIMIT_ADDRESSES = frozenset(f"1.{k}.{s}" for s in LIMIT_SENSORS.values() for k in (4, 5))
 
+# Loop on/off ("Start/Stop selected loops"): 1.14.<sensor>, values 0/1 only, exactly what the
+# controller's own Start/Stop buttons write (rightpanelsensors.js -> senData.active()).
+SWITCH_SENSORS = {"ph": PH, "temperature": TEMPERATURE, "stirrer": STIRRER, "do2": DO2, "level": LEVEL}
+LOOP_ACTIVE_ADDRESSES = {loop: f"1.14.{s}" for loop, s in SWITCH_SENSORS.items()}
+
 WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | frozenset(LOOP_TYPE_ADDRESSES.values())
+                      | frozenset(LOOP_ACTIVE_ADDRESSES.values())
                       | frozenset(a for d in LOOP_PARAM_ADDRESSES.values() for a in d.values())
                       | LIMIT_ADDRESSES)
 
@@ -151,6 +163,8 @@ def build_write_request(address: str, text: str) -> bytes:
         raise DriverError(f"refusing to write {address}: not an address FM2 may write")
     if not text or any(c in text for c in "\rJSs|"):
         raise DriverError(f"refusing to write malformed value {text!r}")
+    if address in LOOP_ACTIVE_ADDRESSES.values() and text not in ("0", "1"):
+        raise DriverError(f"refusing to write {text!r} to the loop switch {address}: only 0 or 1")
     if address in LOOP_TYPE_ADDRESSES.values() and text not in WRITABLE_PH_MODES.values():
         raise DriverError(f"refusing to set control type {text!r} at {address}: only PID or Adaptive")
     return f"J{address}s{text}\r".encode("ascii")
@@ -262,6 +276,8 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
         temperature_low_limit=f("temperature_low_limit"),
         temperature_high_limit=f("temperature_high_limit"),
         ph_control=control("ph"), temperature_control=control("temperature"),
+        loops_active={k: f(f"loop_{k}") == 1 for k in ("ph", "temperature", "stirrer", "do2", "level")
+                      if f(f"loop_{k}") is not None},
         extra={k: v for k, v in extra.items() if v is not None},
     )
 
@@ -558,6 +574,13 @@ class Ez2ControlDriver(ControllerDriver):
                     writes.append((addresses[term], text, dec))
             if writes:
                 self._logged_in_writes(writes)
+
+    def write_loop_active(self, loop: str, on: bool) -> None:
+        """Start (1) or stop (0) one control loop, like the controller's own Start/Stop buttons."""
+        if loop not in LOOP_ACTIVE_ADDRESSES:
+            raise DriverError(f"cannot switch the {loop!r} loop")
+        with self._lock:
+            self._logged_in_writes([(LOOP_ACTIVE_ADDRESSES[loop], "1" if on else "0", 0)])
 
     # -- loop configuration (read only) ----------------------------------------------
     def read_loop_config(self) -> LoopConfig:

@@ -154,3 +154,36 @@ def write_limits(driver: ControllerDriver, parameter: str, low: Optional[float],
                                  "Limit confirmed by the controller" if ok else f"Controller reports {rb!r} instead of {v:g}",
                                  warnings))
     return out
+
+
+@dataclass
+class LoopResult:
+    loop: str
+    requested: bool
+    readback: Optional[bool]
+    status: str            # confirmed | mismatch | error | rejected
+    message: str = ""
+
+
+def switch_loops(driver: ControllerDriver, loops: list[str], on: bool, cascades: dict[str, list[str]],
+                 alert_state=None) -> list[LoopResult]:
+    """
+    Start or stop control loops, one by one, reading each back. `cascades` maps a loop to the loops
+    the controller switches with it (e.g. dO2 -> stirrer), so that alerts do not flag them as external.
+    """
+    out = []
+    for loop in loops:
+        if alert_state is not None:
+            alert_state.expect_loop(loop, on)
+            for other in cascades.get(loop, []):
+                alert_state.expect_loop(other, on)
+        try:
+            driver.write_loop_active(loop, on)
+            rb = driver.read().loops_active.get(loop)
+        except DriverError as ex:
+            out.append(LoopResult(loop, on, None, "error", str(ex)))
+            continue
+        ok = rb is not None and rb == on
+        out.append(LoopResult(loop, on, rb, "confirmed" if ok else "mismatch",
+                              "" if ok else f"controller reports the loop {'on' if rb else 'off' if rb is not None else 'unknown'}"))
+    return out

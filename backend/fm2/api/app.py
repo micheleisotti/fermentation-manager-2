@@ -26,6 +26,7 @@ from .. import __version__
 from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
 from ..analysis import base_dosing, kinetics, report, stats
+from ..services.app_settings import SWITCHABLE_LOOPS
 from .. import loops
 from ..config import Settings
 import logging
@@ -179,8 +180,9 @@ def who(request: Request, db: Session) -> str:
     return u.name if u else GUEST_NAME
 
 
-def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None) -> None:
-    db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity="info", message=message, t_h=t_h))
+def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None,
+           severity: str = "info") -> None:
+    db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity=severity, message=message, t_h=t_h))
 
 
 def channels_of(e: Experiment) -> list[str]:
@@ -981,6 +983,81 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     return res.__dict__
 
 
+@router.get("/reactors/{reactor_id}/loops")
+def loops_state(reactor_id: str, request: Request):
+    """What the Start/Stop selected loops dialog needs: loops, their state, and whether FM2 may switch them."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    allowed = request.app.state.app_settings.allowed_loops(reactor_id)
+    try:
+        cfg = _loop_config(request, reactor_id, fresh=True)
+    except DriverError as ex:
+        return {"reachable": False, "message": str(ex), "allowed": allowed, "loops": []}
+    view = loops.config_view(cfg)["loops"]
+    out = []
+    for lp in view:
+        if lp["key"] not in SWITCHABLE_LOOPS:
+            continue
+        reason = _switch_refusal(lp, view, allowed, start=True)
+        out.append({**lp, "allowed": lp["key"] in allowed, "start_refused": reason,
+                    "also_switches": [o["label"] for o in view if o["drives"] == lp["key"]]})
+    return {"reachable": True, "allowed": allowed, "loops": out}
+
+
+def _switch_refusal(lp: dict, view: list[dict], allowed: list[str], start: bool) -> Optional[str]:
+    if lp["key"] not in allowed:
+        return "not enabled in Settings › Loop control"
+    if not lp["installed"] or lp["available"] < 4:
+        return "not set up as a control loop on the controller"
+    if start and not lp["actuators"]:
+        return "no actuator assigned on the controller"
+    if start:
+        for o in view:   # loops the controller starts with it (cascade) must be allowed too
+            if o["drives"] == lp["key"] and o["key"] not in allowed:
+                return f"it would also start the {o['label']} loop, which is not enabled in Settings"
+    return None
+
+
+@router.post("/reactors/{reactor_id}/loops")
+def switch_loops(reactor_id: str, body: S.LoopSwitchIn, request: Request, db: Session = Depends(get_db)):
+    """Start or stop the selected control loops (allowed ones only), with read-back and an event."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    _check_remote(request)
+    if not is_local(request) and not request.app.state.app_settings.get("loops")["allow_remote"]:
+        raise HTTPException(403, "Starting and stopping loops from remote devices is switched off (Settings › Loop control).")
+    if not body.loops:
+        raise HTTPException(422, "No loop selected")
+    allowed = request.app.state.app_settings.allowed_loops(reactor_id)
+    try:
+        cfg = _loop_config(request, reactor_id, fresh=True)
+    except DriverError as ex:
+        raise HTTPException(503, f"{reactor_id} not reachable: {ex}")
+    view = {lp["key"]: lp for lp in loops.config_view(cfg)["loops"]}
+    for key in body.loops:
+        if key not in view or key not in SWITCHABLE_LOOPS:
+            raise HTTPException(422, f"Unknown loop {key!r}")
+        why = _switch_refusal(view[key], list(view.values()), allowed, start=body.on)
+        if why:
+            raise HTTPException(409, f"{view[key]['label']}: {why}. Nothing was switched.")
+    cascades = {k: [o["key"] for o in view.values() if o["drives"] == k] for k in body.loops}
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
+    alert_state = acq.alert_state_for(exp.id, reactor_id, exp.status == ExperimentStatus.preparing) if exp else None
+    results = commands.switch_loops(driver, list(body.loops), body.on, cascades, alert_state)
+    request.app.state.__dict__.get("loop_config_cache", {}).pop(reactor_id, None)
+    author = who(request, db)
+    for r in results:
+        label = view[r.loop]["label"]
+        extra = cascades.get(r.loop)
+        msg = (f"{reactor_id}: {label} loop {'started' if body.on else 'stopped'} by {author}"
+               + (f" (with {', '.join(view[x]['label'] for x in extra)} in cascade)" if extra else "")
+               + ("" if r.status == "confirmed" else f" — NOT confirmed: {r.message}"))
+        if exp:
+            _event(db, exp, "loop_started" if body.on else "loop_stopped", msg, _t_h(exp, now_of(request)),
+                   severity="info" if r.status == "confirmed" else "alert")
+    return {"results": [r.__dict__ for r in results]}
+
+
 def is_local(request: Request) -> bool:
     """
     True for requests from the lab PC itself (loopback). Decided from the connection, never from
@@ -1005,7 +1082,7 @@ def origin_of(request: Request) -> str:
     return "local" if is_local(request) else "remote"
 
 
-LOCAL_ONLY_SECTIONS = ("remote", "backup")
+LOCAL_ONLY_SECTIONS = ("remote", "backup", "loops")
 
 
 def _check_remote(request: Request, _declared: str = "") -> None:
