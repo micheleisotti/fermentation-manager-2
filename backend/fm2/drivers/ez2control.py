@@ -39,13 +39,15 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from .base import (PH_MODE_PARAMS, ControllerDriver, ControllerSnapshot, DriverCapabilities, DriverError,
-                   PhControl)
+                   LoopActuator, LoopConfig, LoopInfo, PhControl)
 
 log = logging.getLogger(__name__)
 
 # Sensor indices (second level of 1.x.<sensor>)
 PH, DO2, TEMPERATURE, STIRRER = 0, 1, 2, 13
+LEVEL, REDOX = 3, 32
 BASE_ACTUATOR = 29
+ACID_ACTUATOR, ANTIFOAM_ACTUATOR = 28, 30     # "Addition 2" (pH high when assigned to pH), "Antifoam"
 # Actuators (second level of 2.x.<actuator>), as configured on both units
 N2_VALVE, AIR_VALVE, STIRRER_ACT, HEATING, COOLING = 0, 1, 18, 19, 46
 
@@ -86,6 +88,23 @@ READ_MAP: dict[str, str] = {
     "n2_factor":                f"2.4.{N2_VALVE}",
     "air_out":                  f"2.12.{AIR_VALVE}",
     "air_factor":               f"2.4.{AIR_VALVE}",
+    # temperature loop (same structure as pH)
+    "temperature_control_type": f"1.19.{TEMPERATURE}",
+    "temperature_pid_p":        f"3.0.{TEMPERATURE}",
+    "temperature_pid_i":        f"3.3.{TEMPERATURE}",
+    "temperature_pid_d":        f"3.6.{TEMPERATURE}",
+    "temperature_deadband":     f"3.9.{TEMPERATURE}",
+    "temperature_cycle_time":   f"3.12.{TEMPERATURE}",
+    "temperature_settling_time": f"3.71.{TEMPERATURE}",
+    # Addition 2 (acid when on the pH loop's high side), level/antifoam, redox
+    "acid_cumulative_ml":       f"2.13.{ACID_ACTUATOR}",
+    "acid_flow":                f"2.12.{ACID_ACTUATOR}",
+    "acid_factor":              f"2.4.{ACID_ACTUATOR}",
+    "level":                    f"1.15.{LEVEL}",
+    "antifoam_cumulative_ml":   f"2.13.{ANTIFOAM_ACTUATOR}",
+    "antifoam_out":             f"2.12.{ANTIFOAM_ACTUATOR}",
+    "antifoam_factor":          f"2.4.{ANTIFOAM_ACTUATOR}",
+    "redox":                    f"1.15.{REDOX}",
 }
 
 # The only addresses this driver may ever write.
@@ -105,12 +124,25 @@ SETTLING_TIME_RANGE = (1.0, 86400.0)   # the controller exposes no min/max for i
 # Only PID (0) and Adaptive (1). External (2) would re-purpose the pumps: never written.
 WRITABLE_PH_MODES = {"pid": "0", "adaptive": "1"}
 
+# Loops whose type and parameters a profile may load: pH and temperature (same addresses,
+# different sensor index).
+CONTROL_SENSORS = {"ph": PH, "temperature": TEMPERATURE}
+LOOP_TYPE_ADDRESSES = {loop: f"1.19.{s}" for loop, s in CONTROL_SENSORS.items()}
+LOOP_PARAM_ADDRESSES = {loop: {"P": f"3.0.{s}", "I": f"3.3.{s}", "D": f"3.6.{s}", "deadband": f"3.9.{s}",
+                               "cycle_time": f"3.12.{s}", "settling_time": f"3.71.{s}"}
+                        for loop, s in CONTROL_SENSORS.items()}
+LOOP_PARAM_LIMITS = {loop: {"P": (f"3.2.{s}", f"3.1.{s}"), "I": (f"3.5.{s}", f"3.4.{s}"),
+                            "D": (f"3.8.{s}", f"3.7.{s}"), "deadband": (f"3.11.{s}", f"3.10.{s}"),
+                            "cycle_time": (f"3.14.{s}", f"3.13.{s}")}
+                     for loop, s in CONTROL_SENSORS.items()}
+
 # Process (alarm) limits: 1.4 = high, 1.5 = low. They only raise alarms/notifications;
 # the interlock limits that act on actuators (1.20 / 1.21) are NOT writable.
 LIMIT_SENSORS = {"ph": PH, "temperature": TEMPERATURE}
 LIMIT_ADDRESSES = frozenset(f"1.{k}.{s}" for s in LIMIT_SENSORS.values() for k in (4, 5))
 
-WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | {PH_TYPE_ADDRESS} | frozenset(PH_PID_ADDRESSES.values())
+WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | frozenset(LOOP_TYPE_ADDRESSES.values())
+                      | frozenset(a for d in LOOP_PARAM_ADDRESSES.values() for a in d.values())
                       | LIMIT_ADDRESSES)
 
 
@@ -119,8 +151,8 @@ def build_write_request(address: str, text: str) -> bytes:
         raise DriverError(f"refusing to write {address}: not an address FM2 may write")
     if not text or any(c in text for c in "\rJSs|"):
         raise DriverError(f"refusing to write malformed value {text!r}")
-    if address == PH_TYPE_ADDRESS and text not in WRITABLE_PH_MODES.values():
-        raise DriverError(f"refusing to set pH control type {text!r}: only PID or Adaptive")
+    if address in LOOP_TYPE_ADDRESSES.values() and text not in WRITABLE_PH_MODES.values():
+        raise DriverError(f"refusing to set control type {text!r} at {address}: only PID or Adaptive")
     return f"J{address}s{text}\r".encode("ascii")
 
 
@@ -193,11 +225,13 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
     flow, factor = f("base_flow"), f("base_factor")
     pump_pct = (flow / factor * 100.0) if (flow is not None and factor) else None
 
-    ctype = f("ph_control_type")
-    mode = CONTROL_TYPES.get(int(ctype), f"type-{int(ctype)}") if ctype is not None else None
-    pid = {"P": f("ph_pid_p"), "I": f("ph_pid_i"), "D": f("ph_pid_d"), "deadband": f("ph_deadband"),
-           "cycle_time": f("ph_cycle_time"), "settling_time": f("ph_settling_time")}
-    pid = {k: v for k, v in pid.items() if v is not None} or None
+    def control(loop: str) -> PhControl:
+        ctype = f(f"{loop}_control_type")
+        mode = CONTROL_TYPES.get(int(ctype), f"type-{int(ctype)}") if ctype is not None else None
+        pid = {"P": f(f"{loop}_pid_p"), "I": f(f"{loop}_pid_i"), "D": f(f"{loop}_pid_d"),
+               "deadband": f(f"{loop}_deadband"), "cycle_time": f(f"{loop}_cycle_time"),
+               "settling_time": f(f"{loop}_settling_time")}
+        return PhControl(mode=mode, pid={k: v for k, v in pid.items() if v is not None} or None)
 
     def pct(out_key: str, factor_key: str):
         v, fac = f(out_key), f(factor_key)
@@ -209,6 +243,13 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
         "heating_pct": pct("heating_out", "heating_factor"), "cooling_pct": pct("cooling_out", "cooling_factor"),
         "stirrer_out_rpm": f("stirrer_out_rpm"),
         "n2_pct": pct("n2_out", "n2_factor"), "air_pct": pct("air_out", "air_factor"),
+        # mL only when the pump is calibrated (factor > 0); otherwise the counter is not a volume
+        "acid_cumulative_ml": f("acid_cumulative_ml") if f("acid_factor") else None,
+        "acid_pump_pct": pct("acid_flow", "acid_factor"),
+        "level_contact": {"CONTACT": 1.0, "NO CONT": 0.0}.get((values.get("level") or "").strip()),
+        "antifoam_cumulative_ml": f("antifoam_cumulative_ml") if f("antifoam_factor") else None,
+        "antifoam_pct": pct("antifoam_out", "antifoam_factor"),
+        "redox_mv": f("redox"),
     }
 
     return ControllerSnapshot(
@@ -220,7 +261,7 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
         ph_low_limit=f("ph_low_limit"), ph_high_limit=f("ph_high_limit"),
         temperature_low_limit=f("temperature_low_limit"),
         temperature_high_limit=f("temperature_high_limit"),
-        ph_control=PhControl(mode=mode, pid=pid),
+        ph_control=control("ph"), temperature_control=control("temperature"),
         extra={k: v for k, v in extra.items() if v is not None},
     )
 
@@ -464,52 +505,146 @@ class Ez2ControlDriver(ControllerDriver):
                 self._logged_in_writes(writes)
 
     def write_ph_control(self, control: PhControl) -> None:
+        self.write_loop_control("ph", control)
+
+    def write_loop_control(self, loop: str, control: PhControl) -> None:
         """
-        Load the pH control type (PID or Adaptive) and its loop parameters — from planning
-        only (services/commands.load_ph_control enforces 'planned'). PID: P, I, D, dead band,
-        cycle time. Adaptive: the same with P/I/D as starting values, plus settling time. Checked against
-        the controller's own min/max; only values that differ are written, in one login session.
+        Load the control type (PID or Adaptive) and loop parameters of the pH or temperature
+        loop — from planning only (services/commands.load_loop_control enforces it). PID: P, I,
+        D, dead band, cycle time. Adaptive: the same with P/I/D as starting values, plus settling
+        time. Checked against the controller's own min/max; only values that differ are written,
+        in one login session.
         """
         import math
+        if loop not in CONTROL_SENSORS:
+            raise DriverError(f"loop parameters can be loaded for pH and temperature only, not {loop!r}")
         if control is None or control.mode not in WRITABLE_PH_MODES:
-            raise DriverError(f"pH control mode must be one of {sorted(WRITABLE_PH_MODES)}, got "
+            raise DriverError(f"{loop} control mode must be one of {sorted(WRITABLE_PH_MODES)}, got "
                               f"{getattr(control, 'mode', None)!r}")
+        addresses, limits = LOOP_PARAM_ADDRESSES[loop], LOOP_PARAM_LIMITS[loop]
         params = {k: v for k, v in (control.pid or {}).items() if v is not None}
-        unknown = set(params) - set(PH_PID_ADDRESSES)
+        unknown = set(params) - set(addresses)
         if unknown:
-            raise DriverError(f"unknown pH loop parameters {sorted(unknown)}: expected {sorted(PH_PID_ADDRESSES)}")
+            raise DriverError(f"unknown {loop} loop parameters {sorted(unknown)}: expected {sorted(addresses)}")
         params = {k: v for k, v in params.items() if k in PH_MODE_PARAMS[control.mode]}
         with self._lock:
-            keys = {"type": PH_TYPE_ADDRESS}
+            keys = {"type": LOOP_TYPE_ADDRESSES[loop]}
             for term in params:
-                keys[term] = PH_PID_ADDRESSES[term]
-                if term in PH_PID_LIMITS:
-                    keys[term + "_min"], keys[term + "_max"] = PH_PID_LIMITS[term]
+                keys[term] = addresses[term]
+                if term in limits:
+                    keys[term + "_min"], keys[term + "_max"] = limits[term]
             cur = self._query(keys)
             writes: list[tuple[str, str, int]] = []
             want_type = WRITABLE_PH_MODES[control.mode]
             if to_float(cur.get("type")) != float(want_type):
-                writes.append((PH_TYPE_ADDRESS, want_type, 0))
+                writes.append((LOOP_TYPE_ADDRESSES[loop], want_type, 0))
             for term, value in params.items():
                 if not isinstance(value, (int, float)) or not math.isfinite(value):
-                    raise DriverError(f"pH {term}: invalid value {value!r}")
-                if term in PH_PID_LIMITS:
+                    raise DriverError(f"{loop} {term}: invalid value {value!r}")
+                if term in limits:
                     lo, hi = to_float(cur.get(term + "_min")), to_float(cur.get(term + "_max"))
                 else:
                     lo, hi = SETTLING_TIME_RANGE
                 if lo is None or hi is None:
-                    raise DriverError(f"pH {term}: cannot read the controller's range, not writing")
+                    raise DriverError(f"{loop} {term}: cannot read the controller's range, not writing")
                 if not (lo <= value <= hi):
-                    raise DriverError(f"pH {term} {value:g} outside the controller's range {lo:g}–{hi:g}")
+                    raise DriverError(f"{loop} {term} {value:g} outside the controller's range {lo:g}–{hi:g}")
                 raw = cur.get(term, "")
                 if to_float(raw) is None:
-                    raise DriverError(f"pH {term}: cannot read the current value, not writing")
+                    raise DriverError(f"{loop} {term}: cannot read the current value, not writing")
                 dec = len(raw.split(".")[1]) if "." in raw else 0   # controller's display decimals
-                text = _format(value, dec, f"pH {term}")
+                text = _format(value, dec, f"{loop} {term}")
                 if abs(to_float(raw) - float(text)) >= 10 ** (-dec) / 2:
-                    writes.append((PH_PID_ADDRESSES[term], text, dec))
+                    writes.append((addresses[term], text, dec))
             if writes:
                 self._logged_in_writes(writes)
+
+    # -- loop configuration (read only) ----------------------------------------------
+    def read_loop_config(self) -> LoopConfig:
+        """Read the loops, the actuators assigned to them, cascades and calibration (read only)."""
+        keys: dict[str, str] = {}
+        for _, s in CONFIG_LOOPS:
+            for name, p in SENSOR_FIELDS.items():
+                keys[f"s{s}.{name}"] = f"1.{p}.{s}"
+        for a in range(N_ACTUATORS):
+            for name, p in ACTUATOR_FIELDS.items():
+                keys[f"a{a}.{name}"] = f"2.{p}.{a}"
+        keys["level.type"], keys["level.sens"] = f"5.{LEVEL}.0", f"5.{LEVEL}.1"
+        values: dict[str, str] = {}
+        items = list(keys.items())
+        with self._lock:
+            for i in range(0, len(items), 40):
+                try:
+                    values.update(self._query(dict(items[i:i + 40])))
+                except DriverError:
+                    if not values:
+                        raise
+        if not values:
+            raise DriverError(f"{self.url}: no answer for the loop configuration")
+        return decode_loop_config(values)
+
+
+# --- loop configuration: addresses and decoding (names from the web UI's sensordata.js /
+#     actuatordata.js, see docs/controller-inspection.md) ---------------------------------
+CONFIG_LOOPS = (("ph", PH), ("temperature", TEMPERATURE), ("stirrer", STIRRER), ("do2", DO2),
+                ("level", LEVEL), ("redox", REDOX))
+SENSOR_FIELDS = {"name": 1, "available": 11, "setpoint": 13, "active": 14, "value": 15, "in_loop": 16,
+                 "type": 19, "assigned": 52, "position": 53}
+ACTUATOR_FIELDS = {"name": 1, "dose_mon": 3, "factor": 4, "unit": 5, "assigned": 7, "position": 8,
+                   "available": 21}
+N_ACTUATORS = 64
+PUMP_ACTUATORS = range(22, 31)      # stepper pumps 22-27, digital pumps 28-30
+
+
+def decode_loop_config(v: dict[str, str]) -> LoopConfig:
+    def num(k: str) -> Optional[float]:
+        return to_float(v.get(k))
+
+    def i(k: str, default: int = -1) -> int:
+        x = num(k)
+        return int(x) if x is not None else default
+
+    acts: list[tuple[int, LoopActuator]] = []    # (sensor it is assigned to, actuator)
+    unassigned = []
+    for a in range(N_ACTUATORS):
+        avail = i(f"a{a}.available", 0)
+        if avail < 3:
+            continue
+        pump = a in PUMP_ACTUATORS
+        factor = num(f"a{a}.factor")
+        unit = (v.get(f"a{a}.unit") or "").strip()
+        act = LoopActuator(id=a, name=(v.get(f"a{a}.name") or f"Actuator {a}").strip(), side=i(f"a{a}.position", 0),
+                           pump=pump,
+                           calibrated=(bool(factor) and unit.lower().startswith("ml")) if pump else None,
+                           dose_monitoring=(i(f"a{a}.dose_mon", 0) == 1) if pump else None, unit=unit)
+        sensor = i(f"a{a}.assigned")
+        if sensor >= 0:
+            acts.append((sensor, act))
+        elif pump:
+            unassigned.append(act)
+    key_of = {s: k for k, s in CONFIG_LOOPS}
+    loops = []
+    for key, s in CONFIG_LOOPS:
+        own = [a for sensor, a in acts if sensor == s]
+        # other sensors used as this loop's actuator (cascade), e.g. the stirrer on the dO2 loop
+        for k2, s2 in CONFIG_LOOPS:
+            if s2 != s and i(f"s{s2}.assigned") == s:
+                own.append(LoopActuator(id=s2, name=(v.get(f"s{s2}.name") or k2).strip(),
+                                        side=i(f"s{s2}.position", 0), kind="sensor"))
+        own.sort(key=lambda a: (a.side < 0, abs(a.side)))
+        drives = key_of.get(i(f"s{s}.assigned"))
+        probe = None
+        if key == "level" and num("level.type") is not None:
+            probe = f"{'Foam' if i('level.type') == 1 else 'Level'} probe, sensitivity {'High' if i('level.sens') == 1 else 'Low'}"
+        ctype = num(f"s{s}.type")
+        loops.append(LoopInfo(
+            key=key, sensor=s, name=(v.get(f"s{s}.name") or key).strip(), available=i(f"s{s}.available", 0),
+            active=None if num(f"s{s}.active") is None else i(f"s{s}.active") == 1,
+            control_type=CONTROL_TYPES.get(int(ctype)) if ctype is not None and ctype >= 0 else None,
+            value=(v.get(f"s{s}.value") or "").strip() or None, setpoint=num(f"s{s}.setpoint"),
+            has_actuator=None if num(f"s{s}.in_loop") is None else i(f"s{s}.in_loop") == 1,
+            actuators=tuple(own), drives=drives, probe=probe))
+    return LoopConfig(loops=tuple(loops), unassigned_pumps=tuple(unassigned))
 
 
 def _format(value: float, dec: int, what: str) -> str:

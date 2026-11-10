@@ -449,3 +449,44 @@ def test_counter_reset_is_stitched_in_readings_and_logged(env):
     assert sum(x["kind"] == "counter_reset" for x in ev) == 1
     p = c.get(f"/api/experiments/{e['id']}/analysis").json()
     assert p["summary"]["total_base_ml"] >= before - 0.05
+
+
+def test_loop_config_temperature_profile_and_assignment_check(env):
+    from dataclasses import replace
+    c, clock, app, drivers = env
+    cfg = c.get("/api/reactors/R1/loop-config").json()
+    assert cfg["reachable"] and {lp["key"] for lp in cfg["loops"]} >= {"ph", "temperature", "do2", "level", "redox"}
+    do2 = next(lp for lp in cfg["loops"] if lp["key"] == "do2")
+    assert any("cascade" in w for w in do2["warnings"])
+    rec = cfg["assignments"]
+    prof = c.post("/api/profiles", json={"name": "T and pH", "ph_setpoint": 6.0, "ph_control_mode": "pid",
+                                         "ph_pid": {"P": 3.0, "I": 50.0, "D": 0.0},
+                                         "temperature_setpoint": 30.0, "temperature_control_mode": "pid",
+                                         "temperature_pid": {"P": 25.2, "I": 3053.5, "D": 28.3},
+                                         "loop_assignments": rec}).json()
+    assert prof["temperature_control_mode"] == "pid" and prof["loop_assignments"]["ph"][0]["name"] == "Alkali"
+    e = c.post("/api/experiments", json={"name": "loops", "reactor_id": "R1", "strain": "Lp187",
+                                        "profile_id": prof["id"]}).json()
+    chk = c.get(f"/api/experiments/{e['id']}/plan-check").json()
+    assert any(r["parameter"] == "temperature_control_mode" and not r["match"] for r in chk["rows"])
+    assert chk["assignment_differences"] == {}
+    r = c.post(f"/api/experiments/{e['id']}/load-profile").json()["results"]
+    assert {x["parameter"]: x["status"] for x in r}["temperature_control"] == "confirmed"
+    assert drivers["R1"].temperature_control.mode == "pid" and drivers["R1"].temperature_control.pid["P"] == 25.2
+
+    # someone removes Addition 2 from the pH loop on the display: pH loop parameters are no longer loaded
+    lc = drivers["R1"].loop_config
+    ph = next(lp for lp in lc.loops if lp.key == "ph")
+    drivers["R1"].loop_config = replace(lc, loops=tuple(replace(ph, actuators=ph.actuators[:1]) if lp is ph else lp
+                                                        for lp in lc.loops))
+    clock.advance(minutes=1)    # past the loop-config cache
+    from fm2.drivers.base import PhControl
+    drivers["R1"].ph_control = PhControl("pid", {"P": 1.0, "I": 60.0, "D": 0.0})
+    chk = c.get(f"/api/experiments/{e['id']}/plan-check").json()
+    assert "Addition 2" in chk["assignment_differences"]["ph"]
+    r = {x["parameter"]: x for x in c.post(f"/api/experiments/{e['id']}/load-profile").json()["results"]}
+    assert r["ph_control"]["status"] == "skipped" and r["temperature_control"]["status"] == "confirmed"
+    assert drivers["R1"].ph_control.pid == {"P": 1.0, "I": 60.0, "D": 0.0}   # untouched
+    app.state.acq.poll_once()
+    live = c.get("/api/reactors/live").json()[0]
+    assert live["temperature_control"]["mode"] == "pid"

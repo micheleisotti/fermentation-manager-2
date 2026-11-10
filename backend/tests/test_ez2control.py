@@ -31,6 +31,26 @@ R2_VALUES = {
     "1.15.1": "0.0", "1.13.1": "200.0", "1.4.1": "200.0", "1.5.1": "40.0",
     "2.12.19": "35", "2.4.19": "100", "2.12.46": "0", "2.4.46": "100", "2.12.18": "400",
     "2.12.0": "0", "2.4.0": "100", "2.12.1": "20", "2.4.1": "100",
+    # temperature loop (R2: Adaptive), fake ranges like pH
+    "1.19.2": "1", "3.0.2": "50.0", "3.3.2": "6086.4", "3.6.2": "20.0", "3.9.2": "0.0", "3.12.2": "5", "3.71.2": "1500",
+    "3.1.2": "1000.0", "3.2.2": "0.0", "3.4.2": "20000.0", "3.5.2": "0.0", "3.7.2": "1000.0", "3.8.2": "0.0",
+    "3.10.2": "10.0", "3.11.2": "0.0", "3.13.2": "3600", "3.14.2": "1",
+    # loop configuration as read on R2 on 10 Nov 2026 (subset): names, availability, loop state,
+    # actuator assignment (2.7 sensor, 2.8 side), stirrer in cascade on dO2, level probe, redox
+    "1.1.0": "pH", "1.11.0": "4", "1.14.0": "0", "1.16.0": "1",
+    "1.1.1": "dO2", "1.11.1": "4", "1.14.1": "0", "1.16.1": "1", "1.19.1": "0", "1.52.1": "-1",
+    "1.1.2": "Temperature", "1.11.2": "4", "1.14.2": "0", "1.16.2": "1", "1.52.2": "-1",
+    "1.1.3": "Foam", "1.11.3": "4", "1.14.3": "0", "1.16.3": "0", "1.19.3": "3", "1.52.3": "-1",
+    "1.1.13": "Stirrer", "1.11.13": "4", "1.14.13": "0", "1.16.13": "1", "1.19.13": "2", "1.52.13": "1", "1.53.13": "1",
+    "1.1.32": "Redox", "1.11.32": "1", "1.15.32": "0.000", "1.52.32": "-1", "1.52.0": "-1",
+    "5.3.0": "1", "5.3.1": "1",
+    "2.1.28": "Addition 2", "2.21.28": "4", "2.7.28": "0", "2.8.28": "-1", "2.3.28": "0", "2.4.28": "0.00", "2.5.28": "ml/min",
+    "2.21.29": "4", "2.7.29": "0", "2.8.29": "1", "2.3.29": "1", "2.5.29": "ml/min",
+    "2.1.30": "Antifoam", "2.21.30": "3", "2.7.30": "-1", "2.8.30": "0", "2.3.30": "1", "2.4.30": "100", "2.5.30": "%",
+    "2.1.19": "Heating", "2.21.19": "4", "2.7.19": "2", "2.8.19": "1",
+    "2.1.46": "Cooling", "2.21.46": "4", "2.7.46": "2", "2.8.46": "-1",
+    "2.1.18": "Stirrer", "2.21.18": "4", "2.7.18": "13", "2.8.18": "1",
+    "2.1.1": "Air Valve", "2.21.1": "3", "2.7.1": "-1",
 }
 
 
@@ -50,6 +70,7 @@ class FakeController:
         self.writes: list[tuple[str, str]] = []
         self.ignored_writes: list[tuple[str, str]] = []
         self.logins: list[str] = []
+        self.default = None         # answer for unknown addresses (the real unit answers every address)
         self.server = serve(self._handler, "127.0.0.1", 0)
         self.port = self.server.socket.getsockname()[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -89,6 +110,8 @@ class FakeController:
                     answers.append(f"J0.11A{level()}|{0 if level() else -1}|\r")
                 elif addr in self.values:
                     answers.append(f"J{addr}A{self.values[addr]}\r")
+                elif self.default is not None:
+                    answers.append(f"J{addr}A{self.default}\r")
             half = len(answers) // 2
             for chunk in (answers[:half], answers[half:]):
                 if chunk:
@@ -139,7 +162,7 @@ def test_read_snapshot(fake):
     assert snap.ph_control.mode == "pid"
     assert snap.extra == {"do2": 0.0, "do2_setpoint": 200.0, "do2_low_limit": 40.0, "do2_high_limit": 200.0,
                           "heating_pct": 35.0, "cooling_pct": 0.0, "stirrer_out_rpm": 400.0,
-                          "n2_pct": 0.0, "air_pct": 20.0}
+                          "n2_pct": 0.0, "air_pct": 20.0, "level_contact": 0.0, "redox_mv": 0.0}
     assert snap.ph_control.pid == {"P": 100.0, "I": 2.0, "D": 10.0, "deadband": 0.1,
                                    "cycle_time": 10.0, "settling_time": 300.0}
     # second read reuses the connection
@@ -274,9 +297,11 @@ def test_write_rejected_without_sending(fake, parameter, value):
 def test_write_request_allowlist():
     assert SETPOINT_ADDRESSES == {"1.13.0", "1.13.2", "1.13.13"}
     assert build_write_request("1.13.0", "6.30") == b"J1.13.0s6.30\r"
-    # dose counter, actuator on, calibration, loop on, temperature PID, temperature/stirrer control type
-    # also: interlock limits (1.20/1.21), stirrer alarm limits, dO2 limits
-    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.0", "3.0.2", "1.19.2", "1.19.13", "3.72.0",
+    # dose counter, actuator on, calibration, loop on, stirrer/dO2 loop parameters and control type,
+    # actuator assignment (2.7) and loop add/remove (3.51-3.53), interlock limits (1.20/1.21),
+    # stirrer alarm limits, dO2 limits
+    for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.0", "3.0.13", "3.0.1", "1.19.1", "1.19.13", "3.72.0",
+                 "2.7.28", "2.8.28", "3.51.0", "3.52.0", "3.53.0", "2.20.29",
                  "1.20.0", "1.21.0", "1.4.13", "1.5.1"):
         with pytest.raises(DriverError):
             build_write_request(addr, "0")
@@ -285,6 +310,11 @@ def test_write_request_allowlist():
     with pytest.raises(DriverError):
         build_write_request("1.19.0", "2")                     # External control: never
     assert build_write_request("1.19.0", "1") == b"J1.19.0s1\r"
+    # temperature loop (decision 10 Nov 2026): PID/Adaptive and its parameters, never External
+    assert build_write_request("1.19.2", "0") == b"J1.19.2s0\r"
+    assert build_write_request("3.0.2", "50.0") == b"J3.0.2s50.0\r"
+    with pytest.raises(DriverError):
+        build_write_request("1.19.2", "2")
 
 
 def test_setpoint_command_end_to_end(fake):
@@ -403,3 +433,38 @@ def test_process_limits_rejected_without_sending(fake, parameter, low, high):
         drv.write_limits(parameter, low, high)
     assert fake.writes == [] and fake.logins == []
     drv.close()
+
+
+def test_read_loop_config_and_warnings(fake):
+    from fm2.loops import assignments_of, config_view
+    fake.default = ""
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    cfg = drv.read_loop_config()
+    assert all(r.startswith("J") and r.endswith("S") for r in fake.requests)   # read only
+    loops = {lp.key: lp for lp in cfg.loops}
+    assert [(a.name, a.side) for a in loops["ph"].actuators] == [("Alkali", 1), ("Addition 2", -1)]
+    assert [(a.name, a.kind) for a in loops["do2"].actuators] == [("Stirrer", "sensor")]
+    assert loops["stirrer"].drives == "do2" and loops["level"].probe == "Foam probe, sensitivity High"
+    assert loops["redox"].available == 1 and [a.name for a in cfg.unassigned_pumps] == ["Antifoam"]
+    assert assignments_of(cfg)["temperature"] == [{"id": 19, "name": "Heating", "side": 1, "kind": "actuator"},
+                                                  {"id": 46, "name": "Cooling", "side": -1, "kind": "actuator"}]
+    view = {lp["key"]: lp["warnings"] for lp in config_view(cfg)["loops"]}
+    assert "Addition 2: not calibrated in mL/min (its volume is not recorded)" in view["ph"]
+    assert "starting it also starts the Stirrer loop (cascade)" in view["do2"]
+    assert view["redox"] == ["not installed on the controller (Service level)"]
+    assert view["level"] == ["no pump assigned: the controller only reports the contact"]
+    assert view["temperature"] == []
+
+
+def test_temperature_loop_control_write(fake):
+    from fm2.drivers.base import PhControl
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    assert drv.read().temperature_control.mode == "adaptive"
+    drv.write_loop_control("temperature", PhControl("pid", {"P": 25.2, "I": 3053.5, "D": 28.3, "cycle_time": 5,
+                                                            "settling_time": 900}))
+    assert ("1.19.2", "0") in fake.writes and ("3.0.2", "25.2") in fake.writes and ("3.3.2", "3053.5") in fake.writes
+    assert not any(a == "3.71.2" for a, _ in fake.writes)     # settling time is not a PID parameter
+    snap = drv.read()
+    assert snap.temperature_control.mode == "pid" and snap.temperature_control.pid["P"] == 25.2
+    with pytest.raises(DriverError):
+        drv.write_loop_control("stirrer", PhControl("pid", {"P": 1.0}))

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type Profile } from "../api";
+import { api, type LoopAssignments, type Profile } from "../api";
 import { usePolling } from "../hooks";
 
 const num = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
@@ -21,22 +21,32 @@ const MODE_PARAMS: Record<string, ParamKey[]> = {
 };
 
 const EMPTY = { name: "", ph: "", t: "", stir: "", mode: "pid", notes: "", phLo: "", phHi: "", tLo: "", tHi: "",
-  P: "", I: "", D: "", deadband: "", cycle_time: "", settling_time: "" };
+  P: "", I: "", D: "", deadband: "", cycle_time: "", settling_time: "",
+  tmode: "", tP: "", tI: "", tD: "", tdeadband: "", tcycle_time: "", tsettling_time: "" };
+type Form = typeof EMPTY;
 
-function showParams(p: Profile) {
-  if (!p.ph_pid) return "—";
-  const keys = MODE_PARAMS[p.ph_control_mode ?? ""] ?? (Object.keys(p.ph_pid) as ParamKey[]);
-  const items = keys.filter((k) => p.ph_pid![k] != null);
-  if (!items.length) return "—";
+function showParams(mode: string | null, pid: Record<string, number> | null, unitDb: string) {
+  if (!mode && !pid) return null;
+  const keys = MODE_PARAMS[mode ?? ""] ?? (Object.keys(pid ?? {}) as ParamKey[]);
+  const items = keys.filter((k) => pid?.[k] != null);
   return (
-    <span className="stack" style={{ gap: 2 }}>
-      {items.map((k) => (
-        <span key={k} style={{ whiteSpace: "nowrap" }}>
-          <span className="muted">{PARAMS[k]?.label ?? k}</span> {p.ph_pid![k]}{PARAMS[k]?.unit === "s" ? " s" : ""}
-        </span>
+    <span className="small">
+      <b>{mode ?? "—"}</b>{items.map((k) => (
+        <span key={k} style={{ whiteSpace: "nowrap" }}> · <span className="muted">{PARAMS[k]?.label ?? k}</span> {pid![k]}{PARAMS[k]?.unit === "s" ? " s" : k === "deadband" ? ` ${unitDb}` : ""}</span>
       ))}
     </span>
   );
+}
+
+/** "Alkali (+), Addition 2 (−)" — + acts below the setpoint, − above. */
+export function showAssignments(items: { name: string; side: number }[] | undefined) {
+  return (items ?? []).map((a) => `${a.name} (${a.side > 0 ? "+" : a.side < 0 ? "−" : "0"})`).join(", ") || "nothing";
+}
+
+function loopEntries(f: Form, prefix: "" | "t", mode: string) {
+  const keys = MODE_PARAMS[mode] ?? [];
+  return keys.map((k) => [k, f[`${prefix}${k}` as keyof Form] as string] as const).filter(([, v]) => v.trim() !== "")
+    .map(([k, v]) => [k, num(v)] as const);
 }
 
 function showLimits(p: Profile) {
@@ -51,12 +61,22 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
   const [f, setF] = useState(EMPTY);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [assign, setAssign] = useState<{ from: string; a: LoopAssignments } | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const modeParams = MODE_PARAMS[f.mode] ?? [];
+  const tModeParams = MODE_PARAMS[f.tmode] ?? [];
+
+  async function record(reactor: string) {
+    try {
+      const c = await api.loopConfig(reactor, true);
+      if (!c.reachable) { setMsg({ kind: "alert", text: `${reactor}: controller not reachable (${c.message ?? ""})` }); return; }
+      setAssign({ from: reactor, a: c.assignments });
+    } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+  }
 
   async function create() {
-    const entries = modeParams.filter((k) => f[k].trim() !== "").map((k) => [k, num(f[k])] as const);
-    if (entries.some(([, v]) => v === null || Number.isNaN(v))) {
+    const entries = loopEntries(f, "", f.mode), tEntries = loopEntries(f, "t", f.tmode);
+    if ([...entries, ...tEntries].some(([, v]) => v === null || Number.isNaN(v))) {
       setMsg({ kind: "alert", text: "Loop parameters must be numbers." });
       return;
     }
@@ -68,8 +88,11 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
       }
       await api.createProfile({ name: f.name.trim(), ph_setpoint: num(f.ph), temperature_setpoint: num(f.t), stirrer_setpoint: num(f.stir),
         ph_low_limit: lim[0], ph_high_limit: lim[1], temperature_low_limit: lim[2], temperature_high_limit: lim[3],
-        ph_control_mode: f.mode || null, ph_pid: entries.length ? Object.fromEntries(entries) as Record<string, number> : null, notes: f.notes });
-      setF(EMPTY);
+        ph_control_mode: f.mode || null, ph_pid: entries.length ? Object.fromEntries(entries) as Record<string, number> : null,
+        temperature_control_mode: f.tmode || null,
+        temperature_pid: tEntries.length ? Object.fromEntries(tEntries) as Record<string, number> : null,
+        loop_assignments: assign?.a ?? null, notes: f.notes });
+      setF(EMPTY); setAssign(null);
       setMsg({ kind: "good", text: "Profile saved." }); list.refresh();
     } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
   }
@@ -87,14 +110,15 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
   return (
     <>
       {!embedded && <h1>Controller profiles</h1>}
-      <span className="muted small">A profile is a named set of setpoints, process limits and pH control settings, loaded onto a controller from the planning screen, before Start.</span>
+      <span className="muted small">A profile is a named set of setpoints, process limits and pH / temperature control settings, loaded onto a controller from the planning screen, before Start.
+        It can record which actuators each loop had when it was made: if the controller has different ones, that loop's control settings are not loaded.</span>
       <div className="split">
         <div className="wide">
           <section className="card">
             <h2 style={{ fontSize: 18 }}>Saved profiles</h2>
             <div className="table-wrap">
               <table className="data" style={{ minWidth: 760 }}>
-                <thead><tr><th>Name</th><th>pH</th><th>T (°C)</th><th>Stirrer (rpm)</th><th>Limits</th><th>pH control</th><th>Loop parameters</th><th aria-label="Actions" /></tr></thead>
+                <thead><tr><th>Name</th><th>pH</th><th>T (°C)</th><th>Stirrer (rpm)</th><th>Limits</th><th>Loop control</th><th aria-label="Actions" /></tr></thead>
                 <tbody>
                   {(list.data ?? []).map((p) => (
                     <tr key={p.id}>
@@ -102,8 +126,13 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
                       <td className="mono">{p.ph_setpoint ?? "—"}</td><td className="mono">{p.temperature_setpoint ?? "—"}</td>
                       <td className="mono">{p.stirrer_setpoint ?? "—"}</td>
                       <td className="mono small" style={{ whiteSpace: "nowrap" }}>{showLimits(p)}</td>
-                      <td>{p.ph_control_mode ?? "—"}</td>
-                      <td className="mono small">{showParams(p)}</td>
+                      <td className="stack" style={{ gap: 4 }}>
+                        {!p.ph_control_mode && !p.temperature_control_mode && <span className="muted">—</span>}
+                        {p.ph_control_mode && <span><span className="kicker">pH</span> {showParams(p.ph_control_mode, p.ph_pid, "pH")}
+                          {p.loop_assignments?.ph && <span className="xs muted"><br />for {showAssignments(p.loop_assignments.ph)}</span>}</span>}
+                        {p.temperature_control_mode && <span><span className="kicker">T</span> {showParams(p.temperature_control_mode, p.temperature_pid, "°C")}
+                          {p.loop_assignments?.temperature && <span className="xs muted"><br />for {showAssignments(p.loop_assignments.temperature)}</span>}</span>}
+                      </td>
                       <td style={{ whiteSpace: "nowrap", textAlign: "right", width: 1 }}>
                         {confirmId === p.id ? (
                           <>
@@ -116,7 +145,7 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
                       </td>
                     </tr>
                   ))}
-                  {(list.data ?? []).length === 0 && <tr><td colSpan={8} className="muted">No profiles yet.</td></tr>}
+                  {(list.data ?? []).length === 0 && <tr><td colSpan={7} className="muted">No profiles yet.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -139,24 +168,39 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
               <label className="field">T low (°C)<input inputMode="decimal" value={f.tLo} onChange={set("tLo")} /></label>
               <label className="field">T high (°C)<input inputMode="decimal" value={f.tHi} onChange={set("tHi")} /></label>
             </div>
-            <label className="field">pH control mode
-              <select value={f.mode} onChange={set("mode")}><option value="pid">PID</option><option value="adaptive">Adaptive</option><option value="">Not set</option></select>
-            </label>
-            {modeParams.length > 0 && (
-              <div className="row" style={{ flexWrap: "wrap" }}>
-                {modeParams.map((k) => (
-                  <label key={k} className="field" style={{ flex: "1 1 30%", minWidth: 90 }}>
-                    {PARAMS[k].label}{PARAMS[k].unit === "s" ? " (s)" : ""}
-                    <input inputMode="decimal" value={f[k]} onChange={set(k)} />
-                  </label>
-                ))}
+            {([["", "pH", f.mode, modeParams, "pH"], ["t", "Temperature", f.tmode, tModeParams, "°C"]] as const).map(([pre, label, mode, keys, dbUnit]) => (
+              <div key={label} className="stack" style={{ gap: 8 }}>
+                <label className="field">{label} control mode
+                  <select value={mode} onChange={set(pre ? "tmode" : "mode")}><option value="pid">PID</option><option value="adaptive">Adaptive</option><option value="">Not set (leave as on the controller)</option></select>
+                </label>
+                {keys.length > 0 && (
+                  <div className="row" style={{ flexWrap: "wrap" }}>
+                    {keys.map((k) => (
+                      <label key={k} className="field" style={{ flex: "1 1 30%", minWidth: 90 }}>
+                        {PARAMS[k].label}{PARAMS[k].unit === "s" ? " (s)" : k === "deadband" ? ` (${dbUnit})` : ""}
+                        <input inputMode="decimal" value={f[`${pre}${k}` as keyof Form]} onChange={set(`${pre}${k}` as keyof Form)} />
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            ))}
             <span className="xs muted">
-              {f.mode === "adaptive"
+              {f.mode === "adaptive" || f.tmode === "adaptive"
                 ? "In Adaptive, P, I and D are starting values: the controller adapts them after Start. "
-                : ""}{f.mode ? "Empty fields are left as they are on the controller. Values are checked against the controller's own limits when loaded." : ""}
+                : ""}{f.mode || f.tmode ? "Empty fields are left as they are on the controller. Values are checked against the controller's own limits when loaded." : ""}
             </span>
+            <div className="stack" style={{ gap: 6 }}>
+              <span className="small" style={{ fontWeight: 500 }}>Actuators the loops are tuned for</span>
+              {assign ? (
+                <span className="small">From {assign.from}: <b>pH</b> {showAssignments(assign.a.ph)} · <b>T</b> {showAssignments(assign.a.temperature)}
+                  <button className="btn text" style={{ height: 28 }} onClick={() => setAssign(null)}>Clear</button></span>
+              ) : <span className="xs muted">Not recorded: the control settings are loaded whatever the controller's actuators.</span>}
+              <div className="row" style={{ gap: 8 }}>
+                {["R1", "R2"].map((r) => <button key={r} className="btn outlined" style={{ height: 34 }} onClick={() => record(r)}>Record from {r}</button>)}
+              </div>
+              <span className="xs muted">Reads which actuators act on the pH and temperature loops (+ below setpoint, − above). Nothing is written.</span>
+            </div>
             <label className="field">Notes<textarea rows={3} value={f.notes} onChange={set("notes")} /></label>
             <button className="btn filled" disabled={!f.name.trim()} onClick={create}>Save profile</button>
           </section>

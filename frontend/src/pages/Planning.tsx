@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api, type Experiment, type ExperimentDraft, type LiveReactor, type Named, type PlanCheckRow, type PlanParams, type Profile, DEFAULT_CHANNELS, type Channel } from "../api";
+import { api, type Experiment, type ExperimentDraft, type LiveReactor, type LoopConfigView, type Named, type PlanCheckRow, type PlanParams, type Profile, DEFAULT_CHANNELS, type Channel } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 import { DeleteExperiment } from "../components/DeleteExperiment";
@@ -42,10 +42,12 @@ function NamedSelect({ kind, label, value, onChange }: { kind: "media" | "buffer
 const LABELS: Record<string, string> = {
   ph_setpoint: "pH setpoint", temperature_setpoint: "Temperature setpoint (°C)", stirrer_setpoint: "Stirrer setpoint (rpm)",
   ph_control_mode: "pH control mode", ph_pid: "pH PID parameters", ph_limits: "pH process limits", temperature_limits: "T process limits (°C)",
+  temperature_control_mode: "Temperature control mode", temperature_pid: "Temperature loop parameters",
 };
 const GROUP: Record<string, string> = {
   ph_setpoint: "pH controller", ph_control_mode: "pH controller", ph_pid: "pH controller", ph_limits: "pH controller",
   temperature_setpoint: "Temperature controller", temperature_limits: "Temperature controller", stirrer_setpoint: "Stirrer",
+  temperature_control_mode: "Temperature controller", temperature_pid: "Temperature controller",
 };
 const show = (v: unknown) => v === null || v === undefined ? "—" : Array.isArray(v) ? v.map((x) => x ?? "·").join("–")
   : typeof v === "object" ? Object.entries(v as Record<string, number>).map(([k, x]) => `${k} ${x}`).join(" / ") : String(v);
@@ -84,8 +86,49 @@ const CHANNEL_INFO: { key: Channel; label: string; what: string }[] = [
   { key: "temperature", label: "Temperature", what: "T sensor · heating / cooling" },
   { key: "ph", label: "pH", what: "pH sensor · base pump · cumulative and mL/min" },
   { key: "stirrer", label: "Stirrer", what: "speed sensor · motor" },
-  { key: "do2", label: "dO2", what: "dO2 probe · N2 and air valves" },
+  { key: "do2", label: "dO2", what: "dO2 probe · loop actuators as set on the controller" },
+  { key: "level", label: "Level / antifoam", what: "level or foam probe · antifoam pump" },
+  { key: "redox", label: "Redox", what: "redox probe (mV), read only" },
 ];
+
+/**
+ * Loop configuration as set on the controller (read only): a reminder, one line per loop of the
+ * channels in use. Assignments are changed on the controller's display, never from here.
+ */
+function LoopConfigBox({ cfg, channels, reactor }: { cfg?: LoopConfigView; channels: Channel[]; reactor: string }) {
+  const [open, setOpen] = useState(false);
+  if (!cfg) return null;
+  if (!cfg.reachable) return <span className="xs muted">Loop configuration of {reactor}: read when the controller is on.</span>;
+  const shown = cfg.loops.filter((l) => channels.includes(l.key as Channel));
+  const nWarn = shown.reduce((n, l) => n + l.warnings.length, 0);
+  const sideSign = (s: number) => (s > 0 ? "+" : s < 0 ? "−" : "");
+  return (
+    <div className="stack" style={{ gap: 6, border: "1px solid var(--outline-variant, #c4c7cc)", borderRadius: 12, padding: "8px 12px" }}>
+      <button className="row between btn text" style={{ height: 30, padding: 0, justifyContent: "space-between" }} onClick={() => setOpen(!open)}
+        aria-expanded={open}>
+        <span className="small"><b>Loops on the {reactor} controller</b> · as set on the display, read only
+          {nWarn > 0 && <span style={{ color: "#8a5a00" }}> · {nWarn} note{nWarn > 1 ? "s" : ""}</span>}</span>
+        <span className="xs">{open ? "Hide" : "Details"}</span>
+      </button>
+      {shown.map((l) => (
+        <div key={l.key} className="small" style={{ lineHeight: 1.4 }}>
+          <b>{l.label}</b>
+          <span className="muted"> · {!l.installed ? "not installed" : `${l.active ? "loop ON" : "loop off"}${l.control_type ? ` · ${l.control_type}` : ""}`}</span>
+          {l.installed && l.actuators.length > 0 && <span className="muted"> · {l.actuators.map((a) => `${a.name}${a.kind === "sensor" ? " (cascade)" : ""} ${sideSign(a.side)}`).join(", ")}</span>}
+          {open && l.probe && <span className="muted"> · {l.probe}</span>}
+          {open && l.value != null && <span className="muted"> · now {l.value}{l.setpoint != null && l.installed && !["level", "redox"].includes(l.key) ? `, SP ${l.setpoint}` : ""}</span>}
+          {open ? l.warnings.map((w) => <div key={w} className="xs" style={{ color: "#8a5a00", paddingLeft: 12 }}>⚠ {w}</div>)
+            : l.installed && l.warnings.length > 0 && <span className="xs" style={{ color: "#8a5a00" }}> · ⚠ {l.warnings.join(" · ")}</span>}
+        </div>
+      ))}
+      {open && cfg.unassigned_pumps.length > 0 && (
+        <span className="xs muted">Pumps in no loop: {cfg.unassigned_pumps.map((a) => a.name).join(", ")}</span>
+      )}
+      {open && <span className="xs muted">+ acts below the setpoint, − above. Actuators, cascades and calibration are changed on the controller's display;
+        a profile records the actuators it was tuned for and does not load a loop's control settings if they differ.</span>}
+    </div>
+  );
+}
 
 export function Planning({ existing, onChange }: { existing?: Experiment; onChange?: () => void }) {
   const nav = useNavigate();
@@ -95,7 +138,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
     medium_id: existing.medium_id, buffer_id: existing.buffer_id, working_volume_ml: existing.working_volume_ml,
     profile_id: existing.profile_id, notes: existing.notes, channels: existing.channels, plan_params: existing.plan_params,
   } : { name: "", reactor_id: preselected === "R2" ? "R2" : "R1", planned_date: today(), strain: "", notes: "", channels: [...DEFAULT_CHANNELS] });
-  const [do2Notice, setDo2Notice] = useState(false);
+  const [notice, setNotice] = useState<Channel | null>(null);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ kind: "good" | "alert" | "warn"; text: string } | null>(null);
   const set = (patch: Partial<ExperimentDraft>) => { setD({ ...d, ...patch }); setDirty(true); };
@@ -103,6 +146,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   const profiles = usePolling(api.profiles, 600000);
   const all = usePolling(() => api.experiments(), 60000);
   const check = usePolling(() => (existing ? api.planCheck(existing.id) : Promise.resolve(undefined)), 15000, [existing?.id]);
+  const loopCfg = usePolling(() => api.loopConfig(d.reactor_id), 60000, [d.reactor_id]);
 
   const [parallel, setParallel] = useState(!!existing?.parallel_run_code);
   const [partnerId, setPartnerId] = useState<number | "">("");
@@ -115,7 +159,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   const liveR = live.data?.find((x) => x.reactor_id === d.reactor_id);
   const modified = !!profile && !!d.plan_params && !sameParams(d.plan_params, fromProfile(profile));
   const mismatches = (check.data?.rows ?? []).filter((r) => !r.match && !r.read_only);
-  const pidDiffers = mismatches.some((r) => r.parameter === "ph_control_mode" || r.parameter === "ph_pid");
+  const pidDiffers = mismatches.some((r) => /_control_mode$|_pid$/.test(r.parameter));
 
   async function save(): Promise<Experiment | null> {
     setMsg(null);
@@ -219,7 +263,8 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                       const cur = d.channels ?? DEFAULT_CHANNELS;
                       const next = on ? cur.filter((x) => x !== c.key) : [...cur, c.key];
                       set({ channels: next });
-                      if (!on && c.key === "do2") setDo2Notice(true);
+                      const lc = loopCfg.data?.loops.find((l) => l.key === c.key);
+                      if (!on && (c.key === "do2" || (lc && lc.warnings.length > 0))) setNotice(c.key);
                     }} />
                     <span className="stack" style={{ gap: 2 }}>
                       <span style={{ fontWeight: 600 }}>{c.label}</span>
@@ -231,18 +276,27 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
             </div>
             {(d.channels ?? DEFAULT_CHANNELS).length === 0 && <div className="banner warn">No channel selected: only manual measurements will be shown.</div>}
           </section>
-          {do2Notice && (
-            <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget) setDo2Notice(false); }}>
-              <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="do2-t" aria-describedby="do2-d">
-                <h2 id="do2-t" style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>dO2: air is not configured yet</h2>
-                <div className="banner warn" id="do2-d"><Icon name="warn" color="#8a5a00" size={20} />
-                  <span>The dO2 probe and the N2 / air valves are recorded and shown, but the <b>air supply is not configured</b> on the
-                    controllers yet: the dO2 loop cannot aerate until it is set up on the controller.</span>
+          {notice && (() => {
+            const lc = loopCfg.data?.loops.find((l) => l.key === notice);
+            const label = CHANNEL_INFO.find((c) => c.key === notice)?.label ?? notice;
+            return (
+              <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget) setNotice(null); }}>
+                <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="ch-t" aria-describedby="ch-d">
+                  <h2 id="ch-t" style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>{label}: check the controller</h2>
+                  <div className="banner warn" id="ch-d"><Icon name="warn" color="#8a5a00" size={20} />
+                    <span className="stack" style={{ gap: 4 }}>
+                      {lc ? <>
+                        <span>On {d.reactor_id}, as set on the controller:</span>
+                        {lc.warnings.length ? lc.warnings.map((w) => <span key={w}>• {w}</span>) : <span>no problems found.</span>}
+                      </> : <span>The configuration of {d.reactor_id} is read when the controller is on.</span>}
+                      <span>The channel is recorded and shown anyway; the loop is set up on the controller's display.</span>
+                    </span>
+                  </div>
+                  <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn filled" autoFocus onClick={() => setNotice(null)}>OK</button></div>
                 </div>
-                <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn filled" autoFocus onClick={() => setDo2Notice(false)}>OK</button></div>
               </div>
-            </div>
-          )}
+            );
+          })()}
           <section className="card" aria-labelledby="g2">
             <h2 id="g2" style={{ fontSize: 18 }}>Medium and buffer</h2>
             <div className="row" style={{ alignItems: "flex-start" }}>
@@ -274,10 +328,17 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
             <div className="row" style={{ gap: 8 }}><PlanSource d={d} profile={profile} /></div>
             <PlanControllerTable value={d.plan_params ?? null} channels={d.channels ?? DEFAULT_CHANNELS} reactor={liveR}
               onChange={(v) => set({ plan_params: v })} />
+            {existing && Object.entries(check.data?.assignment_differences ?? {}).map(([loop, m]) => (
+              <div key={loop} className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
+                <span><b>{loop === "ph" ? "pH" : "Temperature"} loop: actuators differ.</b> {m.charAt(0).toUpperCase() + m.slice(1)}. Its control mode and loop parameters will not be loaded
+                  (setpoint and limits are).</span>
+              </div>
+            ))}
+            {existing && <LoopConfigBox cfg={loopCfg.data} channels={d.channels ?? DEFAULT_CHANNELS} reactor={d.reactor_id} />}
             {existing && hasValues(d.plan_params) && mismatches.length > 0 && (
               <div className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
-                <span><b>{pidDiffers ? "pH control differs." : "Setpoints differ."}</b> {pidDiffers && "The controller may have been left in another mode by a previous user. "}
-                  Loading writes setpoints, process limits, pH control mode and loop parameters to the controller, then reads them back.</span>
+                <span><b>{pidDiffers ? "Loop control differs." : "Setpoints differ."}</b> {pidDiffers && "The controller may have been left in another mode by a previous user. "}
+                  Loading writes setpoints, process limits, control modes and loop parameters (pH, temperature) to the controller, then reads them back.</span>
               </div>
             )}
             <div className="row" style={{ gap: 8 }}>
@@ -285,15 +346,17 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                 if (!existing) return;
                 try {
                   const r = await api.loadProfile(existing.id);
-                  const bad = r.results.filter((x) => x.status !== "confirmed");
+                  const bad = r.results.filter((x) => x.status !== "confirmed" && x.status !== "skipped");
+                  const skipped = r.results.filter((x) => x.status === "skipped");
                   setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.parameter} (${b.message ?? b.status})`).join(", ")}` }
+                    : skipped.length ? { kind: "warn", text: `Loaded and confirmed, except: ${skipped.map((b) => `${b.parameter.replace("_control", "")} — ${b.message}`).join("; ")}` }
                     : { kind: "good", text: "Plan loaded and confirmed by the controller." });
                   check.refresh(); live.refresh();
                 } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
               }}>Load profile to controller</button>
               {modified && profile && <button className="btn text" onClick={() => set({ plan_params: fromProfile(profile) })}>Reset to “{profile.name}”</button>}
             </div>
-            <span className="xs muted">{!existing ? "Create the experiment to load the plan. " : dirty ? "Save the plan to load it. " : ""}Limits left empty stay as they are on the controller; actuators, interlocks and calibration stay on the controller. pH control mode and loop parameters can be loaded only before Start.</span>
+            <span className="xs muted">{!existing ? "Create the experiment to load the plan. " : dirty ? "Save the plan to load it. " : ""}Limits left empty stay as they are on the controller; actuators, interlocks and calibration stay on the controller. Control mode and loop parameters (pH, temperature) can be loaded only before Start.</span>
           </section>
 
           <section className="card" aria-labelledby="g4">
@@ -374,6 +437,8 @@ export function fromProfile(p: Profile): PlanParams {
     ph_control_mode: p.ph_control_mode, ph_pid: p.ph_pid ? { ...p.ph_pid } : null,
     ph_low_limit: p.ph_low_limit ?? null, ph_high_limit: p.ph_high_limit ?? null,
     temperature_low_limit: p.temperature_low_limit ?? null, temperature_high_limit: p.temperature_high_limit ?? null,
+    temperature_control_mode: p.temperature_control_mode ?? null, temperature_pid: p.temperature_pid ? { ...p.temperature_pid } : null,
+    loop_assignments: p.loop_assignments ?? null,
   };
 }
 
@@ -387,7 +452,8 @@ function eq(a: unknown, b: unknown): boolean {
 }
 export const sameParams = (a: PlanParams, b: PlanParams) => eq(a, b);
 export const hasValues = (p: PlanParams | null | undefined) =>
-  !!p && Object.entries(p).some(([k, v]) => k === "ph_pid" ? Object.values(v ?? {}).some((x) => x != null) : v != null && v !== "");
+  !!p && Object.entries(p).some(([k, v]) => k === "loop_assignments" ? false
+    : k === "ph_pid" || k === "temperature_pid" ? Object.values(v ?? {}).some((x) => x != null) : v != null && v !== "");
 
 function PlanSource({ d, profile }: { d: ExperimentDraft; profile?: Profile }) {
   if (!profile) return hasValues(d.plan_params)
@@ -399,7 +465,8 @@ function PlanSource({ d, profile }: { d: ExperimentDraft; profile?: Profile }) {
 }
 
 const EMPTY_PLAN: PlanParams = { ph_setpoint: null, temperature_setpoint: null, stirrer_setpoint: null, ph_control_mode: null, ph_pid: null,
-  ph_low_limit: null, ph_high_limit: null, temperature_low_limit: null, temperature_high_limit: null };
+  ph_low_limit: null, ph_high_limit: null, temperature_low_limit: null, temperature_high_limit: null,
+  temperature_control_mode: null, temperature_pid: null, loop_assignments: null };
 
 type Cell = number | string | null | undefined;
 interface PlanRow { id: string; group: string; label: string; plan: Cell | [Cell, Cell]; ctrl: Cell | [Cell, Cell]; kind: "num" | "pair" | "mode";
@@ -418,6 +485,7 @@ function PlanControllerTable({ value, channels, reactor, onChange }: {
   const v = value ?? EMPTY_PLAN;
   const snap = reactor?.online ? reactor.snapshot : null;
   const pc = reactor?.online ? reactor.ph_control : null;
+  const tc = reactor?.online ? reactor.temperature_control : null;
   const [edit, setEdit] = useState<{ id: string; a: string; b: string } | null>(null);
   const rows: PlanRow[] = [];
   if (channels.includes("ph")) {
@@ -436,6 +504,13 @@ function PlanControllerTable({ value, channels, reactor, onChange }: {
   if (channels.includes("temperature")) {
     rows.push({ id: "t_sp", group: "Temperature controller", label: "Temperature setpoint (°C)", kind: "num", plan: v.temperature_setpoint,
       ctrl: snap?.temperature_setpoint, set: (x) => ({ ...v, temperature_setpoint: x as number | null }) });
+    rows.push({ id: "t_mode", group: "Temperature controller", label: "Temperature control mode", kind: "mode", plan: v.temperature_control_mode ?? null,
+      ctrl: tc?.mode, set: (x) => ({ ...v, temperature_control_mode: (x as string) || null }) });
+    for (const p of PID_PARAMS.filter((q) => (MODE_KEYS[v.temperature_control_mode ?? ""] ?? []).includes(q.k))) {
+      rows.push({ id: `tpid_${p.k}`, group: "Temperature controller", label: `T loop · ${p.label}${p.k === "deadband" ? " (°C)" : p.unit === "s" ? " (s)" : ""}`, kind: "num",
+        plan: v.temperature_pid?.[p.k] ?? null, ctrl: tc?.pid?.[p.k],
+        set: (x) => ({ ...v, temperature_pid: { ...(v.temperature_pid ?? {}), [p.k]: x as number | null } }) });
+    }
     rows.push({ id: "t_lim", group: "Temperature controller", label: "T process limits (°C)", kind: "pair",
       plan: [v.temperature_low_limit, v.temperature_high_limit], ctrl: snap ? [snap.temperature_low_limit, snap.temperature_high_limit] : undefined,
       set: (x) => { const [lo, hi] = x as [Cell, Cell]; return { ...v, temperature_low_limit: lo as number | null, temperature_high_limit: hi as number | null }; } });

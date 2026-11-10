@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fermentation-manager"
-version = "2.1.0.dev1"
+version = "2.1.0.dev2"
 description = "Monitoring, control and analysis of lab-scale batch fermentations (Applikon ez2-Control)."
 readme = "README.md"
 requires-python = ">=3.11"

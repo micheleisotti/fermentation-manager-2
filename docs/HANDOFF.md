@@ -56,6 +56,14 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   out-of-limits (immediately at Start, then after 3 min, once per excursion),
   setpoint reached (once per setpoint; "already at setpoint" at Start), controller silent,
   setpoint changed on controller, fermentation probably finished, base counter reset (info).
+- Loop configuration (10 Nov 2026, `fm2/loops.py`, `GET /api/reactors/{id}/loop-config`): read only, cached
+  20 s. Planning shows a compact box per channel in use (loop on/off, control type, actuators with side,
+  cascades, warnings: not installed, no actuator, pump not calibrated / dose monitoring off, dO2 probe ~0 % or
+  SP > 100 %, cascade starts another loop). Assignments are changed only on the controller display.
+  Profiles also hold the temperature loop (mode + P/I/D/dead band/cycle/settling, like pH) and optionally
+  `loop_assignments` recorded from R1/R2 ("Record from"): if the controller's actuators for a loop differ,
+  load-profile skips that loop's control settings (status "skipped") but loads setpoints and limits.
+  New channels: Level / antifoam (contact, antifoam mL and %), Redox (mV); acid (Addition 2) mL and % in pH.
 - Base counter resets (power cycle / reset on the display: seen 9→10 Nov, 1.61 → 0.00 mL): the raw
   counter is stored as read; readings, charts, totals and exports use it continued across resets
   (`base_dosing.stitch_counter`, drop > 0.05 mL = reset); exports then also carry `base_counter_raw_ml`.
@@ -218,7 +226,7 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 ## Versioning
 - PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). 2.0.0.dev1–dev19
   followed the merged PR numbers. Since the loop-control work (new functions) the line is **2.1.0.devN**,
-  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21).
+  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21; 2.1.0.dev2 = loop configuration in planning, PR #22).
   Release 2.1.0 (git tag) after the test fermentations; then semantic versioning — bug fixes 2.1.1,
   new features 2.2.0, incompatible changes (data/format) 3.0.0. The version is shown in Settings › Credits.
 
