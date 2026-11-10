@@ -117,7 +117,7 @@ positive / negative side / remove (configuration commands: **never written by FM
 | What | Address | R2 today |
 |---|---|---|
 | Level sensor | sensor **3** "Level" (short name **Foam**); sensor 4 "Level 2" unused | |
-| Probe type / sensitivity | `5.3.0` (0 Level, 1 Foam) / `5.3.1` (0 Low, 1 High) | Foam / Low |
+| Probe type / sensitivity | `5.3.0` (0 Level, 1 Foam) / `5.3.1` (0 Low, 1 High) | Foam / High |
 | Value | `1.15.3`: `CONTACT` or `NO CONT` (labels `1.64.3` / `1.65.3`) | NO CONT |
 | Control type | `1.19.3` = 3 (Level) | Level |
 | Loop on/off | `1.14.3` | off |
@@ -185,12 +185,32 @@ start the Level loop.
   the display): FM2 must treat a counter drop as a reset, not as negative dosing.
 - **Stirrer loop** start/stop → `1.14.13`; speed `1.15.13` and drive output `2.12.18` ramp
   0→35→65 rpm in 3 s and back to 0 after stop (the drive briefly reads −10).
-- **Temperature loop** start/stop → `1.14.2`; no heating/cooling output change within the
-  2 s it was on (adaptive loop, slower cycle): not conclusive for `2.12.19`/`2.12.46`.
-- **Level**: touching the two wires of the disconnected probe gave **no change** of
-  `1.15.3` (stayed `NO CONT`). Skin resistance is probably too high for sensitivity Low;
-  repeat with tap water or a metal short across the contacts.
+- **Level**: a light touch of the two wires gave no change; pressing them firmly (16:11)
+  → `1.15.3` `NO CONT` ↔ `CONTACT` within 1 s, twice. Confirmed.
+- **dO2 loop** start (16:11:49) → `1.14.1` 0→1 **and `1.14.13` (stirrer loop) 0→1 in the same
+  second**: starting a loop also starts the loop it drives in cascade; stopping dO2 stopped
+  both. Stirrer ramped to 147 rpm in 6 s.
+- **Temperature loop**, 28 s on (16:12:05–33) → heating `2.12.19` 0→100 % and `2.49.19` 0→1
+  at once (22.6 °C vs SP 37), back to 0 at stop.
 - No reassignment was done: `2.7`/`2.8` unchanged.
+
+### R1-sx vs R2-dx (dump 10 Nov 2026, 16:07; same firmware and addresses)
+Configuration differs; FM2 must read it per reactor, never assume:
+| | R2-dx | R1-sx |
+|---|---|---|
+| dO2 control type `1.19.1` | PID | **Level** (on/off, pulse 30 s / dead time 30 s) |
+| dO2 setpoint / alarm limits | 200 % / 40–200 | 70 % / 20–120 |
+| dO2 calibration slope/offset | 13.998 / 0.0 | 11.315 / 1.2 |
+| Level probe `5.3.0`/`5.3.1` | Foam / High | Level / Low |
+| T loop | Adaptive | PID (P 25.2, I 3053.5, D 28.3) |
+| Stirrer setpoint / alarm limits | 200 / 20–500 rpm | 400 / 200–900 rpm |
+| Alkali factor | 4.80 mL/min | 4.86 mL/min |
+| Dose monitoring stirrer / antifoam `2.3` | on / on | off / off |
+| N2 valve factor / time factor / on time | 100 / 60 / 1 | 1 / 1 / 500 |
+| Air valve factor / low limit | 100 / 100 | 0 / 0 |
+| pH alarm high | 6.40 | 6.50 |
+Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated; 29 Alkali;
+30 Antifoam not assigned), stirrer in cascade on dO2 (`1.52.13` = 1), redox not installed.
 
 ### Proposal for FM2
 1. **Loop state on the live page and in alerts** (read only): `1.14` for pH, T, stirrer,
@@ -212,9 +232,10 @@ start the Level loop.
 - [ ] Same checks on R1-sx (same firmware and addresses; not yet exercised).
 - [ ] Never automate actuator start/stop, dose counter reset or calibration.
 - [x] Loop on/off (`1.14`), actuator active (`2.49`), alkali output/counter: confirmed live on R2.
-- [ ] Level contact (`1.15.3`) with water or a metal short; antifoam pulse (`2.12.30`, `2.49.30`,
-      `2.13.30`) once assigned; Addition 2 reassignment (`2.7.28`, `2.8.28`); heating/cooling outputs.
+- [x] Level contact (`1.15.3`), dO2 loop (with stirrer cascade), heating output: confirmed live on R2.
+- [ ] Antifoam pulse (`2.12.30`, `2.49.30`,
+      `2.13.30`) once assigned; Addition 2 reassignment (`2.7.28`, `2.8.28`); cooling output.
 - [ ] Dose counters reset between days (1.61 → 0.00): find out when (power cycle?).
-- [ ] Same dump on R1-sx.
+- [x] Same dump on R1-sx (differences listed above).
 - [ ] Decision (user): whether FM2 may ever start/stop loops (`1.14`) and whether timed
       Addition 2 doses driven by FM2 are wanted; today both are outside the driver's rules.
