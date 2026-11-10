@@ -79,6 +79,9 @@ class ProfileIn(BaseModel):
     ph_high_limit: Optional[float] = None
     temperature_low_limit: Optional[float] = None
     temperature_high_limit: Optional[float] = None
+    temperature_control_mode: Optional[str] = None
+    temperature_pid: Optional[dict] = None
+    loop_assignments: Optional[dict] = None
     notes: str = ""
     author: str = ""
 
@@ -95,6 +98,9 @@ class ProfileOut(ORM):
     ph_high_limit: Optional[float] = None
     temperature_low_limit: Optional[float] = None
     temperature_high_limit: Optional[float] = None
+    temperature_control_mode: Optional[str] = None
+    temperature_pid: Optional[dict] = None
+    loop_assignments: Optional[dict] = None
     notes: str
 
 

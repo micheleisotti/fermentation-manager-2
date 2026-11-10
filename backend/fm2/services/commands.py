@@ -85,13 +85,19 @@ def write_setpoint(driver: ControllerDriver, parameter: str, value: float,
 
 
 def load_ph_control(driver: ControllerDriver, control: PhControl, experiment_status: str) -> None:
+    load_loop_control(driver, "ph", control, experiment_status)
+
+
+def load_loop_control(driver: ControllerDriver, loop: str, control: PhControl, experiment_status: str) -> None:
+    """Control type and loop parameters of pH or temperature: planning only, read back."""
+    label = {"ph": "pH", "temperature": "Temperature"}.get(loop, loop)
     if experiment_status not in ("planned", "preparing"):
-        raise CommandRejected("pH control mode and PID can only be loaded before Start")
-    driver.write_ph_control(control)
-    after = driver.read().ph_control
+        raise CommandRejected(f"{label} control mode and loop parameters can only be loaded before Start")
+    driver.write_loop_control(loop, control)
+    after = driver.read().control(loop)
     diffs = ph_control_differences(control, after)
     if diffs:
-        raise DriverError("pH control read-back does not match the profile: " + "; ".join(diffs))
+        raise DriverError(f"{label} control read-back does not match the plan: " + "; ".join(diffs))
 
 
 def ph_control_differences(plan: PhControl, ctrl: PhControl, tol: float = 1e-6) -> list[str]:
