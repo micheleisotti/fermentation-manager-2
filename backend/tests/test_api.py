@@ -311,14 +311,14 @@ def test_users_pin_and_signatures(env):
 
     # the server, not the browser, decides the signature
     e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "author": "Someone else"}, headers=h).json()
-    c.post(f"/api/experiments/{e['id']}/start", headers=h)
+    c.post(f"/api/experiments/{e['id']}/start", json={"checklist": ["Probes calibrated"]}, headers=h)
     od = c.get("/api/variables").json()[0]["id"]
     mm = c.post(f"/api/experiments/{e['id']}/measurements", json={"variable_id": od, "value": 0.1, "author": "Michele"}).json()
     assert mm["author"] == "Guest"   # no token → Guest, whatever the body says
     c.post("/api/reactors/R1/setpoints", json={"parameter": "temperature", "value": 31}, headers=h)
     assert any(x["author"] == "Michele" for x in c.get(f"/api/experiments/{e['id']}/setpoint-log").json())
     ev = c.get(f"/api/experiments/{e['id']}/events").json()
-    assert any("started by Michele" in x["message"] for x in ev)
+    assert any("started by Michele" in x["message"] and "Probes calibrated" in x["message"] for x in ev)
 
     # PIN-protected user can be changed only when signed in as them; PIN change invalidates old tokens
     assert c.put(f"/api/users/{mid}", json={"archived": True}).status_code == 403
@@ -330,3 +330,99 @@ def test_users_pin_and_signatures(env):
     for _ in range(5):
         c.post("/api/auth/login", json={"user_id": mid, "pin": "0000"})
     assert c.post("/api/auth/login", json={"user_id": mid, "pin": "13579"}).status_code == 429
+
+
+def test_library_archive_and_end_outcome(env):
+    c, clock, app, _ = env
+    # variables: roles, rename, archive, delete only if unused
+    v = c.post("/api/variables", json={"name": "Residual sugar", "unit": "g/L", "category": "substrate"}).json()
+    assert c.post("/api/variables", json={"name": "residual sugar", "unit": "", "category": "other"}).status_code == 409
+    assert c.post("/api/variables", json={"name": "X", "unit": "", "category": "nonsense"}).status_code == 422
+    assert c.put(f"/api/variables/{v['id']}", json={"unit": "mM"}).json()["unit"] == "mM"
+    # media: rename, archive, delete refused when used
+    m = c.post("/api/media", json={"name": "MRS"}).json()
+    e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "medium_id": m["id"]}).json()
+    assert c.get("/api/media").json()[0]["n_used"] == 1
+    assert c.delete(f"/api/media/{m['id']}").status_code == 409
+    assert c.put(f"/api/media/{m['id']}", json={"name": "MRS broth", "archived": True}).json()["archived"] is True
+    assert c.get("/api/media").json() == [] and len(c.get("/api/media?include_archived=true").json()) == 1
+    # substrate variables are plotted, not fitted
+    c.post(f"/api/experiments/{e['id']}/start")
+    for i in range(5):
+        clock.advance(hours=1)
+        c.post(f"/api/experiments/{e['id']}/measurements", json={"variable_id": v["id"], "value": 20 - 3 * i})
+    assert c.delete(f"/api/variables/{v['id']}").status_code == 409
+    an = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    assert an["fits"]["Residual sugar"]["skipped"] is True and len(an["manual"]["Residual sugar"]["t"]) == 5
+    # one End of experiment with outcome + note; archive
+    assert c.post(f"/api/experiments/{e['id']}/end", json={"outcome": "maybe"}).status_code == 422
+    out = c.post(f"/api/experiments/{e['id']}/end", json={"outcome": "aborted", "note": "contaminated"}).json()
+    assert out["status"] == "aborted" and out["end_note"] == "contaminated"
+    assert any("aborted" in x["message"] and "contaminated" in x["message"] for x in c.get(f"/api/experiments/{e['id']}/events").json())
+    assert c.patch(f"/api/experiments/{e['id']}", json={"archived": True}).json()["archived"] is True
+    assert c.get(f"/api/experiments/{e['id']}").json()["n_sessions"] == 0
+
+
+def test_archive_copy_on_end_and_on_demand(env, tmp_path):
+    c, clock, app, _ = env
+    arch = tmp_path / "usb"
+    e = c.post("/api/experiments", json={"name": "Riboflavin: pH 6/7", "reactor_id": "R1"}).json()
+    c.post(f"/api/experiments/{e['id']}/start")
+    clock.advance(hours=1)
+    # no folder yet: the run ends anyway, the copy reports why it was not saved
+    out = c.post(f"/api/experiments/{e['id']}/end", json={"outcome": "completed", "save_copy": True}).json()
+    assert out["status"] == "completed" and "No archive folder" in out["copy"]["error"]
+    bk = c.get("/api/settings").json()["backup"]
+    bk["archive_destination"] = str(arch)
+    assert c.put("/api/settings/backup", json=bk).status_code == 200
+    r = c.post(f"/api/experiments/{e['id']}/archive-copy", json={})
+    assert r.status_code == 502 and "not found" in r.json()["detail"]   # USB stick "unplugged"
+    arch.mkdir()
+    r = c.post(f"/api/experiments/{e['id']}/archive-copy", json={"format": "zip"}).json()
+    name = r["path"].split("/")[-1].split("\\")[-1]
+    import re as _re
+    assert _re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{4}_FM-\d{3}_Riboflavin- pH 6-7\.zip", name), name
+    assert (arch / name).stat().st_size == r["bytes"] > 0
+    d = c.get(f"/api/experiments/{e['id']}/export.xlsx")
+    assert "filename*=UTF-8''" in d.headers["content-disposition"] and "_FM-" in d.headers["content-disposition"]
+
+
+def test_prepare_phase_and_plan_params(env):
+    c, clock, app, _ = env
+    prof = c.post("/api/profiles", json={"name": "plantarum", "ph_setpoint": 6.0, "temperature_setpoint": 30,
+                                         "ph_low_limit": 5.7, "ph_high_limit": 6.3}).json()
+    e = c.post("/api/experiments", json={"name": "prep", "reactor_id": "R1", "profile_id": prof["id"]}).json()
+    assert e["plan_params"]["ph_setpoint"] == 6.0 and e["profile_modified"] is False
+    # edit one value: the plan becomes "custom, based on plantarum"
+    pp = dict(e["plan_params"], temperature_setpoint=32)
+    e = c.patch(f"/api/experiments/{e['id']}", json={"plan_params": pp}).json()
+    assert e["profile_modified"] is True and e["plan_params"]["temperature_setpoint"] == 32
+    bad = dict(pp, ph_low_limit=6.5)
+    assert c.patch(f"/api/experiments/{e['id']}", json={"plan_params": bad}).status_code == 422
+    rows = {r["parameter"]: r for r in c.get(f"/api/experiments/{e['id']}/plan-check").json()["rows"]}
+    assert rows["temperature_setpoint"]["plan"] == 32
+
+    # Go to fermentation: monitoring and readings, no t = 0 yet
+    e = c.post(f"/api/experiments/{e['id']}/prepare").json()
+    assert e["status"] == "preparing" and e["started_at"] is None
+    live = {r["reactor_id"]: r for r in c.get("/api/reactors/live").json()}
+    assert live["R1"]["experiment"]["status"] == "preparing"
+    other = c.post("/api/experiments", json={"name": "other", "reactor_id": "R1"}).json()
+    assert c.post(f"/api/experiments/{other['id']}/prepare").status_code == 409   # reactor in use
+    r = c.post(f"/api/experiments/{e['id']}/load-profile").json()
+    assert any(x["parameter"] == "temperature" and x["status"] == "confirmed" for x in r["results"])
+    for _ in range(3):
+        clock.advance(hours=0.5)
+        app.state.acq.poll_once()
+    def tcol(url):
+        j = c.get(url).json()
+        i = j["columns"].index("t_h")
+        return [row[i] for row in j["rows"]]
+    assert tcol(f"/api/experiments/{e['id']}/readings?since_h=-10") == []   # nothing recorded before Start
+    e = c.post(f"/api/experiments/{e['id']}/start").json()
+    assert e["status"] == "fermenting"
+    rd = tcol(f"/api/experiments/{e['id']}/readings?since_h=-10")
+    assert rd and min(rd) >= 0
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    assert any(x["kind"] == "prepared" and x["t_h"] < -1.4 for x in ev)
+    assert c.get(f"/api/experiments/{e['id']}").json()["plan_snapshot"]["custom"] is True

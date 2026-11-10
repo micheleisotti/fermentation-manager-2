@@ -6,14 +6,15 @@ import { usePolling } from "../hooks";
 import { DataValue, Icon } from "../components/ui";
 import { REACTOR_LABEL } from "./Home";
 import { initials, useUser } from "../components/UserGate";
+import { getTheme, setTheme, type Theme } from "../theme";
 
 const SECTIONS = [
   { id: "users", label: "Users" },
+  { id: "appearance", label: "Appearance" },
   { id: "bioreactors", label: "Bioreactors" },
   { id: "remote", label: "Remote access" },
   { id: "alerts", label: "Notifications" },
   { id: "backup", label: "Data and backup" },
-  { id: "lists", label: "Media and buffers" },
   { id: "credits", label: "Credits and license" },
 ];
 
@@ -57,35 +58,59 @@ function useSection<K extends keyof AppSettings>(all: AppSettings | undefined, k
       {msg && <span className={`banner ${msg.kind} small`} role="status" style={{ padding: "6px 12px" }}>{msg.text}</span>}
     </div>
   );
-  return { v, edit, footer, ver };
+  return { v, edit, footer, ver, dirty };
 }
 
 const NUM = { style: { fontFamily: "var(--font-mono)", width: 96 }, inputMode: "decimal" as const };
 const num = (s: string) => (s.trim() === "" ? NaN : Number(s.replace(",", ".")));
 
-function NamedList({ kind, label }: { kind: "media" | "buffers"; label: string }) {
-  const list = usePolling(kind === "media" ? api.media : api.buffers, 600000);
-  const [name, setName] = useState("");
+function TelegramChatFinder({ token, onPick, onClose }: { token: string; onPick: (id: string) => void; onClose: () => void }) {
+  const [chats, setChats] = useState<{ id: string; name: string; type: string }[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  async function add() {
-    setErr(null);
-    try { await api.createNamed(kind, name.trim()); setName(""); list.refresh(); }
-    catch (x) { setErr((x as Error).message); }
-  }
+  const look = async () => {
+    setErr(null); setChats(null);
+    try { setChats((await api.telegramChats(token)).chats); } catch (x) { setErr((x as Error).message); }
+  };
+  useEffect(() => { void look(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <span className="small muted">{label}</span>
+    <div className="note" style={{ flex: "1 1 100%", flexDirection: "column", gap: 8 }}>
+      <span><b>Find your chat id.</b> On your phone, open the chat with your bot and send it any message (e.g. “hi”), then press Look again.</span>
+      {err && <span className="small" style={{ color: "var(--alert-text)" }}>{err}</span>}
+      {chats && chats.length === 0 && <span className="small muted">No messages yet: write to the bot and look again.</span>}
+      {chats && chats.length > 0 && (
+        <div className="stack" style={{ gap: 6 }}>
+          {chats.map((c) => (
+            <button key={c.id} type="button" className="btn outlined" style={{ justifyContent: "space-between" }} onClick={() => onPick(c.id)}>
+              <span>{c.name} <span className="muted small">· {c.type}</span></span><span className="mono">{c.id}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="row" style={{ gap: 8 }}>
-        {(list.data ?? []).filter((x) => !x.archived).map((x) => <span key={x.id} className="pill">{x.name}</span>)}
-        {(list.data ?? []).length === 0 && <span className="small muted">None yet.</span>}
+        <button type="button" className="btn text" onClick={look}>Look again</button>
+        <button type="button" className="btn text" onClick={onClose}>Close</button>
       </div>
-      <div className="row" style={{ gap: 8, flexWrap: "nowrap", maxWidth: 520 }}>
-        <label className="field" style={{ flex: "1 1 auto" }}><span className="sr-only">New {label}</span>
-          <input value={name} placeholder={kind === "media" ? "e.g. MRS, CDM + 2% glucose" : "e.g. NaOH 2 M"}
-            onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) void add(); }} /></label>
-        <button className="btn tonal" disabled={!name.trim()} onClick={add}>Add</button>
-      </div>
-      {err && <div className="banner alert small">{err}</div>}
+    </div>
+  );
+}
+
+function AppearancePicker() {
+  const [t, setT] = useState<Theme>(getTheme());
+  const opts: { k: Theme; label: string; help: string }[] = [
+    { k: "light", label: "Light", help: "Light page and cards" },
+    { k: "grey", label: "Grey", help: "Softer grey page (#DADFE1), white cards" },
+    { k: "dim", label: "Dim", help: "Dark teal page, white cards and charts" },
+    { k: "dark", label: "Dark", help: "Dark page and cards; charts on light panels" },
+  ];
+  return (
+    <div className="theme-grid" role="radiogroup" aria-label="Appearance">
+      {opts.map((o) => (
+        <label key={o.k} className={`choice ${t === o.k ? "on" : ""}`}>
+          <input type="radio" name="theme" checked={t === o.k} onChange={() => { setT(o.k); setTheme(o.k); }} />
+          <span className={`theme-swatch ${o.k}`} aria-hidden="true"><span /></span>
+          <span className="stack" style={{ gap: 2 }}><b>{o.label}</b><span className="xs muted">{o.help}</span></span>
+        </label>
+      ))}
     </div>
   );
 }
@@ -172,9 +197,11 @@ export function SettingsPage() {
     if (loaded && hash) document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [loaded, hash]);
 
+  const [finding, setFinding] = useState(false);
   if (all.error) return <div className="banner alert">Settings not available: {all.error}</div>;
   if (!all.data || !remote.v || !alerts.v || !notif.v || !bk.v) return <div className="muted">Loading…</div>;
   const r = remote.v, a = alerts.v, n = notif.v, b = bk.v;
+  const local = sys.data?.client_local ?? false;
   const st: BackupStatus | undefined = backup.data;
 
   const CAPS: [string, string][] = [["read_values", "Read values"], ["read_limits", "Read process limits"],
@@ -209,11 +236,15 @@ export function SettingsPage() {
 
           <UsersSection />
 
+          <Section id="appearance" title="Appearance" sub="Saved on this device only: each phone or PC keeps its own choice.">
+            <AppearancePicker />
+          </Section>
+
           <Section id="bioreactors" title="Bioreactors"
             sub={<>Read from the service configuration (address and driver change with a service restart). Sampling every <span className="mono">{sys.data?.sampling_interval_s ?? "—"} s</span>.</>}>
             <div className="grid-cards">
               {(sys.data?.reactors ?? []).map((x) => (
-                <div key={x.reactor_id} className="stack" style={{ border: "1px solid #dadfe1", borderRadius: 12, padding: 16, gap: 10 }}>
+                <div key={x.reactor_id} className="stack" style={{ border: "1px solid var(--outline-variant)", borderRadius: 12, padding: 16, gap: 10 }}>
                   <div className="row between">
                     <span className="row" style={{ gap: 10, fontSize: 16, fontWeight: 500 }}>
                       <span className="pill mono" style={{ background: "#003366", color: "#fff", borderColor: "transparent", height: 28 }}>{x.reactor_id}</span>
@@ -237,6 +268,8 @@ export function SettingsPage() {
           </Section>
 
           <Section id="remote" title="Remote access" sub="Through the private network (Tailscale): nothing is exposed to the public internet.">
+            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
+            <fieldset className="plain" disabled={!local}>
             <div className="row between" style={{ flexWrap: "nowrap", gap: 16 }}>
               <span className="stack" style={{ gap: 0 }}>Allow setpoint and limit changes from remote devices
                 <span className="xs muted">Always with confirmation, read-back from the controller and a log entry</span></span>
@@ -261,7 +294,8 @@ export function SettingsPage() {
               </table>
             </div>
             <span className="xs muted">The controller's own sensor ranges always apply on top.</span>
-            {remote.footer}
+            {local && remote.footer}
+            </fieldset>
           </Section>
 
           <Section id="alerts" title="Notifications" sub="Every event is always stored and shown in the app; here you choose which ones are also sent to your phone.">
@@ -285,14 +319,20 @@ export function SettingsPage() {
             )}
             {n.channel === "telegram" && (
               <div className="row" style={{ gap: 12 }}>
-                <label className="field" style={{ flex: "2 1 260px" }}>Bot token<input type="password" value={n.telegram_token} onChange={(e) => notif.edit((x) => { x.telegram_token = e.target.value; })} /></label>
-                <label className="field" style={{ flex: "1 1 160px" }}>Chat id<input className="mono" value={n.telegram_chat_id} onChange={(e) => notif.edit((x) => { x.telegram_chat_id = e.target.value; })} /></label>
-                <span className="xs muted" style={{ flexBasis: "100%" }}>Create a bot with @BotFather, send it a message, then use your chat id. The token is stored on this PC and never shown again.</span>
+                <label className="field" style={{ flex: "2 1 260px" }}>Token of your bot (from @BotFather)<input type="password" value={n.telegram_token} placeholder="123456789:AAH…" onChange={(e) => notif.edit((x) => { x.telegram_token = e.target.value; })} /></label>
+                <label className="field" style={{ flex: "1 1 200px" }}>Your chat id (your Telegram account, not the bot)
+                  <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+                    <input className="mono" value={n.telegram_chat_id} placeholder="e.g. 987654321" onChange={(e) => notif.edit((x) => { x.telegram_chat_id = e.target.value; })} />
+                    <button type="button" className="btn tonal" style={{ whiteSpace: "nowrap" }} onClick={() => setFinding(true)}>Find it</button>
+                  </span></label>
+                {finding && <TelegramChatFinder token={n.telegram_token} onPick={(id) => { notif.edit((x) => { x.telegram_chat_id = id; }); setFinding(false); }}
+                  onClose={() => setFinding(false)} />}
+                <span className="xs muted" style={{ flexBasis: "100%" }}>1) Create a bot with @BotFather and paste its token. 2) Send your bot any message, then press “Find it” to fill in your own chat id. The token is stored on this PC and never shown again.</span>
               </div>
             )}
             <div className="stack" style={{ gap: 0 }}>
               {RULES.map((x) => (
-                <div key={x.k} className="row between" style={{ flexWrap: "nowrap", gap: 16, minHeight: 64, borderBottom: "1px solid #eef0f4" }}>
+                <div key={x.k} className="row between" style={{ flexWrap: "nowrap", gap: 16, minHeight: 64, borderBottom: "1px solid var(--divider)" }}>
                   <span className="stack" style={{ gap: 0 }}>{x.t}<span className="xs muted">{x.d}</span></span>
                   <Switch on={n.rules[x.k] ?? true} label={x.t} onChange={(v) => notif.edit((y) => { y.rules[x.k] = v; })} />
                 </div>
@@ -302,6 +342,7 @@ export function SettingsPage() {
               {notif.footer}
               <button className="btn outlined" disabled={n.channel === "none"} onClick={async () => {
                 setTestMsg(null);
+                if (notif.dirty) { setTestMsg({ kind: "warn", text: "Save the changes first: the test uses the saved settings." }); return; }
                 try { await api.testNotification(); setTestMsg({ kind: "good", text: "Test sent: check the phone." }); }
                 catch (x) { setTestMsg({ kind: "alert", text: (x as Error).message }); }
               }}>Send test notification</button>
@@ -332,6 +373,8 @@ export function SettingsPage() {
               <DataValue value={String(st?.backups_present ?? 0)} label="Backups in the destination" />
             </div>
             {st?.last_error && <div className="banner alert" role="alert"><Icon name="warn" color="#b30020" size={20} /><span>{st.last_error}</span></div>}
+            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
+            <fieldset className="plain" disabled={!local}>
             <div className="row" style={{ gap: 12 }}>
               <label className="field" style={{ flex: "2 1 260px" }}>Local data folder<input className="mono" value={sys.data?.data_dir ?? ""} readOnly /></label>
               <label className="field" style={{ flex: "2 1 260px" }}>Backup destination (folder on this PC or network share)
@@ -349,8 +392,24 @@ export function SettingsPage() {
                 { t: "Also back up at each “End of production”", c: <Switch on={b.on_end_of_production} label="Back up at end of production" onChange={(v) => bk.edit((x) => { x.on_end_of_production = v; })} /> },
                 { t: "Include a CSV export per experiment", c: <Switch on={b.csv_per_experiment} label="Include CSV export" onChange={(v) => bk.edit((x) => { x.csv_per_experiment = v; })} /> },
               ].map((x) => (
-                <div key={x.t} className="row between" style={{ minHeight: 52, borderBottom: "1px solid #eef0f4", flexWrap: "nowrap" }}><span>{x.t}</span>{x.c}</div>
+                <div key={x.t} className="row between" style={{ minHeight: 52, borderBottom: "1px solid var(--divider)", flexWrap: "nowrap" }}><span>{x.t}</span>{x.c}</div>
               ))}
+            </div>
+            <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 500 }}>Experiment copies</h3>
+              <span className="small muted">A copy of one experiment (controller data, manual variables, parameters, metadata) written by this PC,
+                e.g. on a USB stick. File name: date_time_code_name, e.g. <span className="mono">2026-11-10_1432_FM-031_Riboflavin pH 6.xlsx</span>.</span>
+              <div className="row" style={{ gap: 12 }}>
+                <label className="field" style={{ flex: "2 1 260px" }}>Archive folder
+                  <input className="mono" value={b.archive_destination} placeholder="e.g. E:\FM2-archive" onChange={(e) => bk.edit((x) => { x.archive_destination = e.target.value; })} /></label>
+                <label className="field" style={{ flex: "1 1 160px" }}>Format
+                  <select value={b.archive_format} onChange={(e) => bk.edit((x) => { x.archive_format = e.target.value as "xlsx"; })}>
+                    <option value="xlsx">XLSX (one sheet per block)</option><option value="zip">CSV (zip)</option></select></label>
+              </div>
+              <div className="row between" style={{ minHeight: 52, flexWrap: "nowrap" }}>
+                <span>Offer a copy at “End of experiment” (ticked by default)</span>
+                <Switch on={b.archive_on_end} label="Copy at end of experiment" onChange={(v) => bk.edit((x) => { x.archive_on_end = v; })} />
+              </div>
             </div>
             <div className="row" style={{ gap: 12, alignItems: "center" }}>
               {bk.footer}
@@ -362,24 +421,20 @@ export function SettingsPage() {
               }}>{busy ? "Backing up…" : "Back up now"}</button>
               {bkMsg && <span className={`banner ${bkMsg.kind} small`} style={{ padding: "6px 12px" }}>{bkMsg.text}</span>}
             </div>
+            </fieldset>
             <span className="xs muted">Backups are consistent copies made while recording continues. Do not point the destination at the live data folder, and never open the live database from a synced folder.
               Restore from a backup is done with the service stopped (procedure in the docs).</span>
-          </Section>
-
-          <Section id="lists" title="Media and buffers" sub="Choices offered when planning an experiment. Items used in an experiment are kept, so old experiments keep their references.">
-            <NamedList kind="media" label="Media" />
-            <NamedList kind="buffers" label="Buffers / bases" />
           </Section>
 
           <Section id="credits" title="Credits and license">
             <div className="stack" style={{ gap: 0 }}>
               {[
                 ["Version", <span className="mono">{sys.data?.version ?? "—"}</span>],
-                ["Developed by", "Michele Isotti · DiSAFA, University of Turin · DeFENS, University of Milan"],
-                ["License", <span>To be decided <span className="muted">(options: PolyForm Noncommercial, GPL/AGPL, MIT)</span></span>],
+                ["Developed by", "Michele Isotti · DeFENS, University of Milan · DiSAFA, University of Turin"],
+                ["License", <span>GNU General Public License v3.0 or later <span className="muted">(GPL-3.0-or-later) · free software, provided without warranty</span></span>],
                 ["Source code", <a className="mono" href="https://github.com/micheleisotti/fermentation-manager-2" target="_blank" rel="noreferrer">github.com/micheleisotti/fermentation-manager-2</a>],
               ].map(([k, v]) => (
-                <div key={String(k)} className="row between" style={{ minHeight: 52, borderBottom: "1px solid #eef0f4", gap: 16 }}>
+                <div key={String(k)} className="row between" style={{ minHeight: 52, borderBottom: "1px solid var(--divider)", gap: 16 }}>
                   <span className="muted">{k}</span><span style={{ textAlign: "right" }}>{v}</span>
                 </div>
               ))}

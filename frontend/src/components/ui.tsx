@@ -26,6 +26,7 @@ const PATHS: Record<string, string> = {
   sliders: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M14 4v4M8 10v4M16 16v4",
   chevron: "m6 9 6 6 6-6",
   close: "M6 6l12 12M18 6 6 18",
+  arrow: "M5 12h14M13 5l7 7-7 7",
 };
 
 export function Icon({ name, size = 22, color = "currentColor", width = 1.8 }: { name: string; size?: number; color?: string; width?: number }) {
@@ -40,13 +41,13 @@ export function Icon({ name, size = 22, color = "currentColor", width = 1.8 }: {
 export function DataValue({ value, unit, label, color }: { value: ReactNode; unit?: string; label: ReactNode; color?: string }) {
   return (
     <div className="dv">
-      <span className="v" style={{ color }}>{value}{unit && <span className="u">{unit}</span>}</span>
+      <span className="v" style={{ color: color && THEMED[color] ? THEMED[color] : color }}>{value}{unit && <span className="u">{unit}</span>}</span>
       <span className="l">{label}</span>
     </div>
   );
 }
 
-const STATUS_LABEL: Record<Status, string> = { planned: "Planned", fermenting: "Fermenting", completed: "Completed", aborted: "Aborted" };
+const STATUS_LABEL: Record<Status, string> = { planned: "Planned", preparing: "Preparing", fermenting: "Fermenting", completed: "Completed", aborted: "Aborted" };
 export function StatusChip({ status }: { status: Status }) {
   return (
     <span className={`status ${status}`}>
@@ -81,8 +82,14 @@ export function EChart({ option, className = "chart", ariaLabel }: { option: ech
     return () => { ro.disconnect(); inst.current?.dispose(); inst.current = null; };
   }, []);
   useEffect(() => { inst.current?.setOption(option, { replaceMerge: ["series", "yAxis", "xAxis", "grid"], lazyUpdate: true }); }, [option]);
-  return <div ref={el} className={className} role="img" aria-label={ariaLabel} />;
+  return <div ref={el} className={`${className} echart`} role="img" aria-label={ariaLabel} />;
 }
+
+/** Palette colours that must follow the theme when used as text (dark theme: lighter variants). */
+const THEMED: Record<string, string> = {
+  "#22294d": "var(--ink)", "#1d3786": "var(--data-blue-text, #1d3786)", "#1f7a63": "var(--data-green-text, #1f7a63)",
+  "#8a5a00": "var(--data-orange-text)", "#455e6f": "var(--data-slate-text, #455e6f)",
+};
 
 export const C = {
   blue: "#1d3786", orange: "#f9b112", orangeText: "#8a5a00", green: "#38b292", greenDark: "#1f7a63",

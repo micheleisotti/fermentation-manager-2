@@ -21,7 +21,7 @@ export function DeleteExperiment({ e }: { e: Experiment }) {
 
   return (
     <>
-      <button className="btn text" style={{ color: "#22294d" }} onClick={() => { setOpen(true); setCode(""); setErr(null); }}>Delete experiment</button>
+      <button className="btn text" style={{ color: "var(--ink)" }} onClick={() => { setOpen(true); setCode(""); setErr(null); }}>Delete experiment</button>
       {open && (
         <div className="scrim" onClick={(x) => { if (x.target === x.currentTarget) setOpen(false); }}>
           <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="del-t">

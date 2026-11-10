@@ -20,6 +20,7 @@ class NamedOut(ORM):
     name: str
     description: str
     archived: bool
+    n_used: int = 0
 
 
 class VariableIn(BaseModel):
@@ -33,6 +34,38 @@ class VariableOut(ORM):
     name: str
     unit: str
     category: str
+    archived: bool = False
+    n_measurements: int = 0
+
+
+class VariablePatch(BaseModel):
+    name: Optional[str] = None
+    unit: Optional[str] = None
+    category: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class NamedPatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    archived: Optional[bool] = None
+
+
+class EndIn(BaseModel):
+    outcome: str = "completed"     # "completed" | "aborted"
+    note: str = ""
+    save_copy: Optional[bool] = None   # None = use Settings › Data and backup › archive_on_end
+
+
+class StartIn(BaseModel):
+    checklist: Optional[list[str]] = None   # pre-start checks the user ticked (logged in the Start event)
+
+
+class ArchiveIn(BaseModel):
+    format: Optional[str] = None       # xlsx | zip (default from settings)
+    blocks: Optional[list[str]] = None
+    resample_min: Optional[float] = None
+    model: str = "gompertz"
 
 
 class ProfileIn(BaseModel):
@@ -74,6 +107,7 @@ class ExperimentIn(BaseModel):
     buffer_id: Optional[int] = None
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
+    plan_params: Optional[dict] = None
     channels: Optional[list[str]] = None
     notes: str = ""
     author: str = ""
@@ -87,9 +121,11 @@ class ExperimentPatch(BaseModel):
     buffer_id: Optional[int] = None
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
+    plan_params: Optional[dict] = None
     reactor_id: Optional[str] = None
     channels: Optional[list[str]] = None
     notes: Optional[str] = None
+    archived: Optional[bool] = None
 
 
 class ExperimentOut(ORM):
@@ -112,6 +148,15 @@ class ExperimentOut(ORM):
     ended_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    archived: Optional[bool] = False
+    end_note: Optional[str] = None
+    author: str = ""
+    n_sessions: int = 0
+    plan_params: Optional[dict] = None
+    profile_modified: bool = False   # plan values differ from the selected profile ("custom")
+    plan_snapshot: Optional[dict] = None
+    prepared_at: Optional[datetime] = None
+    copy: Optional[dict] = None   # result of the copy saved at End of experiment (path or error)
 
 
 class ParallelIn(BaseModel):

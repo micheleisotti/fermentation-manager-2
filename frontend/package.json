@@ -1,7 +1,7 @@
 {
   "name": "fm2-frontend",
   "private": true,
-  "version": "2.0.0-dev",
+  "version": "2.0.0-dev.19",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,5 +22,6 @@
     "@vitejs/plugin-react": "^6.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.6"
-  }
+  },
+  "license": "GPL-3.0-or-later"
 }

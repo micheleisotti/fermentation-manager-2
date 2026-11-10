@@ -39,7 +39,40 @@ Three levels, increasing complexity:
 - Acquisition: 8 controllers polled every 5 s is light (one WebSocket each); check timing with a
   per-controller thread or async polling.
 
-## 4. Other open items
+## 4. Reactors managed from Settings (with 3.)
+- Add / remove reactors in Settings: name, short label, IP, driver (ez2-Control, simulator), enabled,
+  sampling interval (choices 1, 2, 5, 10, 30, 60 s; default 5 s). Applied without restarting the service.
+- 1 s is possible (one small WebSocket exchange per value) but with 8 reactors it is ~8×12 queries/s and
+  ~86 400 rows per reactor per day: keep 1–2 s for short runs only; 5 s is the sensible default (short base
+  doses are still caught by the cumulative counter, which never misses volume).
+
+## 5. Timers and reminders (after native push)
+- New → Timer: one-off ("in 45 min") or repeating ("every 1 h from 10:00, 8 times"), optionally tied to an
+  experiment ("sample FM-031"). Fired by the service (works with the phone off), sent by push/Telegram/ntfy,
+  shown in the app; snooze / done from the notification. Optional link to "add measurement".
+
+## 6. Ownership and visibility (with users and roles, level 2)
+- Each experiment, profile, medium, buffer and variable records its creator (already true for experiments
+  and profiles) and a visibility: private (creator only) or shared (everyone, creator shown).
+- Only meaningful with real roles (viewer / operator / admin) and PIN or password sign-in; otherwise
+  "private" would be a filter, not a protection. Cost: a visibility column + a filter in each list/API,
+  and rules for references (a shared experiment using a private medium → the medium becomes visible
+  read-only). Medium effort; do it together with roles.
+
+## 7. Open Science Framework (OSF)
+- OSF has a public REST API (api.osf.io/v2) with personal access tokens; files go through WaterButler
+  (files.osf.io/v1/resources/<project>/providers/osfstorage/). Upload, new versions and folders are possible.
+- Fits: **export/publishing** — "Send to OSF" on an experiment or analysis session: uploads the XLSX/CSV,
+  figures and a README with metadata into a chosen OSF project/component (versioned by OSF).
+- Fits less: **routine backups** — private projects are capped at 5 GB (public 50 GB), the database grows
+  continuously and private lab data should not be published by mistake. Keep backups on a network share /
+  second disk / rclone, use OSF for curated datasets.
+- Effort: settings (token, default project) + one upload client + a dialog: about one work session.
+- Plan (10 Nov 2026): OSF becomes a second "archive destination" next to the archive folder: same
+  End-of-experiment and "Save to archive" actions; optional snapshot of the running experiment every N min
+  as a new version of one file. Per-user destinations only with real sign-in (PIN required) and roles.
+
+## 8. Other open items
 - Loop on/off from the software (pH, T, stirrer), never manual actuator outputs — see HANDOFF.
 - Dark / dimmed theme; consultation mode on the laptop; chart zoom with full-resolution data.
-- Licence to choose before publishing as open source (PolyForm NC, GPL/AGPL, MIT…).
+- Licence: GPL-3.0-or-later (chosen 10 Nov 2026; LICENSE file in the repository).

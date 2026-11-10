@@ -8,12 +8,16 @@ import "@fontsource/ibm-plex-sans/400-italic.css";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/600.css";
 import "./theme.css";
+import { applyTheme } from "./theme";
+
+applyTheme();
 import { Shell } from "./components/Shell";
 import { UserGate } from "./components/UserGate";
 import { Home } from "./pages/Home";
 import { ExperimentPage } from "./pages/ExperimentPage";
 import { Planning } from "./pages/Planning";
-import { Profiles } from "./pages/Profiles";
+import { Library } from "./pages/Library";
+import { ExperimentsList } from "./pages/ExperimentsList";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AnalysisHome, ExperimentAnalysisPage } from "./pages/ExperimentAnalysis";
 import { NewSession, SessionPage } from "./pages/AnalysisSession";
@@ -34,7 +38,7 @@ createRoot(document.getElementById("root")!).render(
       <Shell>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/experiments" element={<Navigate to="/" replace />} />
+          <Route path="/experiments" element={<ExperimentsList />} />
           <Route path="/experiments/new" element={<Planning />} />
           <Route path="/experiments/:id" element={<ExperimentPage />} />
           <Route path="/analysis" element={<AnalysisHome />} />
@@ -42,7 +46,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/analysis/new" element={<NewSession />} />
           <Route path="/analysis/sessions/:id" element={<SessionPage />} />
           <Route path="/analysis/*" element={<Navigate to="/analysis" replace />} />
-          <Route path="/profiles/*" element={<Profiles />} />
+          <Route path="/library" element={<Library />} />
+          <Route path="/profiles/*" element={<Navigate to="/library?tab=profiles" replace />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -51,3 +56,8 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+// Service worker: needed to install the app (only over HTTPS or on localhost). Caches nothing.
+if ("serviceWorker" in navigator && (window.isSecureContext)) {
+  navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+}

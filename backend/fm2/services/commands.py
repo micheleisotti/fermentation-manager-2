@@ -85,8 +85,8 @@ def write_setpoint(driver: ControllerDriver, parameter: str, value: float,
 
 
 def load_ph_control(driver: ControllerDriver, control: PhControl, experiment_status: str) -> None:
-    if experiment_status != "planned":
-        raise CommandRejected("pH control mode and PID can only be loaded from planning, before Start")
+    if experiment_status not in ("planned", "preparing"):
+        raise CommandRejected("pH control mode and PID can only be loaded before Start")
     driver.write_ph_control(control)
     after = driver.read().ph_control
     diffs = ph_control_differences(control, after)

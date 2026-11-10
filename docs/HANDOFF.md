@@ -146,6 +146,79 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Desktop/Start-menu shortcut for all Windows users: `deploy\windows\create-shortcut.ps1` (admin, once);
   opens http://localhost:8000 in an Edge/Chrome app window with the FM icon (`fm2.ico`).
 
+## Library, Experiments page, End of experiment (9 Nov 2026)
+- Home shows "Last experiments": recording and planned first, then the most recent, 10 rows, archived hidden.
+- Experiments tab: full list, status chips (incl. Aborted), search, "Analysed" filter, "Show archived".
+  Labels: "Analysed · N" (number of analysis sessions using it; derived, never blocks reuse) and "Archived".
+- Archive (completed/aborted only): hidden from Home and session pickers, kept in sessions already using it;
+  reversible; nothing deleted.
+- One "End of experiment" button (desktop and phone) → Completed (valid, offered in analysis) or Aborted
+  (run failed, kept but not offered), optional note shown on the experiment page and in the event.
+- Library (replaces Profiles; media and buffers moved out of Settings): controller profiles, media,
+  buffers, manual variables. Edit, archive/restore, delete only when unused. New menu links here.
+- Manual variable roles: biomass (growth fit, μmax = specific growth rate), product (fit as accumulation:
+  λ/μmax describe accumulation), substrate and other (plotted/exported, no growth fit). Yields
+  (Yx/s, Yp/x, qs, qp) exist in `analysis/kinetics.compute_kpis` but are not shown yet.
+## Remote decided by the server (9 Nov 2026)
+- Fixed: "local"/"remote" was declared by the browser and the frontend always sent "local", so the
+  Remote access switch never applied to the phone. Now the server decides from the connection:
+  loopback (the lab PC itself) = local, anything else (Tailscale) = remote; logged per command.
+- Settings › Remote access and › Data and backup are read-only from remote devices (server returns 403).
+
+## Installable app (PWA) and HTTPS (9 Nov 2026)
+- `frontend/public`: manifest.json, icons (any + maskable), apple-touch-icon, favicon, `sw.js`
+  (service worker that caches nothing: live data never stale; registered only in secure contexts;
+  will host native push).
+- HTTPS through Tailscale: `deploy\windows\enable-https.ps1` (admin; needs MagicDNS + HTTPS
+  certificates enabled in the Tailscale admin console) → `tailscale serve --bg 8000` →
+  https://<pc>.<tailnet>.ts.net. Requests then reach FastAPI from 127.0.0.1 with X-Forwarded-For /
+  Tailscale-User-* headers: `is_local` treats those as remote.
+- "No connection to the lab PC" banner (network error or proxy 502/503/504) + grey controller pills;
+  polling refreshes immediately when the phone screen comes back on.
+- Telegram: pasted tokens normalised (spaces, quotes, "bot" prefix, whole URL), format checked, 401/403
+  hints; "Send test" asks to save first (the test uses saved settings).
+
+## Appearance, licence, Telegram helper (10 Nov 2026)
+- Settings › Appearance (per device, localStorage `fm2.theme`): Light; Grey (#DADFE1 page, white cards); Dim (dark teal-slate page derived
+  from the palette's data slate #455e6f, white cards and charts); Dark (dark cards, charts on light
+  panels so they read like the exports). Implemented with CSS variables (`html[data-theme]`).
+- Licence GPL-3.0-or-later: `LICENSE` (verbatim GPLv3), notice in README and Settings › Credits.
+  Credits order: DeFENS, University of Milan · DiSAFA, University of Turin.
+- Telegram: clearer labels (bot token vs your own chat id) and "Find it" (getUpdates via
+  POST /settings/notifications/telegram-chats, bots skipped).
+
+## Experiment copies to an archive folder (10 Nov 2026)
+- Settings › Data and backup › Experiment copies: archive folder (e.g. a USB stick, `E:\FM2-archive`),
+  format XLSX / CSV zip, "offer a copy at End of experiment" (default on). Local-only section.
+- End of experiment dialog: "Save a copy of the data to …" (ticked by default when a folder is set); the run
+  ends even if the copy fails (stick unplugged), and the dialog says why.
+- Analysis › Export: "Download" (browser) and "Save to archive" (written by the lab PC, any device).
+- File names: `YYYY-MM-DD_HHMM_<code>_<name>.<ext>` (local time; characters invalid on Windows replaced);
+  downloads use the same name. Each copy is a new file (never overwritten) and is logged as an event.
+- No periodic backup during a run (decided): every reading is committed to SQLite (WAL) as it arrives and
+  the service resumes recording after a power cut; set "Restore on AC power loss" in the PC BIOS.
+
+## Preparation phase and editable plan values (10 Nov 2026, revised)
+- New status `preparing`. Planning → **Go to fermentation**: the same live page as a running experiment,
+  bar "● Not recording · t = —" with **Start selected loops / Stop selected loops** (popup, not implemented
+  yet, all disabled: loops = actuators only, sensors keep being read) and **Start experiment** (reminder
+  popup) in the place of End of experiment. Live values, setpoint/limit edits and alerts/notifications
+  work (no base-dosing "finished" rule; at-start messages say "when monitoring began"); **nothing is
+  recorded before Start**, so charts stay empty. Phase events get negative times at Start.
+  "Back to planning" in the header. One preparing/fermenting experiment per reactor.
+- Planning: one table "Controller Rx: plan, check and load" — Parameter | Plan | Edit | Controller | Check;
+  PID parameters as separate rows; controller off → Controller column empty, Check "Controller off".
+  Values are the plan's (`Experiment.plan_params`, copied from the profile); any edit → "Custom · based on
+  <profile>, not saved" (Reset available). Load profile to controller / plan-check use the plan values
+  (planned or preparing).
+
+## Versioning
+- PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). Until the first
+  stable release: `2.0.0.devN` with N = number of the last merged PR (now 2.0.0.dev19). After the test
+  fermentations: release **2.0.0** (git tag `v2.0.0`), then semantic versioning — bug fixes 2.0.1,
+  new features 2.1.0 (e.g. loop control), incompatible changes (data/format) 3.0.0; work in between is
+  `2.1.0.devN`. The version is shown in Settings › Credits.
+
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
 2. Choose the backup destination; consultation mode on the laptop.

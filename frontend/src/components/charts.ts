@@ -26,8 +26,8 @@ export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undef
   const bars = (bins ?? []).map((b) => [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min, b.complete]);
   const marks: object[] = [];
   if (sp !== null) marks.push({ yAxis: sp, lineStyle: { color: C.blue, type: "dashed", opacity: 0.6 }, label: { show: false } });
-  if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color: C.alert, type: "dotted" }, label: { show: false } });
-  if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color: C.alert, type: "dotted" }, label: { show: false } });
+  if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color: C.blue, type: "dotted", width: 1, opacity: 0.8 }, label: { show: false } });
+  if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color: C.blue, type: "dotted", width: 1, opacity: 0.8 }, label: { show: false } });
   return {
     animation: false,
     grid: { left: 44, right: 52, top: 12, bottom: 36 },
@@ -48,6 +48,9 @@ export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undef
     ],
   };
 }
+
+const SOLID = "path://M0,3h30v2h-30z";
+const DASHED = "path://M0,3h8v2h-8zM11,3h8v2h-8zM22,3h8v2h-8z";
 
 /** Main fermentation chart: two selectable variables, setpoints, limits, optional partner overlay. */
 export interface TrendVar { key: string; label: string; unit: string; setpoint?: string; limits?: [string, string]; digits: number; channel?: Channel }
@@ -94,9 +97,10 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
     const marks: object[] = [];
     const lo = v.limits ? lastVal(col(r, v.limits[0])) : null, hi = v.limits ? lastVal(col(r, v.limits[1])) : null;
     if (opts.limits && v.limits) {
-      const label = (t: string) => (opts.compact ? { show: false } : { formatter: t, color: C.alert, fontSize: 10, position: "insideEndTop" });
-      if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color: C.alert, type: "dotted", opacity: i ? 0.6 : 1 }, label: label(`${v.label} low ${lo}`) });
-      if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color: C.alert, type: "dotted", opacity: i ? 0.6 : 1 }, label: label(`${v.label} high ${hi}`) });
+      // limits in the variable's own colour, thin and dotted (setpoint: dashed; measured value: solid)
+      const label = (t: string) => (opts.compact ? { show: false } : { formatter: t, color: textColor, fontSize: 10, position: "insideEndTop" });
+      if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color, type: "dotted", width: 1, opacity: 0.85 }, label: label(`${v.label} low ${lo}`) });
+      if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color, type: "dotted", width: 1, opacity: 0.85 }, label: label(`${v.label} high ${hi}`) });
     }
     yAxes.push({ ...axisBase, type: "value", name: `${v.label}${v.unit ? ` (${v.unit})` : ""}`, nameLocation: "middle",
       nameGap: 44, position: i ? "right" : "left",
@@ -106,21 +110,24 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
         : { min: 0 }),
       axisLine: { show: true, lineStyle: { color: textColor, width: 1.5 } },
       axisLabel: { ...axisBase.axisLabel, color: textColor, formatter: (x: number) => x.toFixed(v.digits === 2 ? 2 : v.digits) } });
-    series.push({ type: "line", name: v.label, yAxisIndex: i, data: col(r, v.key), showSymbol: false,
+    series.push({ type: "line", name: v.label, yAxisIndex: i, data: col(r, v.key), showSymbol: false, symbol: "none",
       lineStyle: { color, width: i ? 2.2 : 1.8 }, itemStyle: { color }, markLine: { symbol: "none", silent: true, data: marks } });
     if (opts.setpoints && v.setpoint) {
-      series.push({ type: "line", name: `${v.label} setpoint`, yAxisIndex: i, data: col(r, v.setpoint), showSymbol: false,
+      series.push({ type: "line", name: `${v.label} setpoint`, yAxisIndex: i, data: col(r, v.setpoint), showSymbol: false, symbol: "none",
         step: "end", lineStyle: { color, width: 1.4, type: "dashed", opacity: 0.7 }, itemStyle: { color } });
     }
     if (i === 0 && opts.partner) {
       series.push({ type: "line", name: opts.partnerLabel ?? "Paired", yAxisIndex: 0, data: col(opts.partner, v.key),
-        showSymbol: false, lineStyle: { color: C.grey, width: 1.5 }, itemStyle: { color: C.grey }, z: 1 });
+        showSymbol: false, symbol: "none", lineStyle: { color: C.grey, width: 1.5 }, itemStyle: { color: C.grey }, z: 1 });
     }
   });
   return {
     animation: false,
     grid: opts.compact ? { left: 56, right: right ? 60 : 16, top: 12, bottom: 40 } : { left: 64, right: right ? 64 : 24, top: 28, bottom: 64 },
-    legend: opts.compact ? { show: false } : { bottom: 0, textStyle: { fontSize: 12 }, icon: "roundRect" },
+    // legend icons: solid line = measured value, dashed line = setpoint
+    legend: opts.compact ? { show: false } : { bottom: 0, textStyle: { fontSize: 12 }, itemWidth: 28, itemHeight: 8,
+      data: (series as { name?: string; type?: string }[]).filter((x) => x.type === "line" && x.name).map((x) => ({
+        name: x.name, icon: x.name!.endsWith("setpoint") ? DASHED : SOLID })) },
     tooltip: { trigger: "axis", confine: true,
       formatter: (ps: { axisValue: number; marker: string; seriesName: string; value: [number, number | null] }[]) => {
         const num = (x: number | null) => (x == null ? "—" : Number(x).toFixed(3).replace(/\.?0+$/, ""));

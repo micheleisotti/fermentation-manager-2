@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { EndExperimentButton, LoopButtons, StartExperimentButton } from "./ExperimentsList";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, usePolling } from "../hooks";
 import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
@@ -46,10 +47,11 @@ function Collapsible({ open, onToggle, icon, title, sub, aside, children, label 
   );
 }
 
-export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Experiment }) {
+export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; partner?: Experiment; onChange?: () => void }) {
   const nav = useNavigate();
-  const running = e.status === "fermenting";
-  const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id]);
+  const preparing = e.status === "preparing";
+  const running = e.status === "fermenting" || preparing;
+  const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id, e.status]);
   const partnerReadings = usePolling<Readings | undefined>(() => (partner ? api.readings(partner.id) : Promise.resolve(undefined)), 60000, [partner?.id]);
   const analysis = usePolling(() => api.analysis(e.id, 0.25), running ? 60000 : 600000, [e.id]);
   const live = usePolling(api.live, running ? 10000 : 600000);
@@ -126,7 +128,8 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
         <span className="stack" style={{ gap: 0, minWidth: 0 }}>
           <span style={{ fontSize: 17, fontWeight: 500 }}><span className="mono">{e.code}</span> · {e.strain || e.name}</span>
           <span className="xs muted">
-            {e.started_at ? <>t = <span className="mono">{fmtDuration(running ? r?.experiment?.t_h : null)}</span>{running ? " since start" : ""}</> : "Not started"}
+            {preparing ? <>Not recording · t = —</>
+              : e.started_at ? <>t = <span className="mono">{fmtDuration(running ? r?.experiment?.t_h : null)}</span>{running ? " since start" : ""}</> : "Not started"}
             {running && <> · reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</>}
           </span>
         </span>
@@ -211,6 +214,10 @@ export function PhoneFermentation({ e, partner }: { e: Experiment; partner?: Exp
           ))}
         </Collapsible>
       )}
+
+      {running && <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><LoopButtons e={e} compact /></div>}
+      {preparing && <StartExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
+      {running && !preparing && <EndExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
 
       {full && <FullscreenChart e={e} partner={partner} partnerReadings={partnerReadings.data} onClose={() => setFull(false)} />}
       {limitsDialog && s && (
@@ -306,7 +313,7 @@ function FullscreenChart({ e, partner, partnerReadings, onClose }:
   const [showSp, setShowSp] = useState(true);
   const [showLim, setShowLim] = useState(true);
   const [showPartner, setShowPartner] = useState(false);
-  const running = e.status === "fermenting";
+  const running = e.status === "fermenting" || e.status === "preparing";
   const live = usePolling(api.live, running ? 10000 : 600000);
   const tNow = live.data?.find((x) => x.reactor_id === e.reactor_id)?.experiment?.t_h;
   const rg = RANGES.find((x) => x.key === range)!;

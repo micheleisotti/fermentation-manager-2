@@ -2,21 +2,23 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { Icon } from "./ui";
 import { UserButton } from "./UserGate";
+import { ConnectionBanner } from "./ConnectionBanner";
 
 const NAV = [
   { to: "/", label: "Home", icon: "home", end: true },
   { to: "/experiments", label: "Experiments", icon: "flask" },
   { to: "/analysis", label: "Analysis", icon: "chart" },
-  { to: "/profiles", label: "Profiles", icon: "list" },
+  { to: "/library", label: "Library", icon: "list" },
   { to: "/settings", label: "Settings", icon: "gear" },
 ];
 
 const NEW_ITEMS = [
   { label: "Experiment", hint: "Plan a new fermentation", icon: "flask", to: "/experiments/new" },
   { label: "Analysis session", hint: "Compare completed experiments", icon: "chart", to: "/analysis/new" },
-  { label: "Controller profile", hint: "Named set of setpoints", icon: "sliders", to: "/profiles/new" },
-  { label: "Medium", hint: "Add to the medium list", icon: "flask", to: "/settings#lists" },
-  { label: "Buffer / base", hint: "Add to the buffer list", icon: "drop", to: "/settings#lists" },
+  { label: "Controller profile", hint: "Named set of setpoints", icon: "sliders", to: "/library?tab=profiles" },
+  { label: "Medium", hint: "Add to the Library", icon: "flask", to: "/library?tab=media" },
+  { label: "Buffer / base", hint: "Add to the Library", icon: "drop", to: "/library?tab=buffers" },
+  { label: "Manual variable", hint: "e.g. residual sugar (Library)", icon: "chart", to: "/library?tab=variables" },
 ];
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -58,7 +60,7 @@ export function Shell({ children }: { children: ReactNode }) {
         ))}
         <UserButton />
       </nav>
-      <main className="main">{children}</main>
+      <main className="main"><ConnectionBanner />{children}</main>
     </div>
   );
 }

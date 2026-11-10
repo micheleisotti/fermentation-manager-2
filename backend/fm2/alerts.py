@@ -73,6 +73,7 @@ class ReactorAlertState:
     params: AlertParams = field(default_factory=AlertParams)
     # channels in use: rules for a channel switched off stay silent ("controller silent" always applies)
     channels: frozenset = field(default_factory=lambda: frozenset(CHANNELS))
+    pre_start: bool = False   # preparing phase: limits, setpoints and silence only (no base-dosing rules)
     _first: bool = True
     _last_ok: Optional[datetime] = None
     _silent_alerted: bool = False
@@ -84,6 +85,10 @@ class ReactorAlertState:
     _peak_rate: float = 0.0
     _low_since: Optional[datetime] = None
     _finished_sent: bool = False
+
+    @property
+    def _when(self) -> str:
+        return "when monitoring began" if self.pre_start else "at Start"
 
     # -- called by the command service before writing a setpoint ---------------------
     def expect_setpoint(self, parameter: str, value: float) -> None:
@@ -156,7 +161,7 @@ class ReactorAlertState:
             if first and not st.alerted:
                 st.alerted = True
                 return [AlertEvent("out_of_limits_at_start", "alert",
-                                   f"{self.reactor_id}: {label} {_fmt(param, v)} outside limits at Start ({rng})", param)]
+                                   f"{self.reactor_id}: {label} {_fmt(param, v)} outside limits {self._when} ({rng})", param)]
             if not st.alerted and (now - st.outside_since).total_seconds() >= self.params.out_of_limits_after_s:
                 st.alerted = True
                 mins = int((now - st.outside_since).total_seconds() // 60)
@@ -187,7 +192,7 @@ class ReactorAlertState:
         if first and within:
             st.armed = False
             return [AlertEvent("already_at_setpoint", "good",
-                               f"{self.reactor_id}: {label} already at setpoint {_fmt(param, sp)} at Start", param)]
+                               f"{self.reactor_id}: {label} already at setpoint {_fmt(param, sp)} {self._when}", param)]
         if within:
             if st.within_since is None:
                 st.within_since = now
@@ -200,7 +205,7 @@ class ReactorAlertState:
         return []
 
     def _finished_rule(self, snap: ControllerSnapshot, now: datetime) -> list[AlertEvent]:
-        if snap.base_cumulative_ml is None or self._finished_sent:
+        if self.pre_start or snap.base_cumulative_ml is None or self._finished_sent:
             return []
         self._cum.append((now, snap.base_cumulative_ml))
         horizon = self.params.rate_window_s

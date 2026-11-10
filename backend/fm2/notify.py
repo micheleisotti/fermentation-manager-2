@@ -47,7 +47,13 @@ def send(cfg: dict, title: str, message: str, severity: str = "info",
         else:
             raise NotifyError("no notification channel configured")
         if r.status_code >= 400:
-            raise NotifyError(f"{ch}: HTTP {r.status_code} {r.text[:200]}")
+            hint = ""
+            if ch == "telegram" and r.status_code == 401:
+                hint = (" — the bot token is not valid: copy it again from @BotFather (/mybots → your bot → API Token;"
+                        " /revoke issues a new one and invalidates the old).")
+            elif ch == "telegram" and r.status_code in (400, 403):
+                hint = (" — check the chat id, and open the chat with your bot and press Start (a bot cannot write first).")
+            raise NotifyError(f"{ch}: HTTP {r.status_code} {r.text[:200]}{hint}")
     except httpx.HTTPError as e:
         raise NotifyError(f"{ch}: {e}") from e
     finally:
@@ -98,3 +104,33 @@ class Notifier:
         while not self._q.empty() and time.monotonic() < end:
             time.sleep(0.02)
         time.sleep(0.05)
+
+
+def telegram_chats(token: str, client: Optional[httpx.Client] = None) -> list[dict]:
+    """
+    Chats that recently wrote to the bot (getUpdates), newest first, without bots:
+    the user writes anything to the bot, then picks their chat here.
+    """
+    own = client is None
+    client = client or httpx.Client(timeout=10)
+    try:
+        r = client.get(f"https://api.telegram.org/bot{token}/getUpdates")
+        if r.status_code == 401:
+            raise NotifyError("telegram: the bot token is not valid (HTTP 401)")
+        if r.status_code >= 400:
+            raise NotifyError(f"telegram: HTTP {r.status_code} {r.text[:200]}")
+        seen: dict[int, dict] = {}
+        for u in reversed(r.json().get("result", [])):
+            msg = u.get("message") or u.get("edited_message") or u.get("channel_post") or (u.get("my_chat_member") or {})
+            chat = msg.get("chat") or {}
+            if not chat or chat.get("id") in seen or chat.get("is_bot"):
+                continue
+            name = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) \
+                or chat.get("username") or str(chat["id"])
+            seen[chat["id"]] = {"id": str(chat["id"]), "name": name, "type": chat.get("type", "")}
+        return list(seen.values())
+    except httpx.HTTPError as e:
+        raise NotifyError(f"telegram: {e}") from e
+    finally:
+        if own:
+            client.close()

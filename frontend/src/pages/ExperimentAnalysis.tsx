@@ -74,7 +74,7 @@ export function ExperimentAnalysisPage() {
         <div className="row" style={{ gap: 12 }}>
           <Link to={`/experiments/${e.id}`} className="btn icon text" aria-label="Back to the experiment"><Icon name="back" /></Link>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — <i>L. plantarum</i> {e.strain}</>}</h1>
+            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — {e.strain}</>}</h1>
             <span className="small muted">Bioreactor {e.reactor_id.slice(1)}
               {e.started_at && ` · ${new Date(e.started_at).toLocaleDateString()}`}
               {a?.summary.recorded_h != null && ` · recorded ${fmt(a.summary.recorded_h, 1)} h`}
@@ -86,7 +86,7 @@ export function ExperimentAnalysisPage() {
         <ModeTabs e={e} current="analysis" />
       </header>
 
-      {running && <div className="card tight small" style={{ background: "#fff8e1" }}>
+      {running && <div className="card tight small" style={{ background: "var(--warn-container)" }}>
         The experiment is still recording: parameters are provisional and are recalculated every minute.</div>}
       {an.error && <div className="card tight" style={{ color: "#b30020" }}>Analysis failed: {an.error}</div>}
       {!a ? <div className="muted">Calculating…</div> : (
@@ -208,7 +208,9 @@ function pm(v: number | undefined | null, se: number | undefined | null, d: numb
 }
 
 function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string; setModel: (m: string) => void }) {
-  const vars = Object.keys(a.fits);
+  const vars = Object.keys(a.fits).filter((k) => !a.fits[k].skipped);
+  const skipped = Object.keys(a.fits).filter((k) => a.fits[k].skipped);
+  const products = vars.filter((k) => a.manual[k]?.category === "product");
   const rows: { p: string; u: string; v: (k: string) => string }[] = [
     { p: "Lag time λ", u: "(h)", v: (k) => pm(a.fits[k].params?.lag_h, a.fits[k].params?.lag_se, 2) },
     { p: "μmax", u: "(h⁻¹)", v: (k) => pm(a.fits[k].params?.mu_max_per_h, a.fits[k].params?.mu_max_se, 3) },
@@ -246,7 +248,7 @@ function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string
       {vars.length === 0 ? <span className="muted">No manual measurements: nothing to fit.</span> : (
         <div className="table-wrap">
           <table className="data">
-            <thead><tr><th>Parameter</th>{vars.map((k) => <th key={k} className="num">on {k}</th>)}</tr></thead>
+            <thead><tr><th>Parameter</th>{vars.map((k) => <th key={k} className="num">on {k}{a.manual[k]?.category === "product" ? " (product)" : ""}</th>)}</tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.p}><td>{r.p} <span className="muted">{r.u}</span></td>
@@ -261,7 +263,9 @@ function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string
           {vars.filter((k) => a.fits[k].error).map((k) => (
             <div key={k} className="small" style={{ color: "#8a5a00", marginTop: 6 }}><b>{k}:</b> {a.fits[k].error}</div>
           ))}
-          <div className="small muted" style={{ marginTop: 6 }}>Fitted on y = ln(X/X₀), X₀ = first measurement; ± = standard error of the fit.</div>
+          <div className="small muted" style={{ marginTop: 6 }}>Fitted on y = ln(X/X₀), X₀ = first measurement; ± = standard error of the fit.
+            {products.length > 0 && <> For product variables ({products.join(", ")}) λ and μmax describe accumulation (specific accumulation rate), not growth.</>}
+            {skipped.length > 0 && <> Not fitted (substrate/other role): {skipped.join(", ")}.</>}</div>
         </div>
       )}
       {bd ? (
@@ -302,6 +306,8 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
   const [width, setWidth] = useState("174");
   const [dpi, setDpi] = useState("300");
   const [theme, setTheme] = useState("grey");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<{ ok: boolean; text: string } | null>(null);
   const w = Number(width);
   const widthOk = Number.isFinite(w) && w >= 40 && w <= 500;
   const dataUrl = `/api/experiments/${e.id}/export.${format}?blocks=${blocks.join(",")}&model=${model}${resample ? `&resample_min=${resample}` : ""}`;
@@ -331,9 +337,21 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
       </fieldset>
       <Segmented label="Data format" value={format} onChange={setFormat}
         options={[{ value: "zip", label: "CSV (zip)" }, { value: "xlsx", label: "XLSX · one sheet per block" }]} />
-      <a className={`btn filled ${blocks.length ? "" : "disabled"}`} href={blocks.length ? dataUrl : undefined} download
-        aria-disabled={!blocks.length} style={{ justifyContent: "center" }}>Export data</a>
-      <div style={{ height: 1, background: "#eef0f4" }} />
+      <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
+        <a className="btn filled" href={blocks.length ? dataUrl : undefined} download
+          aria-disabled={!blocks.length} style={{ justifyContent: "center", flex: "1 1 0" }}>Download</a>
+        <button className="btn tonal" style={{ justifyContent: "center", flex: "1 1 0" }} disabled={!blocks.length || saving}
+          title="Written by the lab PC into the archive folder (Settings › Data and backup), e.g. a USB stick"
+          onClick={async () => {
+            setSaving(true); setSaved(null);
+            try { const r = await api.archiveCopy(e.id, { format, blocks, resample_min: resample ? Number(resample) : null, model }); setSaved({ ok: true, text: r.path }); }
+            catch (x) { setSaved({ ok: false, text: (x as Error).message }); }
+            finally { setSaving(false); }
+          }}>{saving ? "Saving…" : "Save to archive"}</button>
+      </div>
+      {saved && <div className={`banner ${saved.ok ? "good" : "warn"} small`} role="status">
+        {saved.ok ? <>Saved: <span className="mono">{saved.text}</span></> : saved.text}</div>}
+      <div style={{ height: 1, background: "var(--surface-container)" }} />
       <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0, gap: 10 }}>
         <legend className="small muted" style={{ paddingBottom: 6 }}>Figure (the panels shown above)</legend>
         <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -369,7 +387,7 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
 export function AnalysisHome() {
   const list = usePolling(() => api.experiments(), 60000);
   const sessions = usePolling(api.sessions, 60000);
-  const done = (list.data ?? []).filter((x) => x.status !== "planned")
+  const done = (list.data ?? []).filter((x) => x.status !== "planned" && !x.archived)
     .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
   return (
     <>

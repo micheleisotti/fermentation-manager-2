@@ -35,6 +35,7 @@ class Base(DeclarativeBase):
 
 class ExperimentStatus(str, enum.Enum):
     planned = "planned"
+    preparing = "preparing"    # live page open, monitoring and alerts on, not recording the run yet
     fermenting = "fermenting"
     completed = "completed"
     aborted = "aborted"
@@ -82,6 +83,7 @@ class Variable(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True)
     unit: Mapped[str] = mapped_column(String(40), default="")
     category: Mapped[VariableCategory] = mapped_column(Enum(VariableCategory))
+    archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
 
 
 class ControllerProfile(Base):
@@ -130,10 +132,17 @@ class Experiment(Base):
     profile_id: Mapped[Optional[int]] = mapped_column(ForeignKey("controller_profiles.id"))
     # Plan as loaded at Start (frozen copy, so later profile edits don't rewrite history).
     plan_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Controller parameters of this plan (setpoints, limits, pH control): copied from the profile and
+    # editable; differs from the profile when edited ("custom, based on <profile>")
+    plan_params: Mapped[Optional[dict]] = mapped_column(JSON)
+    prepared_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # "Go to fermentation"
     parallel_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parallel_runs.id"))
     # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)
     channels: Mapped[Optional[list]] = mapped_column(JSON)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Hidden from Home and from analysis-session pickers (reversible; nothing is deleted)
+    archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    end_note: Mapped[Optional[str]] = mapped_column(Text)   # reason given at End of experiment (e.g. why aborted)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # t = 0
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

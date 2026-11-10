@@ -23,7 +23,10 @@ export function usePolling<T>(load: () => Promise<T>, ms: number, deps: unknown[
       timer = window.setTimeout(tick, ms);
     };
     tick();
-    return () => window.clearTimeout(timer);
+    // phone screen on again / app back in front: refresh now instead of waiting for the next tick
+    const now = () => { void refresh(); };
+    window.addEventListener("fm2-refresh", now);
+    return () => { window.clearTimeout(timer); window.removeEventListener("fm2-refresh", now); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

@@ -36,9 +36,22 @@ def test_settings_defaults_validation_and_live_apply(env):
     # remote changes can be switched off
     ok["allow_remote_setpoints"] = False
     c.put("/api/settings/remote", json=ok)
-    assert c.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "remote"}).status_code == 403
-    assert c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 5.7, "origin": "remote"}).status_code == 403
-    assert c.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "local"}).status_code == 200
+    # remote vs local is decided from the connection (Tailscale address), not from what the browser says
+    rc = TestClient(app, client=("100.101.102.103", 50000))
+    assert rc.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "local"}).status_code == 403
+    assert rc.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 5.7}).status_code == 403
+    assert c.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.1, "origin": "remote"}).status_code == 200
+    # remote and backup settings can be changed only on the lab PC
+    ok["allow_remote_setpoints"] = True
+    assert rc.put("/api/settings/remote", json=ok).status_code == 403
+    assert rc.put("/api/settings/backup", json=c.get("/api/settings").json()["backup"]).status_code == 403
+    assert rc.get("/api/system").json()["client_local"] is False and c.get("/api/system").json()["client_local"] is True
+    # through "tailscale serve" (HTTPS) requests come from 127.0.0.1 with forwarding headers: remote
+    assert c.get("/api/system", headers={"X-Forwarded-For": "100.80.1.2"}).json()["client_local"] is False
+    assert c.get("/api/system", headers={"Tailscale-User-Login": "someone@example.org"}).json()["client_local"] is False
+    c.put("/api/settings/remote", json=ok)
+    r = rc.post("/api/reactors/R1/setpoints", json={"parameter": "ph", "value": 6.0}).json()
+    assert r["status"] == "confirmed"
     # alert thresholds apply to running experiments
     a = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1"}).json()
     c.post(f"/api/experiments/{a['id']}/start")
@@ -53,13 +66,13 @@ def test_settings_defaults_validation_and_live_apply(env):
 def test_secrets_are_masked(env):
     c, *_ = env
     n = c.get("/api/settings").json()["notifications"]
-    n.update(channel="telegram", telegram_token="123:SECRET", telegram_chat_id="42")
+    n.update(channel="telegram", telegram_token="123456789:AAHsecretSECRETsecret_secret-SECRETsec", telegram_chat_id="42")
     out = c.put("/api/settings/notifications", json=n).json()
     assert out["telegram_token"] == "••••••" and out["telegram_chat_id"] == "42"
     # sending the mask back keeps the stored token
     out["telegram_chat_id"] = "43"
     c.put("/api/settings/notifications", json=out)
-    assert c.app.state.app_settings.get("notifications")["telegram_token"] == "123:SECRET"
+    assert c.app.state.app_settings.get("notifications")["telegram_token"] == "123456789:AAHsecretSECRETsecret_secret-SECRETsec"
     n2 = dict(out); n2.update(channel="ntfy", ntfy_topic="")
     assert c.put("/api/settings/notifications", json=n2).status_code == 422   # topic required
 
@@ -156,3 +169,28 @@ def test_system_status_parsing(env):
     c, *_ = env
     st = c.get("/api/system/status").json()
     assert st["server"]["uptime_s"] >= 0 and st["remote"]["state"] in ("available", "not_available", "unknown")
+
+
+def test_telegram_token_normalised_and_checked():
+    from fm2.services.app_settings import normalize_telegram_token, _validate, SettingsError
+    tok = "123456789:AAHfakeFAKEfake_fake-fakeFAKEfake12345"
+    for raw in (tok, f" {tok} ", f"bot{tok}", f'"{tok}"', f"https://api.telegram.org/bot{tok}/getMe"):
+        assert normalize_telegram_token(raw) == tok
+    ok = _validate("notifications", {"channel": "telegram", "telegram_token": f"bot{tok}", "telegram_chat_id": "42"})
+    assert ok["telegram_token"] == tok
+    import pytest as _pt
+    with _pt.raises(SettingsError):
+        _validate("notifications", {"channel": "telegram", "telegram_token": "not-a-token", "telegram_chat_id": "42"})
+
+
+def test_telegram_chats_skips_the_bot():
+    import httpx
+    from fm2.notify import telegram_chats
+    data = {"ok": True, "result": [
+        {"update_id": 1, "message": {"from": {"id": 555, "is_bot": False}, "chat": {"id": 555, "first_name": "Michele", "type": "private"}}},
+        {"update_id": 2, "my_chat_member": {"chat": {"id": -1001, "title": "Lab group", "type": "supergroup"}}},
+        {"update_id": 3, "message": {"chat": {"id": 555, "first_name": "Michele", "type": "private"}}},
+    ]}
+    client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=data)))
+    chats = telegram_chats("123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", client)
+    assert [c["id"] for c in chats] == ["555", "-1001"] and chats[0]["name"] == "Michele"

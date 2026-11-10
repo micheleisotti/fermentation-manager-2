@@ -10,6 +10,7 @@ import { LimitsDialog } from "../components/LimitsDialog";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 import { ModeTabs } from "./ExperimentAnalysis";
+import { ArchiveButton, EndExperimentButton, ExpTags, LoopButtons, StartExperimentButton } from "./ExperimentsList";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -22,11 +23,11 @@ export function ExperimentPage() {
   const partner = (all.data ?? []).find((x) => e.parallel_partner_codes.includes(x.code));
   if (e.status === "planned") return <Planning key={e.id} existing={e} onChange={exp.refresh} />;
   return phone
-    ? <PhoneFermentation key={e.id} e={e} partner={partner} />
+    ? <PhoneFermentation key={e.id} e={e} partner={partner} onChange={exp.refresh} />
     : <FermentationView e={e} partner={partner} onChange={exp.refresh} />;
 }
 
-function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
+function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment; onArchive?: () => void }) {
   const nav = useNavigate();
   return (
     <>
@@ -34,7 +35,7 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
         <Link to="/" className="btn icon text" aria-label="Back to home"><Icon name="back" /></Link>
         {e.parallel_run_code && partner && (
           <div className="row" role="tablist" aria-label="Reactor" style={{ gap: 8 }}>
-            <span className="small muted">Parallel run <b className="mono" style={{ color: "#22294d" }}>{e.parallel_run_code}</b></span>
+            <span className="small muted">Parallel run <b className="mono" style={{ color: "var(--ink)" }}>{e.parallel_run_code}</b></span>
             {[e, partner].sort((a, b) => a.reactor_id.localeCompare(b.reactor_id)).map((x) => (
               <button key={x.id} role="tab" aria-selected={x.id === e.id} className={`btn ${x.id === e.id ? "filled" : "outlined"}`}
                 style={{ height: 44 }} onClick={() => nav(`/experiments/${x.id}`)}>
@@ -47,14 +48,19 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
       <header className="row between">
         <div className="row" style={{ gap: 12 }}>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — <i>L. plantarum</i> {e.strain}</>}</h1>
+            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — {e.strain}</>}</h1>
             <span className="small muted">Bioreactor {e.reactor_id.slice(1)}{e.started_at && ` · started ${new Date(e.started_at).toLocaleString()}`}
               {e.parallel_run_code && ` · parallel run ${e.parallel_run_code}`}</span>
           </div>
           <StatusChip status={e.status} />
+          <ExpTags e={e} />
         </div>
         <div className="row" style={{ gap: 12 }}>
           <ModeTabs e={e} current="fermentation" />
+          {e.status === "preparing" && <button className="btn text" onClick={async () => {
+            if (window.confirm(`Back to planning? ${e.code} leaves the live page (nothing has been recorded yet).`)) { await api.unprepare(e.id); onArchive?.(); }
+          }}>Back to planning</button>}
+          <ArchiveButton e={e} onDone={onArchive ?? (() => undefined)} />
           <DeleteExperiment e={e} />
         </div>
       </header>
@@ -63,8 +69,9 @@ function Header({ e, partner }: { e: Experiment; partner?: Experiment }) {
 }
 
 function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: Experiment; onChange: () => void }) {
-  const running = e.status === "fermenting";
-  const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id]);
+  const preparing = e.status === "preparing";
+  const running = e.status === "fermenting" || preparing;   // live: polling and current values
+  const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id, e.status]);
   const partnerReadings = usePolling<Readings | undefined>(() => (partner ? api.readings(partner.id) : Promise.resolve(undefined)), 60000, [partner?.id]);
   const [binH, setBinH] = useState<"0.25" | "1">("0.25");
   const analysis = usePolling(() => api.analysis(e.id, Number(binH)), running ? 60000 : 600000, [e.id, binH]);
@@ -100,8 +107,24 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
 
   return (
     <>
-      <Header e={e} partner={partner} />
-      {running && (
+      <Header e={e} partner={partner} onArchive={onChange} />
+      {e.end_note && <div className={`banner ${e.status === "aborted" ? "alert" : "warn"} small`} role="note">
+        <b>{e.status === "aborted" ? "Aborted" : "Ended"}{e.ended_at ? ` ${new Date(e.ended_at).toLocaleString()}` : ""}:</b>&nbsp;{e.end_note}</div>}
+      {preparing && (
+        <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
+          <div className="row" style={{ gap: 24 }}>
+            <span className="row" style={{ gap: 8, color: "var(--data-orange-text)", fontWeight: 600 }}><span className="dot" style={{ width: 10, height: 10, background: "#f9b112" }} />Not recording</span>
+            <span>t = <span className="mono" style={{ fontSize: 20, fontWeight: 600 }}>—</span></span>
+            <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
+              {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <LoopButtons e={e} />
+            <StartExperimentButton e={e} onDone={onChange} />
+          </div>
+        </div>
+      )}
+      {running && !preparing && (
         <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
           <div className="row" style={{ gap: 24 }}>
             <span className="row" style={{ gap: 8, color: "#1f7a63", fontWeight: 600 }}><span className="dot ok" style={{ width: 10, height: 10 }} />Recording</span>
@@ -109,9 +132,10 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
-          <button className="btn outlined" style={{ color: "#22294d" }} onClick={async () => {
-            if (window.confirm(`End production of ${e.code}? Recording stops and the experiment becomes Completed.`)) { await api.end(e.id); onChange(); }
-          }}><Icon name="stop" size={16} />End of production</button>
+          <div className="row" style={{ gap: 8 }}>
+            <LoopButtons e={e} />
+            <EndExperimentButton e={e} onDone={onChange} />
+          </div>
         </div>
       )}
 
@@ -179,7 +203,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 { p: "temperature", v: fmt(s.temperature, 1), u: "°C", l: `T · set ${fmt(s.temperature_setpoint, 1)} · limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} · heating ${fmt(s.extra?.heating_pct, 0)} % · cooling ${fmt(s.extra?.cooling_pct, 0)} %` },
                 { p: "stirrer", v: fmt(s.stirrer, 0), u: "rpm", l: `Stirrer · set ${fmt(s.stirrer_setpoint, 0)}` },
               ].filter((row) => ch.includes(row.p as Channel)).map((row) => (
-                <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
+                <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
                   <DataValue value={row.v} unit={row.u} label={row.l} color={row.c} />
                   <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
                     {row.p !== "stirrer" && <button className="btn text" onClick={() => setLimitsDialog(row.p)} aria-label={`Edit ${row.p} process limits`}>Limits</button>}
@@ -188,13 +212,13 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 </div>
               ))}
               {ch.includes("do2") && (
-                <div className="row between" style={{ padding: "8px", borderBottom: "1px solid #eef0f4" }}>
+                <div className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
                   <DataValue value={fmt(s.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s.extra?.do2_setpoint, 1)} · N2 ${fmt(s.extra?.n2_pct, 0)} % · air ${fmt(s.extra?.air_pct, 0)} %`} />
                   <span className="xs muted">set on the controller</span>
                 </div>
               )}
               <span className="xs muted" style={{ padding: "4px 8px" }}>
-                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the profile at planning; dose calibration, interlocks and actuators stay on the controller.
+                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the plan, loaded before Start; dose calibration, interlocks and actuators stay on the controller.
               </span>
             </section>
           )}
