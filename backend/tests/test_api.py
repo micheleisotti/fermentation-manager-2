@@ -426,3 +426,26 @@ def test_prepare_phase_and_plan_params(env):
     ev = c.get(f"/api/experiments/{e['id']}/events").json()
     assert any(x["kind"] == "prepared" and x["t_h"] < -1.4 for x in ev)
     assert c.get(f"/api/experiments/{e['id']}").json()["plan_snapshot"]["custom"] is True
+
+
+def test_counter_reset_is_stitched_in_readings_and_logged(env):
+    c, clock, app, drivers = env
+    e = c.post("/api/experiments", json={"name": "reset", "reactor_id": "R1", "strain": "Lp187"}).json()
+    c.post(f"/api/experiments/{e['id']}/start")
+    run_hours(app, clock, 8)
+    before = drivers["R1"]._base_ml
+    assert before > 0.5
+    drivers["R1"]._base_ml = 0.0          # counter reset on the controller (power cycle)
+    run_hours(app, clock, 2)
+    r = c.get(f"/api/experiments/{e['id']}/readings").json()
+    cols = r["columns"]
+    cum = [row[cols.index("base_cumulative_ml")] for row in r["rows"]]
+    assert "base_counter_raw_ml" in cols
+    assert all(b >= a - 1e-9 for a, b in zip(cum, cum[1:]))   # never goes back
+    assert cum[-1] >= before - 0.05
+    late = c.get(f"/api/experiments/{e['id']}/readings?since_h=9").json()
+    assert late["rows"][-1][late["columns"].index("base_cumulative_ml")] == pytest.approx(cum[-1])
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    assert sum(x["kind"] == "counter_reset" for x in ev) == 1
+    p = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    assert p["summary"]["total_base_ml"] >= before - 0.05

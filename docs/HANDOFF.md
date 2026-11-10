@@ -55,7 +55,10 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   logged). Alerts:
   out-of-limits (immediately at Start, then after 3 min, once per excursion),
   setpoint reached (once per setpoint; "already at setpoint" at Start), controller silent,
-  setpoint changed on controller, fermentation probably finished.
+  setpoint changed on controller, fermentation probably finished, base counter reset (info).
+- Base counter resets (power cycle / reset on the display: seen 9→10 Nov, 1.61 → 0.00 mL): the raw
+  counter is stored as read; readings, charts, totals and exports use it continued across resets
+  (`base_dosing.stitch_counter`, drop > 0.05 mL = reset); exports then also carry `base_counter_raw_ml`.
 - Colours: green = running/good, blue = completed, red only for alerts/limits.
 - Analysis: Gompertz (Zwietering) on OD600 or AFU, base-dosing parameters, Welch + CI,
   ANOVA + Tukey; ggplot-style figures (points every 1/2/4 h, SD error bars, facets).
@@ -213,11 +216,11 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   (planned or preparing).
 
 ## Versioning
-- PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). Until the first
-  stable release: `2.0.0.devN` with N = number of the last merged PR (now 2.0.0.dev19). After the test
-  fermentations: release **2.0.0** (git tag `v2.0.0`), then semantic versioning — bug fixes 2.0.1,
-  new features 2.1.0 (e.g. loop control), incompatible changes (data/format) 3.0.0; work in between is
-  `2.1.0.devN`. The version is shown in Settings › Credits.
+- PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). 2.0.0.dev1–dev19
+  followed the merged PR numbers. Since the loop-control work (new functions) the line is **2.1.0.devN**,
+  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21).
+  Release 2.1.0 (git tag) after the test fermentations; then semantic versioning — bug fixes 2.1.1,
+  new features 2.2.0, incompatible changes (data/format) 3.0.0. The version is shown in Settings › Credits.
 
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.
