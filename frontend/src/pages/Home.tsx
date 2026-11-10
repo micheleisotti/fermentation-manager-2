@@ -73,7 +73,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
       <div className="row between" style={{ alignItems: "flex-start" }}>
         <div className="stack" style={{ gap: 4 }}>
           <span className="kicker">Bioreactor {label(r.reactor_id)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
-          <span style={{ fontSize: 18, fontWeight: 500 }}><span className="mono">{exp.code}</span> · <i>L. plantarum</i> {exp.strain || "—"}</span>
+          <span style={{ fontSize: 18, fontWeight: 500 }}><span className="mono">{exp.code}</span> · {exp.strain || "—"}</span>
         </div>
         <StatusChip status={exp.status ?? "fermenting"} />
       </div>

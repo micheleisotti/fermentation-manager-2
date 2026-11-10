@@ -48,7 +48,7 @@ function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment
       <header className="row between">
         <div className="row" style={{ gap: 12 }}>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — <i>L. plantarum</i> {e.strain}</>}</h1>
+            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — {e.strain}</>}</h1>
             <span className="small muted">Bioreactor {e.reactor_id.slice(1)}{e.started_at && ` · started ${new Date(e.started_at).toLocaleString()}`}
               {e.parallel_run_code && ` · parallel run ${e.parallel_run_code}`}</span>
           </div>

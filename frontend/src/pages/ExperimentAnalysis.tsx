@@ -74,7 +74,7 @@ export function ExperimentAnalysisPage() {
         <div className="row" style={{ gap: 12 }}>
           <Link to={`/experiments/${e.id}`} className="btn icon text" aria-label="Back to the experiment"><Icon name="back" /></Link>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — <i>L. plantarum</i> {e.strain}</>}</h1>
+            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — {e.strain}</>}</h1>
             <span className="small muted">Bioreactor {e.reactor_id.slice(1)}
               {e.started_at && ` · ${new Date(e.started_at).toLocaleDateString()}`}
               {a?.summary.recorded_h != null && ` · recorded ${fmt(a.summary.recorded_h, 1)} h`}
