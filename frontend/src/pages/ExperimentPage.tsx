@@ -10,7 +10,8 @@ import { LimitsDialog } from "../components/LimitsDialog";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 import { ModeTabs } from "./ExperimentAnalysis";
-import { ArchiveButton, EndExperimentButton, ExpTags } from "./ExperimentsList";
+import { ArchiveButton, EndExperimentButton, ExpTags, StartExperimentButton } from "./ExperimentsList";
+import { ControllerCheckCard } from "./Planning";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -66,8 +67,9 @@ function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment
 }
 
 function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: Experiment; onChange: () => void }) {
-  const running = e.status === "fermenting";
-  const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id]);
+  const preparing = e.status === "preparing";
+  const running = e.status === "fermenting" || preparing;   // live: polling and current values
+  const readings = usePolling(() => api.readings(e.id), running ? 30000 : 600000, [e.id, e.status]);
   const partnerReadings = usePolling<Readings | undefined>(() => (partner ? api.readings(partner.id) : Promise.resolve(undefined)), 60000, [partner?.id]);
   const [binH, setBinH] = useState<"0.25" | "1">("0.25");
   const analysis = usePolling(() => api.analysis(e.id, Number(binH)), running ? 60000 : 600000, [e.id, binH]);
@@ -106,7 +108,24 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
       <Header e={e} partner={partner} onArchive={onChange} />
       {e.end_note && <div className={`banner ${e.status === "aborted" ? "alert" : "warn"} small`} role="note">
         <b>{e.status === "aborted" ? "Aborted" : "Ended"}{e.ended_at ? ` ${new Date(e.ended_at).toLocaleString()}` : ""}:</b>&nbsp;{e.end_note}</div>}
-      {running && (
+      {preparing && (
+        <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
+          <div className="row" style={{ gap: 24 }}>
+            <span className="row" style={{ gap: 8, color: "var(--data-orange-text)", fontWeight: 600 }}><span className="dot" style={{ width: 10, height: 10, background: "#f9b112" }} />Preparing · not recording yet</span>
+            <span className="small">Monitoring for <span className="mono">{fmtDuration(r?.experiment?.t_h)}</span> · alerts on</span>
+            <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
+              {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn text" onClick={async () => {
+              if (window.confirm(`Back to planning? Monitoring stops and the readings taken while preparing ${e.code} are discarded.`)) { await api.unprepare(e.id); onChange(); }
+            }}>Back to planning</button>
+            <StartExperimentButton e={e} onDone={onChange} />
+          </div>
+        </div>
+      )}
+      {preparing && <ControllerCheckCard e={e} />}
+      {running && !preparing && (
         <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
           <div className="row" style={{ gap: 24 }}>
             <span className="row" style={{ gap: 8, color: "#1f7a63", fontWeight: 600 }}><span className="dot ok" style={{ width: 10, height: 10 }} />Recording</span>
@@ -197,7 +216,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 </div>
               )}
               <span className="xs muted" style={{ padding: "4px 8px" }}>
-                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the profile at planning; dose calibration, interlocks and actuators stay on the controller.
+                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the plan, loaded before Start; dose calibration, interlocks and actuators stay on the controller.
               </span>
             </section>
           )}

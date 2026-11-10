@@ -35,6 +35,7 @@ class Base(DeclarativeBase):
 
 class ExperimentStatus(str, enum.Enum):
     planned = "planned"
+    preparing = "preparing"    # live page open, monitoring and alerts on, not recording the run yet
     fermenting = "fermenting"
     completed = "completed"
     aborted = "aborted"
@@ -131,6 +132,10 @@ class Experiment(Base):
     profile_id: Mapped[Optional[int]] = mapped_column(ForeignKey("controller_profiles.id"))
     # Plan as loaded at Start (frozen copy, so later profile edits don't rewrite history).
     plan_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Controller parameters of this plan (setpoints, limits, pH control): copied from the profile and
+    # editable; differs from the profile when edited ("custom, based on <profile>")
+    plan_params: Mapped[Optional[dict]] = mapped_column(JSON)
+    prepared_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # "Go to fermentation"
     parallel_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parallel_runs.id"))
     # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)
     channels: Mapped[Optional[list]] = mapped_column(JSON)

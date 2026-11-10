@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow, DEFAULT_CHANNELS, type Channel } from "../api";
+import { api, type Experiment, type ExperimentDraft, type Named, type PlanCheckRow, type PlanParams, type Profile, DEFAULT_CHANNELS, type Channel } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 import { DeleteExperiment } from "../components/DeleteExperiment";
@@ -93,12 +93,11 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   const [d, setD] = useState<ExperimentDraft>(() => existing ? {
     name: existing.name, reactor_id: existing.reactor_id, planned_date: existing.planned_date, strain: existing.strain,
     medium_id: existing.medium_id, buffer_id: existing.buffer_id, working_volume_ml: existing.working_volume_ml,
-    profile_id: existing.profile_id, notes: existing.notes, channels: existing.channels,
+    profile_id: existing.profile_id, notes: existing.notes, channels: existing.channels, plan_params: existing.plan_params,
   } : { name: "", reactor_id: preselected === "R2" ? "R2" : "R1", planned_date: today(), strain: "", notes: "", channels: [...DEFAULT_CHANNELS] });
   const [do2Notice, setDo2Notice] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ kind: "good" | "alert" | "warn"; text: string } | null>(null);
-  const [checking, setChecking] = useState(false);
   const set = (patch: Partial<ExperimentDraft>) => { setD({ ...d, ...patch }); setDirty(true); };
 
   const profiles = usePolling(api.profiles, 600000);
@@ -112,6 +111,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   useEffect(() => { if (partnerId === "" && candidates[0]) setPartnerId(candidates[0].id); }, [candidates, partnerId]);
 
   const profile = profiles.data?.find((p) => p.id === d.profile_id);
+  const modified = !!profile && !!d.plan_params && !sameParams(d.plan_params, fromProfile(profile));
   const mismatches = (check.data?.rows ?? []).filter((r) => !r.match && !r.read_only);
   const pidDiffers = mismatches.some((r) => r.parameter === "ph_control_mode" || r.parameter === "ph_pid");
 
@@ -151,11 +151,11 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
         ? { ok: false, warn: true, text: `Controller ${d.reactor_id}: checked after the plan is saved` }
         : !c
           ? { ok: false, warn: true, text: check.error ? `Controller ${d.reactor_id}: check failed (${check.error})` : `Checking controller ${d.reactor_id}…` }
-          : { ok: !!c.reachable, text: c.reachable ? `Controller ${d.reactor_id} reachable` : `Controller ${d.reactor_id} not reachable` },
-      { ok: c?.reactor_free !== false, text: c?.reactor_free === false ? `${d.reactor_id} is recording another experiment` : `${d.reactor_id} free` },
+          : { ok: !!c.reachable, warn: true, text: c.reachable ? `Controller ${d.reactor_id} reachable` : `Controller ${d.reactor_id} off or not reachable: you can still go to fermentation` },
+      { ok: c?.reactor_free !== false, text: c?.reactor_free === false ? `${d.reactor_id} is in use by another experiment` : `${d.reactor_id} free` },
       c?.reachable
         ? { ok: mismatches.length === 0, warn: true, text: mismatches.length ? `${mismatches.length} setting(s) differ from the controller` : "Controller matches the plan" }
-        : { ok: false, warn: true, text: d.profile_id ? "Profile chosen: load it when the controller is on" : "Plan vs controller: compared when the controller is on" },
+        : { ok: false, warn: true, text: hasValues(d.plan_params) ? "Profile chosen: load it when the controller is on" : "Plan vs controller: compared when the controller is on" },
     ];
   }, [check.data, check.error, existing, dirty, d.reactor_id, mismatches.length]);
   const blocking = ready.some((r) => !r.ok && !r.warn);
@@ -255,19 +255,37 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
           <section className="card" aria-labelledby="g3">
             <div className="stack" style={{ gap: 2 }}>
               <h2 id="g3" style={{ fontSize: 18 }}>Controller profile</h2>
-              <span className="small muted">Part of the plan: choose it now, even with the bioreactor off. It is written to the controller later, with “Load profile to controller”, before Start.</span>
+              <span className="small muted">Part of the plan: choose it now, even with the bioreactor off, and adjust any value for this experiment. It is written to the controller later, before Start.</span>
             </div>
-            <label className="field" style={{ maxWidth: 420 }}>Profile
-              <select value={d.profile_id ?? ""} onChange={(e) => set({ profile_id: e.target.value === "" ? null : Number(e.target.value) })}>
-                <option value="">Custom (no profile: setpoints stay as set on the controller)</option>
-                {(profiles.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </label>
-            {profile && (
-              <span className="small muted">pH {profile.ph_setpoint ?? "—"} · T {profile.temperature_setpoint ?? "—"} °C · stirrer {profile.stirrer_setpoint ?? "—"} rpm
-                · pH control {profile.ph_control_mode ?? "—"}{profile.ph_pid && ` (${show(profile.ph_pid)})`}</span>
-            )}
-            {(profiles.data ?? []).length === 0 && <span className="xs muted">No profiles yet: create one in Library › Controller profiles.</span>}
+            <div className="row" style={{ gap: 12, alignItems: "flex-end" }}>
+              <label className="field" style={{ flex: "1 1 260px", maxWidth: 420 }}>Profile
+                <select value={d.profile_id ?? ""} onChange={(e) => {
+                  const id = e.target.value === "" ? null : Number(e.target.value);
+                  const p = profiles.data?.find((x) => x.id === id);
+                  set({ profile_id: id, plan_params: p ? fromProfile(p) : d.plan_params ?? null });
+                }}>
+                  <option value="">Custom (no profile)</option>
+                  {(profiles.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </label>
+              <PlanSource d={d} profile={profile} />
+            </div>
+            <PlanParamsTable value={d.plan_params ?? null} channels={d.channels ?? DEFAULT_CHANNELS} onChange={(v) => set({ plan_params: v })} />
+            <div className="row" style={{ gap: 8 }}>
+              {(modified || (!profile && hasValues(d.plan_params))) && (
+                <button className="btn tonal" onClick={async () => {
+                  const name = window.prompt("Name of the new profile", profile ? `${profile.name} (modified)` : "")?.trim();
+                  if (!name || !d.plan_params) return;
+                  try {
+                    const np = await api.createProfile({ name, notes: "", ...d.plan_params } as never);
+                    profiles.refresh(); set({ profile_id: np.id });
+                    setMsg({ kind: "good", text: `Profile “${name}” saved in the Library.` });
+                  } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+                }}>Save as new profile</button>
+              )}
+              {modified && profile && <button className="btn text" onClick={() => set({ plan_params: fromProfile(profile) })}>Reset to “{profile.name}”</button>}
+            </div>
+            {(profiles.data ?? []).length === 0 && <span className="xs muted">No profiles yet: fill in the values here and save them as a profile, or create one in Library › Controller profiles.</span>}
           </section>
 
           <section className="card" aria-labelledby="g3b">
@@ -282,23 +300,23 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                 <span>Controller {d.reactor_id} is off or not reachable ({check.data.message}). That is fine while planning: switch it on before Start to compare and load the profile.</span></div>
             )}
             {check.data?.reachable && <PlanCheckTable rows={check.data.rows} />}
-            {existing && profile && mismatches.length > 0 && (
+            {existing && hasValues(d.plan_params) && mismatches.length > 0 && (
               <div className="banner warn"><Icon name="warn" color="#8a5a00" size={20} />
                 <span><b>{pidDiffers ? "pH control differs." : "Setpoints differ."}</b> {pidDiffers && "The controller may have been left in another mode by a previous user. "}
                   Loading the profile writes setpoints, process limits, pH control mode and loop parameters to the controller, then reads them back.</span>
               </div>
             )}
             <div className="row">
-              <button className="btn filled" disabled={!existing || dirty || !profile || !check.data?.reachable} onClick={async () => {
+              <button className="btn filled" disabled={!existing || dirty || !hasValues(d.plan_params) || !check.data?.reachable} onClick={async () => {
                 if (!existing) return;
                 try {
                   const r = await api.loadProfile(existing.id);
                   const bad = r.results.filter((x) => x.status !== "confirmed");
                   setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.parameter} (${b.message ?? b.status})`).join(", ")}` }
-                    : { kind: "good", text: "Profile loaded and confirmed by the controller." });
+                    : { kind: "good", text: "Plan loaded and confirmed by the controller." });
                   check.refresh();
                 } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-              }}>Load profile to controller</button>
+              }}>Load to controller</button>
               <span className="xs muted">Limits left empty in the profile stay as they are on the controller; actuators, interlocks and calibration stay on the controller. pH control mode and loop parameters can be loaded only here, before Start.</span>
             </div>
           </section>
@@ -343,22 +361,19 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
           </section>
 
           <section className="card" aria-labelledby="rd">
-            <h2 id="rd" style={{ fontSize: 18 }}>Ready to start?</h2>
+            <h2 id="rd" style={{ fontSize: 18 }}>Ready for fermentation?</h2>
             {ready.map((r) => (
               <span key={r.text} className="row small" style={{ gap: 10, flexWrap: "nowrap" }}>
                 <Icon name={r.ok ? "check" : "warn"} size={18} color={r.ok ? "#1f6e5a" : r.warn ? "#8a5a00" : "#b30020"} width={2.2} />{r.text}
               </span>
             ))}
             <button className="btn filled" style={{ height: 48, justifyContent: "center" }} disabled={!existing || blocking}
-              onClick={() => { if (existing) setChecking(true); }}><Icon name="play" size={18} />Start recording</button>
-            {checking && existing && (
-              <PreStartChecklist channels={d.channels ?? DEFAULT_CHANNELS} mismatch={mismatches.length > 0} onCancel={() => setChecking(false)}
-                onStart={async (done) => {
-                  try { await api.start(existing.id, done); setChecking(false); onChange?.(); }
-                  catch (x) { setChecking(false); setMsg({ kind: "alert", text: (x as Error).message }); }
-                }} />
-            )}
-            <span className="xs muted">t = 0 is the moment you press Start.</span>
+              onClick={async () => {
+                if (!existing) return;
+                if (dirty && !(await save())) return;
+                try { await api.prepare(existing.id); onChange?.(); } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+              }}><Icon name="arrow" size={18} />Go to fermentation</button>
+            <span className="xs muted">Opens the live page: monitoring and alerts start, the run is not recorded yet. There you load the profile when the bioreactor is ready and press <b>Start experiment</b> (t = 0) after inoculation.</span>
           </section>
         </aside>
       </div>
@@ -366,26 +381,131 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
   );
 }
 
-/** Reminder before Start: preliminary operations on the bioreactor that the software cannot check. */
-function PreStartChecklist({ channels, mismatch, onCancel, onStart }: { channels: Channel[]; mismatch: boolean;
-  onCancel: () => void; onStart: (done: string[]) => void }) {
-  const [busy, setBusy] = useState(false);
-  const probes = ["pH", ...(channels.includes("do2") ? ["dO2"] : [])].join(" and ");
+
+// --- plan parameters (profile values, editable per experiment) --------------------------------
+
+const PID_PARAMS: { k: string; label: string; unit?: string }[] = [
+  { k: "P", label: "P" }, { k: "I", label: "I" }, { k: "D", label: "D" },
+  { k: "deadband", label: "Dead band", unit: "pH" }, { k: "cycle_time", label: "Cycle time", unit: "s" },
+  { k: "settling_time", label: "Settling time", unit: "s" },
+];
+const MODE_KEYS: Record<string, string[]> = {
+  pid: ["P", "I", "D", "deadband", "cycle_time"], adaptive: ["P", "I", "D", "deadband", "cycle_time", "settling_time"],
+};
+
+export function fromProfile(p: Profile): PlanParams {
+  return {
+    ph_setpoint: p.ph_setpoint, temperature_setpoint: p.temperature_setpoint, stirrer_setpoint: p.stirrer_setpoint,
+    ph_control_mode: p.ph_control_mode, ph_pid: p.ph_pid ? { ...p.ph_pid } : null,
+    ph_low_limit: p.ph_low_limit ?? null, ph_high_limit: p.ph_high_limit ?? null,
+    temperature_low_limit: p.temperature_low_limit ?? null, temperature_high_limit: p.temperature_high_limit ?? null,
+  };
+}
+
+function eq(a: unknown, b: unknown): boolean {
+  if ((a === null || a === undefined || a === "") && (b === null || b === undefined || b === "")) return true;
+  if (typeof a === "object" || typeof b === "object") {
+    const x = (a ?? {}) as Record<string, unknown>, y = (b ?? {}) as Record<string, unknown>;
+    return [...new Set([...Object.keys(x), ...Object.keys(y)])].every((k) => eq(x[k], y[k]));
+  }
+  return typeof a === "number" && typeof b === "number" ? Math.abs(a - b) < 1e-9 : a === b;
+}
+export const sameParams = (a: PlanParams, b: PlanParams) => eq(a, b);
+export const hasValues = (p: PlanParams | null | undefined) =>
+  !!p && Object.entries(p).some(([k, v]) => k === "ph_pid" ? Object.values(v ?? {}).some((x) => x != null) : v != null && v !== "");
+
+function PlanSource({ d, profile }: { d: ExperimentDraft; profile?: Profile }) {
+  if (!profile) return hasValues(d.plan_params)
+    ? <span className="tag archived" style={{ height: 28 }}>Custom · not saved as a profile</span> : null;
+  const modified = !!d.plan_params && !sameParams(d.plan_params, fromProfile(profile));
+  return modified
+    ? <span className="tag" style={{ height: 28, background: "var(--warn-container)" }}>Custom · based on “{profile.name}”, not saved</span>
+    : <span className="tag analysed" style={{ height: 28 }}>As in profile “{profile.name}”</span>;
+}
+
+const EMPTY_PLAN: PlanParams = { ph_setpoint: null, temperature_setpoint: null, stirrer_setpoint: null, ph_control_mode: null, ph_pid: null,
+  ph_low_limit: null, ph_high_limit: null, temperature_low_limit: null, temperature_high_limit: null };
+
+/** Schematic, editable table of the plan's controller values (no controller column: that is the check step). */
+function PlanParamsTable({ value, channels, onChange }: { value: PlanParams | null; channels: Channel[]; onChange: (v: PlanParams) => void }) {
+  const v = value ?? EMPTY_PLAN;
+  const n = (s: string) => (s.trim() === "" ? null : Number(s.replace(",", ".")));
+  const cell = (key: keyof PlanParams, label: string) => (
+    <input className="cell-input mono" inputMode="decimal" aria-label={label} style={{ width: 90, textAlign: "right" }}
+      value={(v[key] as number | null) ?? ""} onChange={(e) => onChange({ ...v, [key]: n(e.target.value) })} />
+  );
+  const pidCell = (k: string, label: string) => (
+    <input className="cell-input mono" inputMode="decimal" aria-label={label} style={{ width: 90, textAlign: "right" }}
+      value={v.ph_pid?.[k] ?? ""} onChange={(e) => onChange({ ...v, ph_pid: { ...(v.ph_pid ?? {}), [k]: n(e.target.value) } })} />
+  );
+  const keys = MODE_KEYS[v.ph_control_mode ?? ""] ?? [];
   return (
-    <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) onCancel(); }}>
-      <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="pre-title" aria-describedby="pre-d" style={{ width: "min(520px, 100vw)" }}>
-        <h2 id="pre-title" style={{ fontSize: 20 }}>Before starting</h2>
-        <div className="banner warn" id="pre-d"><Icon name="warn" color="#8a5a00" size={20} />
-          <span>Check basic operations on the bioreactor controller: <b>{probes} probe calibration</b>
-            {channels.includes("ph") && <>, <b>dose monitoring calibration</b></>}, <b>cooling and condenser water valves</b> open.</span>
-        </div>
-        {mismatch && <div className="banner warn small" role="note">Some settings differ from the controller (see “check and load”): starting anyway keeps the controller values.</div>}
-        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
-          <button className="btn text" disabled={busy} onClick={onCancel}>Cancel</button>
-          <button className="btn filled" autoFocus disabled={busy} onClick={() => { setBusy(true); onStart([]); }}>
-            <Icon name="play" size={18} />{busy ? "Starting…" : "Start recording"}</button>
-        </div>
-      </div>
+    <div className="table-wrap">
+      <table className="data plan-table">
+        <thead><tr><th>Parameter</th><th className="num">Setpoint</th><th className="num">Low limit</th><th className="num">High limit</th></tr></thead>
+        <tbody>
+          {channels.includes("ph") && <tr><td>pH</td><td className="num">{cell("ph_setpoint", "pH setpoint")}</td>
+            <td className="num">{cell("ph_low_limit", "pH low limit")}</td><td className="num">{cell("ph_high_limit", "pH high limit")}</td></tr>}
+          {channels.includes("temperature") && <tr><td>Temperature <span className="muted">(°C)</span></td><td className="num">{cell("temperature_setpoint", "Temperature setpoint")}</td>
+            <td className="num">{cell("temperature_low_limit", "Temperature low limit")}</td><td className="num">{cell("temperature_high_limit", "Temperature high limit")}</td></tr>}
+          {channels.includes("stirrer") && <tr><td>Stirrer <span className="muted">(rpm)</span></td><td className="num">{cell("stirrer_setpoint", "Stirrer setpoint")}</td>
+            <td className="num muted">—</td><td className="num muted">—</td></tr>}
+          {channels.includes("ph") && (
+            <>
+              <tr><td colSpan={4} className="kicker" style={{ paddingTop: 14 }}>pH control</td></tr>
+              <tr><td>Mode</td><td colSpan={3}>
+                <select value={v.ph_control_mode ?? ""} onChange={(e) => onChange({ ...v, ph_control_mode: e.target.value || null })} style={{ height: 36 }} aria-label="pH control mode">
+                  <option value="">Leave as on the controller</option><option value="pid">PID</option><option value="adaptive">Adaptive</option>
+                </select></td></tr>
+              {keys.length > 0 && (
+                <tr><td colSpan={4}>
+                  <div className="row" style={{ gap: 10 }}>
+                    {PID_PARAMS.filter((p) => keys.includes(p.k)).map((p) => (
+                      <label key={p.k} className="field" style={{ flex: "0 0 auto" }}>{p.label}{p.unit ? ` (${p.unit})` : ""}{pidCell(p.k, p.label)}</label>
+                    ))}
+                  </div>
+                </td></tr>
+              )}
+            </>
+          )}
+        </tbody>
+      </table>
+      <span className="xs muted">Empty = leave the controller's value. Limits are alarm limits only. {v.ph_control_mode === "adaptive" && "In Adaptive, P, I and D are starting values."}</span>
     </div>
+  );
+}
+
+/** Live page, preparing phase: plan vs controller, and loading the plan once the bioreactor is ready. */
+export function ControllerCheckCard({ e }: { e: Experiment }) {
+  const check = usePolling(() => api.planCheck(e.id), 15000, [e.id]);
+  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const mism = (check.data?.rows ?? []).filter((r) => !r.match && !r.read_only).length;
+  return (
+    <section className="card" aria-labelledby="cc">
+      <div className="row between">
+        <div className="stack" style={{ gap: 2 }}>
+          <h2 id="cc" style={{ fontSize: 18 }}>Plan vs controller {e.reactor_id}</h2>
+          <span className="small muted">Load the plan when the bioreactor is ready; values are read back after writing.</span>
+        </div>
+        <button className="btn filled" disabled={busy || !check.data?.reachable || !hasValues(e.plan_params)} onClick={async () => {
+          setBusy(true); setMsg(null);
+          try {
+            const r = await api.loadProfile(e.id);
+            const bad = r.results.filter((x) => x.status !== "confirmed");
+            setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.parameter} (${b.message ?? b.status})`).join(", ")}` }
+              : { kind: "good", text: "Plan loaded and confirmed by the controller." });
+            check.refresh();
+          } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+          finally { setBusy(false); }
+        }}>{busy ? "Loading…" : "Load to controller"}</button>
+      </div>
+      {check.data && !check.data.reachable && <div className="banner warn small"><Icon name="warn" color="#8a5a00" size={18} />
+        <span>Controller {e.reactor_id} is off or not reachable ({check.data.message}).</span></div>}
+      {check.data?.reachable && <PlanCheckTable rows={check.data.rows} />}
+      {check.data?.reachable && mism > 0 && <span className="small" style={{ color: "var(--data-orange-text)" }}>{mism} setting(s) differ from the plan.</span>}
+      {!hasValues(e.plan_params) && <span className="small muted">No profile or controller values in the plan: setpoints stay as set on the controller.</span>}
+      {msg && <div className={`banner ${msg.kind} small`} role="status">{msg.text}</div>}
+    </section>
   );
 }

@@ -302,3 +302,6 @@ html[data-theme="dark"] img.logo-img, html[data-theme="dim"] img.logo-img { filt
 .theme-swatch.grey { background: #dadfe1; } .theme-swatch.grey span { background: #fff; }
 .theme-swatch.dim { background: #2b4350; } .theme-swatch.dim span { background: #fff; }
 .theme-swatch.dark { background: #12191e; } .theme-swatch.dark span { background: #1c252c; box-shadow: 0 0 0 1px #3e4a52; }
+.status.preparing { background: var(--warn-container); color: var(--ink); border: 1px dashed var(--data-orange-text, #8a5a00); }
+.plan-table td { vertical-align: middle; }
+.plan-table .cell-input { height: 36px; }

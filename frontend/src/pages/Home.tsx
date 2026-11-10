@@ -75,7 +75,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
           <span className="kicker">Bioreactor {label(r.reactor_id)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
           <span style={{ fontSize: 18, fontWeight: 500 }}><span className="mono">{exp.code}</span> · <i>L. plantarum</i> {exp.strain || "—"}</span>
         </div>
-        <StatusChip status="fermenting" />
+        <StatusChip status={exp.status ?? "fermenting"} />
       </div>
       <div className="dv-grid">
         {[
@@ -92,7 +92,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
         <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={20} /><span>{alert.message}</span></div>
       )}
       <div className="row between small muted">
-        <span>t = <span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span> · last reading{" "}
+        <span>{exp.status === "preparing" ? "Preparing, not recording · monitoring for " : "t = "}<span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span> · last reading{" "}
           <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
         <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
       </div>
@@ -112,7 +112,7 @@ export function Home() {
   const reactors = live.data ?? [];
   const running = reactors.filter((r) => r.experiment);
   // Planned and recording first, then the most recent: 10 rows, archived hidden
-  const rank = (e: { status: string }) => (e.status === "fermenting" ? 0 : e.status === "planned" ? 1 : 2);
+  const rank = (e: { status: string }) => (e.status === "fermenting" || e.status === "preparing" ? 0 : e.status === "planned" ? 1 : 2);
   const last = (exps.data ?? []).filter((e) => !e.archived)
     .sort((x, y) => rank(x) - rank(y) || (y.started_at ?? y.created_at ?? "").localeCompare(x.started_at ?? x.created_at ?? ""))
     .slice(0, 10);

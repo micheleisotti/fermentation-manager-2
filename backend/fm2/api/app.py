@@ -6,6 +6,7 @@ FastAPI application. One service process hosts the API, the acquisition thread a
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 import re
 import os
 import ipaddress
@@ -194,9 +195,62 @@ def _check_channels(ch: Optional[list[str]]) -> Optional[list[str]]:
     return [c for c in CHANNELS if c in ch]
 
 
+PLAN_KEYS = ("ph_setpoint", "temperature_setpoint", "stirrer_setpoint", "ph_control_mode", "ph_pid",
+             "ph_low_limit", "ph_high_limit", "temperature_low_limit", "temperature_high_limit")
+
+
+def profile_params(p: Optional[ControllerProfile]) -> dict:
+    if p is None:
+        return {}
+    d = {k: getattr(p, k) for k in PLAN_KEYS}
+    d["ph_control_mode"] = p.ph_control_mode.value if p.ph_control_mode else None
+    d["ph_pid"] = dict(p.ph_pid) if p.ph_pid else None
+    return d
+
+
+def plan_of(e: Experiment) -> dict:
+    """Controller parameters of the plan: the plan's own (edited) values, else the profile's."""
+    if e.plan_params:
+        return {k: e.plan_params.get(k) for k in PLAN_KEYS}
+    return profile_params(e.profile)
+
+
+def _clean_plan(d: Optional[dict]) -> Optional[dict]:
+    if not d:
+        return None
+    out = {}
+    for k in PLAN_KEYS:
+        v = d.get(k)
+        if k == "ph_control_mode":
+            if v not in (None, "", "pid", "adaptive"):
+                raise HTTPException(422, "pH control mode must be pid or adaptive")
+            out[k] = v or None
+        elif k == "ph_pid":
+            out[k] = {kk: (None if vv in ("", None) else float(vv)) for kk, vv in (v or {}).items()} or None
+        else:
+            out[k] = None if v in ("", None) else float(v)
+    for a, b in (("ph_low_limit", "ph_high_limit"), ("temperature_low_limit", "temperature_high_limit")):
+        if out[a] is not None and out[b] is not None and out[a] >= out[b]:
+            raise HTTPException(422, f"{a.replace('_', ' ')} must be lower than {b.replace('_', ' ')}")
+    return out
+
+
+def _same(a, b) -> bool:
+    if isinstance(a, dict) or isinstance(b, dict):
+        a, b = a or {}, b or {}
+        return all(_same(a.get(k), b.get(k)) for k in set(a) | set(b))
+    if a is None or b is None:
+        return a is None and b is None
+    if isinstance(a, str) or isinstance(b, str):
+        return a == b
+    return abs(float(a) - float(b)) < 1e-9
+
+
 def _exp_out(e: Experiment) -> S.ExperimentOut:
     out = S.ExperimentOut.model_validate(e)
     out.status = e.status.value
+    out.plan_params = plan_of(e) or None
+    out.profile_modified = bool(e.plan_params and e.profile and not _same(e.plan_params, profile_params(e.profile)))
     out.channels = channels_of(e)
     out.archived = bool(e.archived)
     sess = object_session(e)
@@ -210,6 +264,8 @@ def _exp_out(e: Experiment) -> S.ExperimentOut:
 
 
 def _t_h(e: Experiment, at: datetime) -> float:
+    if e.started_at is None and e.status == ExperimentStatus.preparing and e.prepared_at is not None:
+        return (_as_utc(at) - _as_utc(e.prepared_at)).total_seconds() / 3600.0
     if e.started_at is None:
         raise HTTPException(409, "Experiment not started: time is counted from Start")
     return (_as_utc(at) - _as_utc(e.started_at)).total_seconds() / 3600.0
@@ -411,6 +467,7 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
     data["planned_date"] = data["planned_date"] or now_of(request).date().isoformat()
     data["channels"] = _check_channels(data.get("channels"))
     data["author"] = who(request, db)
+    data["plan_params"] = _clean_plan(data.get("plan_params"))
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
     db.add(e)
     db.flush()
@@ -428,9 +485,12 @@ def patch_experiment(exp_id: int, body: S.ExperimentPatch, db: Session = Depends
     data = body.model_dump(exclude_unset=True)
     if "channels" in data:
         data["channels"] = _check_channels(data["channels"])
-    plan_only = {"reactor_id", "profile_id"}
-    if e.status != ExperimentStatus.planned and plan_only & data.keys():
-        raise HTTPException(409, "Reactor and profile can only be changed while planned")
+    if "plan_params" in data:
+        data["plan_params"] = _clean_plan(data["plan_params"])
+    if e.status != ExperimentStatus.planned and "reactor_id" in data:
+        raise HTTPException(409, "The reactor can only be changed while planned")
+    if e.status not in (ExperimentStatus.planned, ExperimentStatus.preparing) and {"profile_id", "plan_params"} & data.keys():
+        raise HTTPException(409, "Profile and controller parameters can only be changed before Start")
     for k, v in data.items():
         setattr(e, k, v)
     return _exp_out(e)
@@ -454,11 +514,14 @@ def link_parallel(exp_id: int, body: S.ParallelIn, db: Session = Depends(get_db)
 
 @router.post("/experiments/{exp_id}/load-profile")
 def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
-    """Planning only: write the profile's setpoints and pH control (mode + PID) to the controller."""
+    """Before Start: write the plan's setpoints, limits and pH control (mode + PID) to the controller."""
     e = _404(db.get(Experiment, exp_id))
-    if e.status != ExperimentStatus.planned:
-        raise HTTPException(409, "Profiles can only be loaded while the experiment is planned")
-    prof = _404(e.profile, "No profile selected")
+    if e.status not in (ExperimentStatus.planned, ExperimentStatus.preparing):
+        raise HTTPException(409, "The plan can only be loaded before Start")
+    plan = plan_of(e)
+    if not plan:
+        raise HTTPException(404, "No profile or controller parameters in the plan")
+    prof = SimpleNamespace(**plan)
     acq: Acquisition = request.app.state.acq
     driver = acq.drivers[e.reactor_id]
     ranges = request.app.state.app_settings.setpoint_ranges()
@@ -498,7 +561,7 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
             results.append({"parameter": f"{param}_limits", "status": "error", "message": str(ex)})
     if prof.ph_control_mode and "ph" in chans:
         try:
-            commands.load_ph_control(driver, PhControl(prof.ph_control_mode.value, prof.ph_pid), e.status.value)
+            commands.load_ph_control(driver, PhControl(prof.ph_control_mode, prof.ph_pid), e.status.value)
             results.append({"parameter": "ph_control", "status": "confirmed"})
         except (DriverError, commands.CommandRejected) as ex:
             results.append({"parameter": "ph_control", "status": "error", "message": str(ex)})
@@ -515,7 +578,8 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
     except DriverError as ex:
         return {"reachable": False, "message": str(ex), "rows": []}
     rows = []
-    p = e.profile
+    plan = plan_of(e)
+    p = SimpleNamespace(**plan) if plan else None
     chans = channels_of(e)
     if p:
         for param, planned in (("ph", p.ph_setpoint), ("temperature", p.temperature_setpoint),
@@ -526,13 +590,13 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
             rows.append({"parameter": f"{param}_setpoint", "plan": planned, "controller": ctrl,
                          "match": planned is None or (ctrl is not None and abs(ctrl - planned) < 1e-6)})
         if p.ph_control_mode and "ph" in chans:
-            rows.append({"parameter": "ph_control_mode", "plan": p.ph_control_mode.value,
-                         "controller": snap.ph_control.mode, "match": p.ph_control_mode.value == snap.ph_control.mode})
-            plan_ctl = PhControl(p.ph_control_mode.value, p.ph_pid)
+            rows.append({"parameter": "ph_control_mode", "plan": p.ph_control_mode,
+                         "controller": snap.ph_control.mode, "match": p.ph_control_mode == snap.ph_control.mode})
+            plan_ctl = PhControl(p.ph_control_mode, p.ph_pid)
             param_diffs = [d for d in commands.ph_control_differences(plan_ctl, snap.ph_control)
                            if not d.startswith("mode ")]
             applicable = {k: v for k, v in (p.ph_pid or {}).items()
-                          if k in commands.PH_MODE_PARAMS[p.ph_control_mode.value]}
+                          if v is not None and k in commands.PH_MODE_PARAMS[p.ph_control_mode]}
             if applicable:
                 rows.append({"parameter": "ph_pid", "plan": applicable,
                              "controller": {k: (snap.ph_control.pid or {}).get(k) for k in applicable},
@@ -548,36 +612,85 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
             match = all(pv is None or (cv is not None and abs(cv - pv) < 1e-6) for pv, cv in zip(plan, ctrl))
             rows.append({"parameter": f"{param}_limits", "plan": plan, "controller": ctrl, "match": match})
     busy = db.scalar(select(Experiment).where(Experiment.reactor_id == e.reactor_id,
-                                              Experiment.status == ExperimentStatus.fermenting,
-                                              Experiment.id != e.id))
+                                              Experiment.status.in_(ACTIVE), Experiment.id != e.id))
     return {"reachable": True, "reactor_free": busy is None, "rows": rows}
+
+
+ACTIVE = (ExperimentStatus.preparing, ExperimentStatus.fermenting)
+
+
+def _busy(db: Session, e: Experiment) -> Optional[Experiment]:
+    return db.scalar(select(Experiment).where(Experiment.reactor_id == e.reactor_id,
+                                              Experiment.status.in_(ACTIVE), Experiment.id != e.id))
+
+
+@router.post("/experiments/{exp_id}/prepare", response_model=S.ExperimentOut)
+def prepare_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
+    """
+    "Go to fermentation": the live page opens and the reactor is monitored with alerts, but the
+    run is not recorded yet (t = 0 is Start). Readings are kept and shifted to negative times at Start.
+    """
+    e = _404(db.get(Experiment, exp_id))
+    if e.status != ExperimentStatus.planned:
+        raise HTTPException(409, "Only planned experiments can go to fermentation")
+    busy = _busy(db, e)
+    if busy:
+        raise HTTPException(409, f"{e.reactor_id} is in use by {busy.code}")
+    e.status, e.prepared_at = ExperimentStatus.preparing, now_of(request)
+    _event(db, e, "prepared", f"{e.code} moved to fermentation by {who(request, db)} (monitoring, not recording yet)", 0.0)
+    db.flush()
+    db.commit()
+    request.app.state.acq.poll_once()
+    db.refresh(e)
+    return _exp_out(e)
+
+
+@router.post("/experiments/{exp_id}/unprepare", response_model=S.ExperimentOut)
+def unprepare_experiment(exp_id: int, request: Request, db: Session = Depends(get_db)):
+    """Back to planning: pre-start readings are discarded; events are kept."""
+    e = _404(db.get(Experiment, exp_id))
+    if e.status != ExperimentStatus.preparing:
+        raise HTTPException(409, "Only an experiment in preparation can go back to planning")
+    db.execute(sa_delete(ControllerReading).where(ControllerReading.experiment_id == e.id))
+    e.status, e.prepared_at = ExperimentStatus.planned, None
+    request.app.state.acq.alert_states.pop((e.id, "pre"), None)
+    _event(db, e, "unprepared", f"{e.code} back to planning by {who(request, db)}")
+    return _exp_out(e)
 
 
 @router.post("/experiments/{exp_id}/start", response_model=S.ExperimentOut)
 def start_experiment(exp_id: int, request: Request, body: Optional[S.StartIn] = None, db: Session = Depends(get_db)):
+    """Start of the run (t = 0), from planning or from the preparation phase."""
     e = _404(db.get(Experiment, exp_id))
     checks = (body.checklist if body else None) or []
-    if e.status != ExperimentStatus.planned:
-        raise HTTPException(409, "Only planned experiments can be started")
-    busy = db.scalar(select(Experiment).where(Experiment.reactor_id == e.reactor_id,
-                                              Experiment.status == ExperimentStatus.fermenting))
+    if e.status not in (ExperimentStatus.planned, ExperimentStatus.preparing):
+        raise HTTPException(409, "Only planned or preparing experiments can be started")
+    busy = _busy(db, e)
     if busy:
-        raise HTTPException(409, f"{e.reactor_id} is already recording {busy.code}")
+        raise HTTPException(409, f"{e.reactor_id} is in use by {busy.code}")
     acq: Acquisition = request.app.state.acq
     driver = acq.drivers[e.reactor_id]
     if hasattr(driver, "on_experiment_start"):
         driver.on_experiment_start()  # simulator only: fresh culture
-    e.status, e.started_at = ExperimentStatus.fermenting, now_of(request)
+    now = now_of(request)
+    if e.status == ExperimentStatus.preparing and e.prepared_at is not None:
+        # pre-start readings and events: hours before Start (negative)
+        shift = (_as_utc(now) - _as_utc(e.prepared_at)).total_seconds() / 3600.0
+        for r in db.scalars(select(ControllerReading).where(ControllerReading.experiment_id == e.id)):
+            r.t_h = r.t_h - shift
+        for ev in db.scalars(select(Event).where(Event.experiment_id == e.id, Event.t_h.is_not(None))):
+            ev.t_h = ev.t_h - shift
+        acq.alert_states.pop((e.id, "pre"), None)
+    e.status, e.started_at = ExperimentStatus.fermenting, now
     _event(db, e, "started", f"{e.code} started by {who(request, db)}"
            + (f" · pre-start checks confirmed: {'; '.join(checks)}" if checks else ""), 0.0)
-    if e.profile:
-        p = e.profile
-        e.plan_snapshot = {"profile": p.name, "ph_setpoint": p.ph_setpoint,
-                           "temperature_setpoint": p.temperature_setpoint, "stirrer_setpoint": p.stirrer_setpoint,
-                           "ph_control_mode": p.ph_control_mode.value if p.ph_control_mode else None,
-                           "ph_pid": p.ph_pid,
-                           "ph_limits": [p.ph_low_limit, p.ph_high_limit],
-                           "temperature_limits": [p.temperature_low_limit, p.temperature_high_limit]}
+    plan = plan_of(e)
+    if plan:
+        e.plan_snapshot = {"profile": e.profile.name if e.profile else None,
+                           "custom": bool(e.plan_params and e.profile and not _same(e.plan_params, profile_params(e.profile))),
+                           **{k: v for k, v in plan.items() if not k.endswith("_limit")},
+                           "ph_limits": [plan.get("ph_low_limit"), plan.get("ph_high_limit")],
+                           "temperature_limits": [plan.get("temperature_low_limit"), plan.get("temperature_high_limit")]}
     db.flush()
     db.commit()
     acq.poll_once()  # first reading at t = 0 (and immediate "at Start" alerts)
@@ -733,8 +846,7 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
     now = now_of(request)
     out = []
     for rid, live in acq.live.items():
-        exp = db.scalar(select(Experiment).where(Experiment.reactor_id == rid,
-                                                 Experiment.status == ExperimentStatus.fermenting))
+        exp = db.scalar(select(Experiment).where(Experiment.reactor_id == rid, Experiment.status.in_(ACTIVE)))
         snap = live.snapshot
         out.append({
             "reactor_id": rid,
@@ -744,6 +856,7 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
             "snapshot": None if snap is None else {k: v for k, v in snap.__dict__.items() if k not in ("ts", "ph_control")},
             "ph_control": None if snap is None else snap.ph_control.__dict__,
             "experiment": None if exp is None else {"id": exp.id, "code": exp.code, "strain": exp.strain,
+                                                    "status": exp.status.value,
                                                     "t_h": _t_h(exp, now), "channels": channels_of(exp),
                                                     "parallel_run": exp.parallel_run.code if exp.parallel_run else None},
         })
@@ -754,9 +867,8 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
 def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: Session = Depends(get_db)):
     acq: Acquisition = request.app.state.acq
     driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
-    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
-                                             Experiment.status == ExperimentStatus.fermenting))
-    alert_state = acq.alert_state_for(exp.id, reactor_id) if exp else None
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
+    alert_state = acq.alert_state_for(exp.id, reactor_id, exp.status == ExperimentStatus.preparing) if exp else None
     _check_remote(request)
     try:
         res = commands.write_setpoint(driver, body.parameter, body.value,
@@ -811,8 +923,7 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
     """Change the process (alarm) limits of pH or temperature, with read-back; logged per limit."""
     acq: Acquisition = request.app.state.acq
     driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
-    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id,
-                                             Experiment.status == ExperimentStatus.fermenting))
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
     _check_remote(request)
     try:
         results = commands.write_limits(driver, body.parameter, body.low, body.high)

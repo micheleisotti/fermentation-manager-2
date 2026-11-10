@@ -107,6 +107,7 @@ class ExperimentIn(BaseModel):
     buffer_id: Optional[int] = None
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
+    plan_params: Optional[dict] = None
     channels: Optional[list[str]] = None
     notes: str = ""
     author: str = ""
@@ -120,6 +121,7 @@ class ExperimentPatch(BaseModel):
     buffer_id: Optional[int] = None
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
+    plan_params: Optional[dict] = None
     reactor_id: Optional[str] = None
     channels: Optional[list[str]] = None
     notes: Optional[str] = None
@@ -150,6 +152,10 @@ class ExperimentOut(ORM):
     end_note: Optional[str] = None
     author: str = ""
     n_sessions: int = 0
+    plan_params: Optional[dict] = None
+    profile_modified: bool = False   # plan values differ from the selected profile ("custom")
+    plan_snapshot: Optional[dict] = None
+    prepared_at: Optional[datetime] = None
     copy: Optional[dict] = None   # result of the copy saved at End of experiment (path or error)
 
 

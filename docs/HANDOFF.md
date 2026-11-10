@@ -198,12 +198,20 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - No periodic backup during a run (decided): every reading is committed to SQLite (WAL) as it arrives and
   the service resumes recording after a power cut; set "Restore on AC power loss" in the PC BIOS.
 
-## Pre-start reminder and profile in the plan (10 Nov 2026)
-- "Start recording" first shows a reminder (no checkboxes, as Michele asked): check probe calibration,
-  dose monitoring calibration, cooling and condenser water valves. Cancel / Start recording.
-- Planning: "Controller profile" is part of the plan and can be chosen at creation with the bioreactor
-  off; a separate card "Controller Rx: check and load" compares and loads it once the controller answers
-  (an unreachable controller is a warning while planning, not an error; Start still needs it reachable).
+## Preparation phase and editable plan values (10 Nov 2026)
+- New status `preparing` between planned and fermenting. Planning → **Go to fermentation** (POST /prepare):
+  the live page opens, readings are stored and alerts/notifications run (limits, setpoint reached,
+  controller silent; no base-dosing "finished" rule), but t = 0 is not set. **Start experiment** (popup
+  reminder: probe calibration, dose monitoring calibration, cooling/condenser water) sets t = 0 and
+  shifts preparation readings/events to negative times (analysis and export use t ≥ 0). **Back to
+  planning** (POST /unprepare) discards preparation readings. One preparing/fermenting experiment per reactor.
+- Plan values: `Experiment.plan_params` (setpoints, limits, pH mode + loop parameters) copied from the
+  chosen profile and editable in a schematic table in Planning; edited → "Custom · based on <profile>,
+  not saved" with "Save as new profile" / "Reset". Load to controller and plan-check use the plan values
+  (allowed while planned or preparing; pH mode/PID too). `plan_snapshot` at Start records them (+ custom flag).
+- Preparing page: status bar (monitoring time, Back to planning, Start experiment) and a
+  "Plan vs controller" card (comparison table + Load to controller). Phone: Start button.
+- Future loop on/off (pH, T, stirrer) belongs in this phase.
 
 ## Next steps
 1. Live check of pH control loading on R2 (cycle time change) and of the phone layout on a real phone.

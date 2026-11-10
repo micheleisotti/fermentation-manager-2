@@ -1,6 +1,6 @@
 // Thin typed client for the fm2 backend (/api).
 
-export type Status = "planned" | "fermenting" | "completed" | "aborted";
+export type Status = "planned" | "preparing" | "fermenting" | "completed" | "aborted";
 
 export interface Experiment {
   id: number; code: string; name: string; planned_date: string | null; strain: string;
@@ -9,6 +9,14 @@ export interface Experiment {
   parallel_run_code: string | null; parallel_partner_codes: string[]; channels: Channel[];
   notes: string; started_at: string | null; ended_at: string | null; updated_at: string;
   archived: boolean; end_note: string | null; author: string; n_sessions: number; created_at: string;
+  plan_params: PlanParams | null; profile_modified: boolean; prepared_at: string | null; plan_snapshot: Record<string, unknown> | null;
+}
+
+/** Controller parameters of a plan (copied from a profile, editable). */
+export interface PlanParams {
+  ph_setpoint: number | null; temperature_setpoint: number | null; stirrer_setpoint: number | null;
+  ph_control_mode: string | null; ph_pid: Record<string, number | null> | null;
+  ph_low_limit: number | null; ph_high_limit: number | null; temperature_low_limit: number | null; temperature_high_limit: number | null;
 }
 
 export type Channel = "temperature" | "ph" | "stirrer" | "do2";
@@ -26,7 +34,7 @@ export interface Snapshot {
 export interface LiveReactor {
   reactor_id: string; online: boolean; last_reading_age_s: number | null; error: string | null;
   snapshot: Snapshot | null; ph_control: { mode: string | null; pid: Record<string, number> | null } | null;
-  experiment: { id: number; code: string; strain: string; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
+  experiment: { id: number; code: string; strain: string; status: Status; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 
 export interface Named { id: number; name: string; description: string; archived: boolean; n_used: number }
@@ -40,7 +48,7 @@ export interface PlanCheckRow { parameter: string; plan: unknown; controller: un
 export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[] }
 export type ExperimentDraft = { name: string; reactor_id: string; planned_date?: string | null; strain?: string;
   medium_id?: number | null; buffer_id?: number | null; working_volume_ml?: number | null; profile_id?: number | null; notes?: string;
-  channels?: Channel[] };
+  channels?: Channel[]; plan_params?: PlanParams | null };
 
 export interface Readings { columns: string[]; rows: (number | null)[][] }
 export interface Measurement { id: number; variable_id: number; variable_name: string; sampled_at: string; t_h: number; value: number; unit: string; note: string; author: string }
@@ -161,6 +169,8 @@ export const api = {
   deleteExperiment: (id: number, code: string) =>
     req<{ deleted: string }>(`/experiments/${id}?confirm=${encodeURIComponent(code)}`, { method: "DELETE" }),
   deleteProfile: (id: number) => req<{ deleted: number; unlinked_experiments: string[] }>(`/profiles/${id}`, { method: "DELETE" }),
+  prepare: (id: number) => req<Experiment>(`/experiments/${id}/prepare`, { method: "POST" }),
+  unprepare: (id: number) => req<Experiment>(`/experiments/${id}/unprepare`, { method: "POST" }),
   start: (id: number, checklist?: string[]) =>
     req<Experiment>(`/experiments/${id}/start`, { method: "POST", body: JSON.stringify({ checklist: checklist ?? null }) }),
   end: (id: number, outcome: "completed" | "aborted" = "completed", note = "", save_copy?: boolean) =>

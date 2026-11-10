@@ -181,3 +181,39 @@ export function ArchiveButton({ e, onDone }: { e: Experiment; onDone: () => void
     </button>
   );
 }
+
+/** "Start experiment" (t = 0) with the reminder of the preliminary operations on the bioreactor. */
+export function StartExperimentButton({ e, onDone, compact = false }: { e: Experiment; onDone: () => void; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const probes = ["pH", ...(e.channels.includes("do2") ? ["dO2"] : [])].join(" and ");
+  return (
+    <>
+      <button className="btn filled" style={compact ? { width: "100%", justifyContent: "center", height: 48 } : undefined}
+        onClick={() => { setOpen(true); setErr(null); }}><Icon name="play" size={18} />Start experiment</button>
+      {open && (
+        <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) setOpen(false); }}>
+          <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="pre-title" aria-describedby="pre-d" style={{ width: "min(520px, 100vw)" }}>
+            <h2 id="pre-title" style={{ fontSize: 20 }}>Start {e.code}?</h2>
+            <div className="banner warn" id="pre-d"><Icon name="warn" color="#8a5a00" size={20} />
+              <span>Check basic operations on the bioreactor controller: <b>{probes} probe calibration</b>
+                {e.channels.includes("ph") && <>, <b>dose monitoring calibration</b></>}, <b>cooling and condenser water valves</b> open.</span>
+            </div>
+            <span className="small muted">t = 0 is now: recording of the run starts. Readings taken while preparing are kept as negative times.</span>
+            {err && <div className="banner alert small">{err}</div>}
+            <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+              <button className="btn text" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+              <button className="btn filled" autoFocus disabled={busy} onClick={async () => {
+                setBusy(true); setErr(null);
+                try { await api.start(e.id); setOpen(false); onDone(); }
+                catch (x) { setErr((x as Error).message); }
+                finally { setBusy(false); }
+              }}><Icon name="play" size={18} />{busy ? "Starting…" : "Start experiment"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

@@ -73,6 +73,7 @@ class ReactorAlertState:
     params: AlertParams = field(default_factory=AlertParams)
     # channels in use: rules for a channel switched off stay silent ("controller silent" always applies)
     channels: frozenset = field(default_factory=lambda: frozenset(CHANNELS))
+    pre_start: bool = False   # preparing phase: limits, setpoints and silence only (no base-dosing rules)
     _first: bool = True
     _last_ok: Optional[datetime] = None
     _silent_alerted: bool = False
@@ -200,7 +201,7 @@ class ReactorAlertState:
         return []
 
     def _finished_rule(self, snap: ControllerSnapshot, now: datetime) -> list[AlertEvent]:
-        if snap.base_cumulative_ml is None or self._finished_sent:
+        if self.pre_start or snap.base_cumulative_ml is None or self._finished_sent:
             return []
         self._cum.append((now, snap.base_cumulative_ml))
         horizon = self.params.rate_window_s

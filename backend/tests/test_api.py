@@ -385,3 +385,45 @@ def test_archive_copy_on_end_and_on_demand(env, tmp_path):
     assert (arch / name).stat().st_size == r["bytes"] > 0
     d = c.get(f"/api/experiments/{e['id']}/export.xlsx")
     assert "filename*=UTF-8''" in d.headers["content-disposition"] and "_FM-" in d.headers["content-disposition"]
+
+
+def test_prepare_phase_and_plan_params(env):
+    c, clock, app, _ = env
+    prof = c.post("/api/profiles", json={"name": "plantarum", "ph_setpoint": 6.0, "temperature_setpoint": 30,
+                                         "ph_low_limit": 5.7, "ph_high_limit": 6.3}).json()
+    e = c.post("/api/experiments", json={"name": "prep", "reactor_id": "R1", "profile_id": prof["id"]}).json()
+    assert e["plan_params"]["ph_setpoint"] == 6.0 and e["profile_modified"] is False
+    # edit one value: the plan becomes "custom, based on plantarum"
+    pp = dict(e["plan_params"], temperature_setpoint=32)
+    e = c.patch(f"/api/experiments/{e['id']}", json={"plan_params": pp}).json()
+    assert e["profile_modified"] is True and e["plan_params"]["temperature_setpoint"] == 32
+    bad = dict(pp, ph_low_limit=6.5)
+    assert c.patch(f"/api/experiments/{e['id']}", json={"plan_params": bad}).status_code == 422
+    rows = {r["parameter"]: r for r in c.get(f"/api/experiments/{e['id']}/plan-check").json()["rows"]}
+    assert rows["temperature_setpoint"]["plan"] == 32
+
+    # Go to fermentation: monitoring and readings, no t = 0 yet
+    e = c.post(f"/api/experiments/{e['id']}/prepare").json()
+    assert e["status"] == "preparing" and e["started_at"] is None
+    live = {r["reactor_id"]: r for r in c.get("/api/reactors/live").json()}
+    assert live["R1"]["experiment"]["status"] == "preparing"
+    other = c.post("/api/experiments", json={"name": "other", "reactor_id": "R1"}).json()
+    assert c.post(f"/api/experiments/{other['id']}/prepare").status_code == 409   # reactor in use
+    r = c.post(f"/api/experiments/{e['id']}/load-profile").json()
+    assert any(x["parameter"] == "temperature" and x["status"] == "confirmed" for x in r["results"])
+    for _ in range(3):
+        clock.advance(hours=0.5)
+        app.state.acq.poll_once()
+    def tcol(url):
+        j = c.get(url).json()
+        i = j["columns"].index("t_h")
+        return [row[i] for row in j["rows"]]
+    n_pre = len(tcol(f"/api/experiments/{e['id']}/readings"))
+    assert n_pre >= 3
+    # Start: pre-start readings move to negative times; analysis uses t >= 0 only
+    e = c.post(f"/api/experiments/{e['id']}/start").json()
+    assert e["status"] == "fermenting"
+    rd = tcol(f"/api/experiments/{e['id']}/readings?since_h=-10")
+    assert min(rd) < -1.4 and max(rd) >= 0
+    assert all(t >= 0 for t in tcol(f"/api/experiments/{e['id']}/readings"))
+    assert c.get(f"/api/experiments/{e['id']}").json()["plan_snapshot"]["custom"] is True

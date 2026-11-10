@@ -59,10 +59,12 @@ class Acquisition:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-    def alert_state_for(self, experiment_id: int, reactor_id: str) -> ReactorAlertState:
-        if experiment_id not in self.alert_states:
-            self.alert_states[experiment_id] = ReactorAlertState(reactor_id, self.alert_params)
-        return self.alert_states[experiment_id]
+    def alert_state_for(self, experiment_id: int, reactor_id: str, pre_start: bool = False) -> ReactorAlertState:
+        """One state per experiment and phase: Start begins with a fresh state ("at Start" checks again)."""
+        key = (experiment_id, "pre") if pre_start else experiment_id
+        if key not in self.alert_states:
+            self.alert_states[key] = ReactorAlertState(reactor_id, self.alert_params, pre_start=pre_start)
+        return self.alert_states[key]
 
     def poll_once(self) -> None:
         with self._lock:
@@ -83,10 +85,15 @@ class Acquisition:
         with session_scope(self.sessions) as s:
             exp = s.scalars(select(Experiment).where(
                 Experiment.reactor_id == reactor_id,
-                Experiment.status == ExperimentStatus.fermenting)).first()
-            if exp is None or exp.started_at is None:
+                Experiment.status.in_((ExperimentStatus.fermenting, ExperimentStatus.preparing)))).first()
+            if exp is None:
                 return
-            t_h = (now - _as_utc(exp.started_at)).total_seconds() / 3600.0
+            pre = exp.status == ExperimentStatus.preparing
+            t0 = exp.prepared_at if pre else exp.started_at
+            if t0 is None:
+                return
+            # preparing: hours since "Go to fermentation"; shifted to negative times at Start
+            t_h = (now - _as_utc(t0)).total_seconds() / 3600.0
             if snap is not None:
                 s.add(ControllerReading(
                     experiment_id=exp.id, ts=now, t_h=t_h,
@@ -99,7 +106,7 @@ class Acquisition:
                     temperature_high_limit=snap.temperature_high_limit,
                     extra=dict(snap.extra) or None,
                 ))
-            state = self.alert_state_for(exp.id, reactor_id)
+            state = self.alert_state_for(exp.id, reactor_id, pre_start=pre)
             state.channels = frozenset(exp.channels or DEFAULT_CHANNELS)   # may change during the run
             for ev in state.observe(snap, now):
                 row = Event(experiment_id=exp.id, reactor_id=reactor_id, kind=ev.kind,
