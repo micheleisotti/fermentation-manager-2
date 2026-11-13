@@ -1,5 +1,9 @@
 // Thin typed client for the fm2 backend (/api).
 
+/** Control type and loop parameters as read from the controller; deadband_enabled false = the
+ *  controller does not use (nor show) a dead band on that loop. */
+export type LoopControlState = { mode: string | null; pid: Record<string, number> | null; deadband_enabled?: boolean | null };
+
 export type Status = "planned" | "preparing" | "fermenting" | "completed" | "aborted";
 
 export interface Experiment {
@@ -46,8 +50,8 @@ export interface Snapshot {
 
 export interface LiveReactor {
   reactor_id: string; online: boolean; last_reading_age_s: number | null; error: string | null;
-  snapshot: Snapshot | null; ph_control: { mode: string | null; pid: Record<string, number> | null } | null;
-  temperature_control?: { mode: string | null; pid: Record<string, number> | null } | null;
+  snapshot: Snapshot | null; ph_control: LoopControlState | null;
+  temperature_control?: LoopControlState | null;
   experiment: { id: number; code: string; strain: string; status: Status; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 

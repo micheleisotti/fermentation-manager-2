@@ -109,6 +109,8 @@ def ph_control_differences(plan: PhControl, ctrl: PhControl, tol: float = 1e-6) 
     for k, v in (plan.pid or {}).items():
         if v is None or k not in PH_MODE_PARAMS.get(plan.mode or "", ()):
             continue
+        if k == "deadband" and ctrl.deadband_enabled is False:   # the controller does not use it
+            continue
         if got.get(k) is None or abs(got[k] - v) > tol:
             out.append(f"{k} {got.get(k)!r} instead of {v:g}")
     return out

@@ -19,15 +19,18 @@ const MODE_PARAMS: Record<string, ParamKey[]> = {
   pid: ["P", "I", "D", "deadband", "cycle_time"],
   adaptive: ["P", "I", "D", "deadband", "cycle_time", "settling_time"],
 };
+/** The temperature loop has no dead band on R1/R2 (disabled on the controller: not shown there either). */
+const T_MODE_PARAMS: Record<string, ParamKey[]> = Object.fromEntries(
+  Object.entries(MODE_PARAMS).map(([m, ks]) => [m, ks.filter((k) => k !== "deadband")]));
 
 const EMPTY = { name: "", ph: "", t: "", stir: "", mode: "pid", notes: "", phLo: "", phHi: "", tLo: "", tHi: "",
   P: "", I: "", D: "", deadband: "", cycle_time: "", settling_time: "",
   tmode: "", tP: "", tI: "", tD: "", tdeadband: "", tcycle_time: "", tsettling_time: "" };
 type Form = typeof EMPTY;
 
-function showParams(mode: string | null, pid: Record<string, number> | null, unitDb: string) {
+function showParams(mode: string | null, pid: Record<string, number> | null, unitDb: string, table = MODE_PARAMS) {
   if (!mode && !pid) return null;
-  const keys = MODE_PARAMS[mode ?? ""] ?? (Object.keys(pid ?? {}) as ParamKey[]);
+  const keys = table[mode ?? ""] ?? (Object.keys(pid ?? {}) as ParamKey[]);
   const items = keys.filter((k) => pid?.[k] != null);
   return (
     <span className="small">
@@ -44,7 +47,7 @@ export function showAssignments(items: { name: string; side: number }[] | undefi
 }
 
 function loopEntries(f: Form, prefix: "" | "t", mode: string) {
-  const keys = MODE_PARAMS[mode] ?? [];
+  const keys = (prefix === "t" ? T_MODE_PARAMS : MODE_PARAMS)[mode] ?? [];
   return keys.map((k) => [k, f[`${prefix}${k}` as keyof Form] as string] as const).filter(([, v]) => v.trim() !== "")
     .map(([k, v]) => [k, num(v)] as const);
 }
@@ -64,7 +67,7 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
   const [assign, setAssign] = useState<{ from: string; a: LoopAssignments } | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const modeParams = MODE_PARAMS[f.mode] ?? [];
-  const tModeParams = MODE_PARAMS[f.tmode] ?? [];
+  const tModeParams = T_MODE_PARAMS[f.tmode] ?? [];
 
   async function record(reactor: string) {
     try {
@@ -130,7 +133,7 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
                         {!p.ph_control_mode && !p.temperature_control_mode && <span className="muted">—</span>}
                         {p.ph_control_mode && <span><span className="kicker">pH</span> {showParams(p.ph_control_mode, p.ph_pid, "pH")}
                           {p.loop_assignments?.ph && <span className="xs muted"><br />for {showAssignments(p.loop_assignments.ph)}</span>}</span>}
-                        {p.temperature_control_mode && <span><span className="kicker">T</span> {showParams(p.temperature_control_mode, p.temperature_pid, "°C")}
+                        {p.temperature_control_mode && <span><span className="kicker">T</span> {showParams(p.temperature_control_mode, p.temperature_pid, "°C", T_MODE_PARAMS)}
                           {p.loop_assignments?.temperature && <span className="xs muted"><br />for {showAssignments(p.loop_assignments.temperature)}</span>}</span>}
                       </td>
                       <td style={{ whiteSpace: "nowrap", textAlign: "right", width: 1 }}>
