@@ -253,3 +253,21 @@ also after the end of a run (sampling given as t (h) since Start or date/time: `
 trend axes/toggles remembered per browser (`localStorage` "fm2.trendPrefs"); events and change log show the
 latest 8/5 with "Show all"; manual variables moved under the charts; Settings › Credits shows branch and
 commit (`fm2/build_info.py`, reads .git without the git executable) and warns when not on main.
+
+## 2.1.2 (13 Nov 2026)
+- **Reactor monitoring page** `/reactors/:id` (`ReactorPage.tsx`): live values and commands (setpoints, process
+  limits, loops, dose counters) with or without an experiment; events and change log of the last 3 days
+  (`GET /reactors/{id}/activity`). Commands without an experiment are logged as reactor events
+  (`Event.experiment_id = None`). Home: idle cards open it; running cards link "Controller"; completed pages
+  show "Monitor Rx".
+- **Home cards** show every value of the experiment's channels (base and Addition 2 cumulative and 15-min
+  rate — `acid_rate_bins` in the analysis —, stirrer, dO2 + N2/air, level, redox); idle cards show what the
+  controller reports. The preview chart is chosen per reactor (localStorage "fm2.homePreview").
+- **Loops** button: one dialog, Start/Stop per loop (`components/ReactorControls.tsx`).
+- **Reset counters** (decision 13 Nov 2026, rule change): FM2 may reset the dose counters base (29), acid (28),
+  antifoam (30) by writing "1" to 2.13.<actuator>, exactly the controller's "Reset Dose Monitor" (any login
+  level); the driver refuses any other value. `POST /reactors/{id}/counters/reset`, read-back (≤ 0.05 mL),
+  event `counter_reset_manual:<counter>`, no duplicate "counter_reset" alert. Data: `_readings_df` keeps the
+  stitched total (analysis); `GET /readings` shows the counter restarting from 0 at FM2's resets and adds
+  `<x>_total_ml`.
+- Fermentation page: header and command bar sticky (`.sticky-head`, off on screens < 760 px tall).

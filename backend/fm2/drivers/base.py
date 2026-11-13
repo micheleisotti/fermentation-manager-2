@@ -46,6 +46,17 @@ class PhControl:
     deadband_enabled: Optional[bool] = None
 
 
+# Dose counters FM2 may reset (decision 13 Nov 2026), with the snapshot value they reset:
+# "base_cumulative_ml" is a ControllerSnapshot field, the others are extra fields.
+DOSE_COUNTERS = {"base": "base_cumulative_ml", "acid": "acid_cumulative_ml", "antifoam": "antifoam_cumulative_ml"}
+DOSE_COUNTER_LABELS = {"base": "Base (Alkali)", "acid": "Addition 2 (acid)", "antifoam": "Antifoam"}
+
+
+def counter_value(snap: "ControllerSnapshot", counter: str) -> Optional[float]:
+    field_ = DOSE_COUNTERS[counter]
+    return snap.base_cumulative_ml if field_ == "base_cumulative_ml" else (snap.extra or {}).get(field_)
+
+
 LoopControl = PhControl   # same structure for the temperature loop
 
 # Loops whose control type and loop parameters a profile can load (decision 10 Nov 2026: the
@@ -173,6 +184,11 @@ class ControllerDriver(ABC):
     def read_loop_config(self) -> LoopConfig:
         """Loops, their actuators (and cascades) and calibration state. Raises DriverError."""
         raise DriverError("this controller driver cannot read the loop configuration")
+
+    def reset_dose_counter(self, counter: str) -> None:
+        """Reset one dose counter (DOSE_COUNTERS) to 0, like the controller's own "Reset Dose Monitor".
+        Callers read back (snapshot fields in DOSE_COUNTERS)."""
+        raise DriverError("this controller driver cannot reset dose counters")
 
     def write_limits(self, parameter: str, low: Optional[float], high: Optional[float]) -> None:
         """

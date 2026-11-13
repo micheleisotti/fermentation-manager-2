@@ -496,6 +496,24 @@ def test_temperature_dead_band_not_used_when_disabled(fake):
     drv.close()
 
 
+def test_dose_counter_reset_only_with_the_reset_command(fake):
+    from fm2.drivers.ez2control import build_write_request
+    assert build_write_request("2.13.29", "1") == b"J2.13.29s1\r"
+    for bad in ("0", "5.00", "1.0"):
+        with pytest.raises(DriverError):
+            build_write_request("2.13.29", bad)        # the counter value itself can never be written
+    with pytest.raises(DriverError):
+        build_write_request("2.13.19", "1")             # heating: not a dose counter FM2 may reset
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    drv.reset_dose_counter("base")
+    drv.reset_dose_counter("acid")
+    assert fake.writes == [("2.13.29", "1"), ("2.13.28", "1")]
+    assert fake.holder is None                          # logged out again
+    with pytest.raises(DriverError):
+        drv.reset_dose_counter("heating")
+    drv.close()
+
+
 def test_loop_on_off_write_and_read_back(fake):
     fake.values.update({"1.14.0": "0", "1.14.2": "0", "1.14.13": "0", "1.14.1": "0", "1.14.3": "0"})
     drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")

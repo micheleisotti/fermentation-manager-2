@@ -1,3 +1,4 @@
+import { ReactorPage } from "./pages/ReactorPage";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
@@ -41,6 +42,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/experiments" element={<ExperimentsList />} />
           <Route path="/experiments/new" element={<Planning />} />
           <Route path="/experiments/:id" element={<ExperimentPage />} />
+          <Route path="/reactors/:id" element={<ReactorPage />} />
           <Route path="/analysis" element={<AnalysisHome />} />
           <Route path="/analysis/experiments/:id" element={<ExperimentAnalysisPage />} />
           <Route path="/analysis/new" element={<NewSession />} />

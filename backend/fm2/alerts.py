@@ -96,6 +96,7 @@ class ReactorAlertState:
     _stitched: float = 0.0
     _loops: dict = field(default_factory=dict)
     _expected_loops: dict = field(default_factory=dict)
+    _expected_counter_reset: int = 0     # readings left in which a drop is FM2's own reset
 
     @property
     def _when(self) -> str:
@@ -108,6 +109,11 @@ class ReactorAlertState:
     def expect_loop(self, loop: str, on: bool) -> None:
         """Called before FM2 switches a loop (and the loops it drives in cascade)."""
         self._expected_loops[loop] = bool(on)
+
+    def expect_counter_reset(self, counter: str) -> None:
+        """Called before FM2 resets a dose counter: the drop is not reported as an external reset."""
+        if counter == "base":
+            self._expected_counter_reset = 3
 
     def observe(self, snap: Optional[ControllerSnapshot], now: datetime) -> list[AlertEvent]:
         events: list[AlertEvent] = []
@@ -247,7 +253,9 @@ class ReactorAlertState:
             return []
         before = self._counter.last
         self._stitched, reset = self._counter.update(snap.base_cumulative_ml)
-        if not reset:
+        own = self._expected_counter_reset > 0
+        self._expected_counter_reset = 0 if reset else max(0, self._expected_counter_reset - 1)
+        if not reset or own:     # FM2's own reset is logged by the command: no second event
             return []
         return [AlertEvent("counter_reset", "info",
                            f"{self.reactor_id}: base counter reset on the controller "

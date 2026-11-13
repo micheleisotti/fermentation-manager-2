@@ -305,3 +305,10 @@ html[data-theme="dark"] img.logo-img, html[data-theme="dim"] img.logo-img { filt
 .status.preparing { background: var(--warn-container); color: var(--ink); border: 1px dashed var(--data-orange-text, #8a5a00); }
 .plan-table td { vertical-align: middle; }
 .plan-table .cell-input { height: 36px; }
+
+/* Fermentation page: header, links and command bar stay at the top; the page scrolls from Trends down.
+   Not on short screens, where it would take too much of the view. */
+.sticky-head { position: sticky; top: 0; z-index: 4; background: var(--surface-dim); display: flex; flex-direction: column;
+  gap: 16px; margin: -24px -32px 0; padding: 24px 32px 12px; border-bottom: 1px solid var(--divider); }
+@media (max-width: 760px) { .sticky-head { margin: -16px -16px 0; padding: 16px 16px 12px; } }
+@media (max-height: 760px) { .sticky-head { position: static; border-bottom: 0; } }

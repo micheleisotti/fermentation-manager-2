@@ -81,6 +81,8 @@ class SimulatedController(ControllerDriver):
             self._ph = self.initial_ph
             self._temp = self.sp["temperature"] - 1.4
             self._base_ml = 0.0
+            self._acid_ml = 0.0
+            self._antifoam_ml = 0.0
             self._pump_pct = 0.0
 
     on_experiment_start = reset
@@ -142,6 +144,7 @@ class SimulatedController(ControllerDriver):
                     "stirrer_out_rpm": self.sp["stirrer"],
                     "do2": round(max(0.0, 100.0 - 25.0 * self._x + n(0, 0.5)), 1), "do2_setpoint": 30.0,
                     "do2_low_limit": 20.0, "do2_high_limit": 120.0, "n2_pct": 0.0, "air_pct": 0.0,
+                    "acid_cumulative_ml": round(self._acid_ml, 2), "antifoam_cumulative_ml": round(self._antifoam_ml, 2),
                 },
             )
 
@@ -181,6 +184,14 @@ class SimulatedController(ControllerDriver):
             for lp in self.loop_config.loops:
                 if lp.drives == loop and lp.key in self.loops_active:
                     self.loops_active[lp.key] = bool(on)
+
+    def reset_dose_counter(self, counter: str) -> None:
+        attr = {"base": "_base_ml", "acid": "_acid_ml", "antifoam": "_antifoam_ml"}.get(counter)
+        if attr is None:
+            raise DriverError(f"cannot reset the {counter!r} counter")
+        with self._lock:
+            self._advance()
+            setattr(self, attr, 0.0)
 
     def read_loop_config(self) -> LoopConfig:
         if self.fail_reads:

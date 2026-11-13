@@ -1,16 +1,15 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type Channel, type Experiment, type Readings } from "../api";
+import { api, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling } from "../hooks";
 import { baseOption, trendsOption, varsFor } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
-import { SetpointDialog } from "../components/SetpointDialog";
 import { DeleteExperiment } from "../components/DeleteExperiment";
-import { LimitsDialog } from "../components/LimitsDialog";
+import { ControllerPanel, LoopsButton, ResetCountersButton } from "../components/ReactorControls";
 import { Planning } from "./Planning";
 import { PhoneFermentation } from "./PhoneExperiment";
 import { ModeTabs } from "./ExperimentAnalysis";
-import { ArchiveButton, EndExperimentButton, ExpTags, LoopButtons, StartExperimentButton } from "./ExperimentsList";
+import { ArchiveButton, EndExperimentButton, ExpTags, StartExperimentButton } from "./ExperimentsList";
 
 export function ExperimentPage() {
   const id = Number(useParams().id);
@@ -94,8 +93,6 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const setShowLim = (b: boolean) => { setShowLimRaw(b); saveTrendPrefs({ limits: b }); };
   const [showPartner, setShowPartner] = useState(true);
   const [showPartnerBase, setShowPartnerBase] = useState(false);
-  const [dialog, setDialog] = useState<string | null>(null);
-  const [limitsDialog, setLimitsDialog] = useState<string | null>(null);
   const [allEvents, setAllEvents] = useState(false);
   const [allLog, setAllLog] = useState(false);
 
@@ -115,6 +112,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
 
   return (
     <>
+      <div className="sticky-head">
       <Header e={e} partner={partner} onArchive={onChange} />
       {e.end_note && <div className={`banner ${e.status === "aborted" ? "alert" : "warn"} small`} role="note">
         <b>{e.status === "aborted" ? "Aborted" : "Ended"}{e.ended_at ? ` ${new Date(e.ended_at).toLocaleString()}` : ""}:</b>&nbsp;{e.end_note}</div>}
@@ -127,7 +125,8 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            <LoopButtons e={e} />
+            <LoopsButton reactor={e.reactor_id} channels={ch} />
+            <ResetCountersButton reactor={e.reactor_id} recording={false} />
             <StartExperimentButton e={e} onDone={onChange} />
           </div>
         </div>
@@ -141,11 +140,19 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            <LoopButtons e={e} />
+            <LoopsButton reactor={e.reactor_id} channels={ch} />
+            <ResetCountersButton reactor={e.reactor_id} recording onDone={() => { readings.refresh(); events.refresh(); }} />
             <EndExperimentButton e={e} onDone={onChange} />
           </div>
         </div>
       )}
+      {!running && (
+        <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
+          <span className="small muted">Not recording. The controller can still be monitored and commanded (setpoints, limits, loops, counters).</span>
+          <Link className="btn tonal" to={`/reactors/${e.reactor_id}`}>Monitor {e.reactor_id}</Link>
+        </div>
+      )}
+      </div>
 
       <div className="split">
         <div className="wide">
@@ -190,7 +197,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               </div>
             </div>
             <div className="dv-grid">
-              <DataValue value={fmt(bd?.total_ml as number, 1)} unit="mL" label="Cumulative (controller)" color="#1f7a63" />
+              <DataValue value={fmt(bd?.total_ml as number, 1)} unit="mL" label="Total since Start (controller)" color="#1f7a63" />
               <DataValue value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label={`Last complete ${binH === "1" ? "hour" : "15 min"}`} color="#1f7a63" />
               <DataValue value={fmt(bd?.peak_rate_ml_min as number, 3)} unit="mL/min" label={`Peak rate · t = ${fmt(bd?.t_peak_h as number, 1)} h`} />
               <DataValue value={fmt(s?.base_pump_pct, 0)} unit="%" label="Pump activation · now" />
@@ -208,28 +215,8 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
                 <h2 id="ctrl" style={{ fontSize: 18 }}>Controller · <span className="mono">{e.reactor_id}</span></h2>
                 <span className="xs muted">measured · setpoint</span>
               </div>
-              {[
-                { p: "ph", v: fmt(s.ph), u: "", l: `pH · set ${fmt(s.ph_setpoint)} · limits ${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}`, c: "#1d3786" },
-                { p: "temperature", v: fmt(s.temperature, 1), u: "°C", l: `T · set ${fmt(s.temperature_setpoint, 1)} · limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} · heating ${fmt(s.extra?.heating_pct, 0)} % · cooling ${fmt(s.extra?.cooling_pct, 0)} %` },
-                { p: "stirrer", v: fmt(s.stirrer, 0), u: "rpm", l: `Stirrer · set ${fmt(s.stirrer_setpoint, 0)}` },
-              ].filter((row) => ch.includes(row.p as Channel)).map((row) => (
-                <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
-                  <DataValue value={row.v} unit={row.u} label={row.l} color={row.c} />
-                  <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
-                    {row.p !== "stirrer" && <button className="btn text" onClick={() => setLimitsDialog(row.p)} aria-label={`Edit ${row.p} process limits`}>Limits</button>}
-                    <button className="btn tonal" onClick={() => setDialog(row.p)}>Edit</button>
-                  </span>
-                </div>
-              ))}
-              {ch.includes("do2") && (
-                <div className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
-                  <DataValue value={fmt(s.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s.extra?.do2_setpoint, 1)} · N2 ${fmt(s.extra?.n2_pct, 0)} % · air ${fmt(s.extra?.air_pct, 0)} %`} />
-                  <span className="xs muted">set on the controller</span>
-                </div>
-              )}
-              <span className="xs muted" style={{ padding: "4px 8px" }}>
-                pH control: {r?.ph_control?.mode ?? "—"}. Control mode and PID come from the plan, loaded before Start; dose calibration, interlocks and actuators stay on the controller.
-              </span>
+              <ControllerPanel reactor={e.reactor_id} s={s} channels={ch} phMode={r?.ph_control?.mode}
+                onChanged={() => { live.refresh(); log.refresh(); }} />
             </section>
           )}
 
@@ -260,14 +247,6 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
         </aside>
       </div>
 
-      {limitsDialog && s && (
-        <LimitsDialog reactor={e.reactor_id} parameter={limitsDialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
-          onClose={(changed) => { setLimitsDialog(null); if (changed) { live.refresh(); log.refresh(); } }} />
-      )}
-      {dialog && s && (
-        <SetpointDialog reactor={e.reactor_id} parameter={dialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
-          onClose={(changed) => { setDialog(null); if (changed) { live.refresh(); log.refresh(); } }} />
-      )}
     </>
   );
 }
