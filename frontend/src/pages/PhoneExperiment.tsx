@@ -5,7 +5,8 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { EndExperimentButton, LoopButtons, StartExperimentButton } from "./ExperimentsList";
+import { EndExperimentButton, StartExperimentButton } from "./ExperimentsList";
+import { LoopsButton, ResetCountersButton } from "../components/ReactorControls";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, usePolling } from "../hooks";
 import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
@@ -215,7 +216,10 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
         </Collapsible>
       )}
 
-      {running && <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><LoopButtons e={e} compact /></div>}
+      {running && <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
+        <LoopsButton reactor={e.reactor_id} channels={ch} compact />
+        <ResetCountersButton reactor={e.reactor_id} recording={!preparing} compact onDone={() => readings.refresh()} />
+      </div>}
       {preparing && <StartExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
       {running && !preparing && <EndExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
 

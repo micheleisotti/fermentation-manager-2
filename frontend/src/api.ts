@@ -181,6 +181,10 @@ export const api = {
   loopsState: (reactor: string) => req<LoopsState>(`/reactors/${reactor}/loops`),
   switchLoops: (reactor: string, loops: string[], on: boolean) => req<{ results: { loop: string; requested: boolean; readback: boolean | null; status: string; message: string }[] }>(
     `/reactors/${reactor}/loops`, { method: "POST", body: JSON.stringify({ loops, on }) }),
+  counters: (reactor: string) => req<CountersState>(`/reactors/${reactor}/counters`),
+  resetCounters: (reactor: string, counters: string[]) => req<{ results: { counter: string; before: number | null; after: number | null; status: string; message: string }[] }>(
+    `/reactors/${reactor}/counters/reset`, { method: "POST", body: JSON.stringify({ counters }) }),
+  reactorActivity: (reactor: string, hours = 72) => req<ReactorActivity>(`/reactors/${reactor}/activity?hours=${hours}`),
   loopConfig: (reactor: string, fresh = false) => req<LoopConfigView>(`/reactors/${reactor}/loop-config${fresh ? "?fresh=true" : ""}`),
   planCheck: (id: number) => req<PlanCheck>(`/experiments/${id}/plan-check`),
   loadProfile: (id: number) => req<{ results: { parameter: string; status: string; message?: string }[] }>(`/experiments/${id}/load-profile`, { method: "POST" }),
@@ -239,7 +243,7 @@ export const api = {
     req<SessionResults>(`/analysis-sessions/${id}/results?step_h=${stepH}${variable ? `&variable=${encodeURIComponent(variable)}` : ""}`),
   analysisFull: (id: number, model = "gompertz", stepH = 1) =>
     req<AnalysisResult>(`/experiments/${id}/analysis?model=${model}&step_h=${stepH}`),
-  analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),
+  analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; acid_rate_bins?: RateBin[]; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),
   setpoint: (reactor: string, parameter: string, value: number, origin = "local") =>
     req<CommandResult>(`/reactors/${reactor}/setpoints`, { method: "POST", body: JSON.stringify({ parameter, value, origin }) }),
   limits: (reactor: string, parameter: string, low: number | null, high: number | null, origin = "local") =>
@@ -274,6 +278,9 @@ export interface AppSettings {
   loops: { allowed: Record<string, string[]>; allow_remote: boolean };
 }
 export interface SwitchLoop extends LoopInfo { allowed: boolean; start_refused: string | null; also_switches: string[] }
+export interface CountersState { reachable: boolean; counters: { key: string; label: string; value: number | null }[] }
+export interface ChangeItem { at: string; parameter: string; old: number | null; new: number; readback: number | null; status: string; origin: string; author: string; experiment_id?: number | null }
+export interface ReactorActivity { events: EventItem[]; changes: ChangeItem[] }
 export interface LoopsState { reachable: boolean; message?: string; allowed: string[]; loops: SwitchLoop[] }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }

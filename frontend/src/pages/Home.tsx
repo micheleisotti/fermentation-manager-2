@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { api, type EventItem, type Experiment, type LiveReactor, type Status } from "../api";
+import { useMemo, useState, type ReactElement } from "react";
+import { Link } from "react-router-dom";
+import { api, type Channel, type EventItem, type LiveReactor, type Snapshot } from "../api";
 import { ExperimentTable } from "./ExperimentsList";
 import { usePolling, fmt, fmtDuration } from "../hooks";
-import { phAndRateOption, trendsOption, TREND_VARS } from "../components/charts";
+import { phAndRateOption, trendsOption, varsFor } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import logo from "../assets/logo.png";
 
@@ -13,6 +13,51 @@ const label = (id: string) => REACTOR_LABEL[id] ?? id;
 
 const outOf = (v: number | null | undefined, lo: number | null | undefined, hi: number | null | undefined) =>
   v != null && lo != null && hi != null && (v < lo || v > hi);
+
+/** Live values of a reactor: those of the experiment's channels, or every channel the controller reports. */
+function liveValues(s: Snapshot | null | undefined, ch: Channel[] | null, extra: { baseRate?: number | null; acidRate?: number | null } = {}) {
+  const x = s?.extra ?? {};
+  const on = (c: Channel, reported: boolean) => (ch ? ch.includes(c) : reported);
+  const out: ReactElement[] = [];
+  if (on("ph", s?.ph != null)) {
+    out.push(<DataValue key="ph" value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`}
+      color={outOf(s?.ph, s?.ph_low_limit, s?.ph_high_limit) ? "#b30020" : "#1d3786"} />);
+  }
+  if (on("temperature", s?.temperature != null))
+    out.push(<DataValue key="t" value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`}
+      color={outOf(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) ? "#b30020" : undefined} />);
+  if (on("stirrer", s?.stirrer != null))
+    out.push(<DataValue key="st" value={fmt(s?.stirrer, 0)} unit="rpm" label={`Stirrer · set ${fmt(s?.stirrer_setpoint, 0)}`} />);
+  if (on("ph", s?.ph != null)) {
+    out.push(<DataValue key="cum" value={fmt(s?.base_cumulative_ml, ch ? 1 : 2)} unit="mL" label={ch ? "Base, cumulative" : "Base counter"} color="#1f7a63" />);
+    if (ch) out.push(<DataValue key="rate" value={fmt(extra.baseRate, 3)} unit="mL/min" label="Base rate, last 15 min" color="#1f7a63" />);
+    if (x.acid_cumulative_ml != null) {
+      out.push(<DataValue key="acum" value={fmt(x.acid_cumulative_ml, ch ? 1 : 2)} unit="mL" label={ch ? "Addition 2, cumulative" : "Addition 2 counter"} />);
+      if (ch) out.push(<DataValue key="arate" value={fmt(extra.acidRate, 3)} unit="mL/min" label="Addition 2 rate, last 15 min" />);
+    }
+  }
+  if (on("do2", x.do2 != null)) {
+    out.push(<DataValue key="do2" value={fmt(x.do2, 1)} unit="%" label={`dO2 · set ${fmt(x.do2_setpoint, 1)}`} />);
+    out.push(<DataValue key="gas" value={`${fmt(x.n2_pct, 0)} / ${fmt(x.air_pct, 0)}`} unit="%" label="N2 / air valves" />);
+  }
+  if (on("level", false) && x.level_contact != null)
+    out.push(<DataValue key="lvl" value={x.level_contact ? "Contact" : "No contact"} label={`Level probe${x.antifoam_cumulative_ml != null ? ` · antifoam ${fmt(x.antifoam_cumulative_ml, 1)} mL` : ""}`} />);
+  if (on("redox", false) && x.redox_mv != null)
+    out.push(<DataValue key="rdx" value={fmt(x.redox_mv, 0)} unit="mV" label="Redox" />);
+  return out;
+}
+
+/** Preview chart of a running card: chosen per reactor, remembered in this browser. */
+const PREVIEW_KEY = "fm2.homePreview";
+function loadPreview(reactor: string): string | undefined {
+  try { return (JSON.parse(localStorage.getItem(PREVIEW_KEY) ?? "{}") as Record<string, string>)[reactor]; } catch { return undefined; }
+}
+function savePreview(reactor: string, key: string) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PREVIEW_KEY) ?? "{}") as Record<string, string>;
+    localStorage.setItem(PREVIEW_KEY, JSON.stringify({ ...all, [reactor]: key }));
+  } catch { /* storage unavailable */ }
+}
 
 /** A reactor with no experiment recording: live values only, nothing is stored. */
 function IdleCard({ r }: { r: LiveReactor }) {
@@ -34,19 +79,15 @@ function IdleCard({ r }: { r: LiveReactor }) {
           <span>Controller not reachable{r.error ? `: ${r.error}` : ""}</span>
         </div>
       ) : (
-        <div className="dv-grid">
-          <DataValue value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`}
-            color={outOf(s?.ph, s?.ph_low_limit, s?.ph_high_limit) ? "#b30020" : "#1d3786"} />
-          <DataValue value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`}
-            color={outOf(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) ? "#b30020" : undefined} />
-          <DataValue value={fmt(s?.stirrer, 0)} unit="rpm" label={`Stirrer · set ${fmt(s?.stirrer_setpoint, 0)}`} />
-          <DataValue value={fmt(s?.base_cumulative_ml, 2)} unit="mL" label="Base counter (reset before Start)" color="#1f7a63" />
-        </div>
+        <div className="dv-grid">{liveValues(s, null)}</div>
       )}
       <div className="row between small muted">
         <span>last reading{" "}
           <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
-        <Link className="btn tonal" to={`/experiments/new?reactor=${r.reactor_id}`}>Plan on {label(r.reactor_id)}</Link>
+        <span className="row" style={{ gap: 8 }}>
+          <Link className="btn text" to={`/experiments/new?reactor=${r.reactor_id}`}>Plan</Link>
+          <Link className="btn tonal" to={`/reactors/${r.reactor_id}`}>Open</Link>
+        </span>
       </div>
     </div>
   );
@@ -58,16 +99,21 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
   const readings = usePolling(() => api.readings(exp.id), 30000, [exp.id]);
   const analysis = usePolling(() => api.analysis(exp.id, 0.25), 60000, [exp.id]);
   const ch = exp.channels ?? ["temperature", "ph", "stirrer"];
+  const vars = varsFor(ch);
+  const choices = [...(ch.includes("ph") ? [{ key: "ph_rate", label: "pH + base rate" }] : []), ...vars.map((v) => ({ key: v.key, label: v.label }))];
+  const [preview, setPreview] = useState(() => {
+    const k = loadPreview(r.reactor_id);
+    return choices.some((c) => c.key === k) ? k! : choices[0]?.key ?? "";
+  });
   const option = useMemo(() => {
-    if (ch.includes("ph")) return phAndRateOption(readings.data, analysis.data?.rate_bins);
-    const first = TREND_VARS.find((v) => v.channel && ch.includes(v.channel) && ["temperature", "stirrer", "do2"].includes(v.key));
-    return first ? trendsOption(readings.data, first, null, { setpoints: true, limits: true, compact: true }) : {};
-  }, [readings.data, analysis.data, ch.join()]);
+    if (preview === "ph_rate") return phAndRateOption(readings.data, analysis.data?.rate_bins);
+    const v = vars.find((x) => x.key === preview);
+    return v ? trendsOption(readings.data, v, null, { setpoints: true, limits: true, compact: true, bins: analysis.data?.rate_bins }) : {};
+  }, [readings.data, analysis.data, preview, ch.join()]);
   const lastBin = analysis.data?.rate_bins.filter((b) => b.complete).at(-1);
+  const lastAcid = analysis.data?.acid_rate_bins?.filter((b) => b.complete).at(-1);
   const alert = events.find((e) => e.experiment_id === exp.id && e.severity === "alert" &&
     Date.now() - new Date(e.at).getTime() < 30 * 60 * 1000);
-  const tOut = s && s.temperature !== null && s.temperature_low_limit !== null && s.temperature_high_limit !== null &&
-    (s.temperature < s.temperature_low_limit || s.temperature > s.temperature_high_limit);
   return (
     <div className="card">
       <div className="row between" style={{ alignItems: "flex-start" }}>
@@ -77,24 +123,25 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
         </div>
         <StatusChip status={exp.status ?? "fermenting"} />
       </div>
-      <div className="dv-grid">
-        {[
-          ch.includes("ph") && <DataValue key="ph" value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`} color="#1d3786" />,
-          ch.includes("temperature") && <DataValue key="t" value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`} color={tOut ? "#b30020" : undefined} />,
-          ch.includes("ph") && <DataValue key="cum" value={fmt(s?.base_cumulative_ml, 1)} unit="mL" label="Base, cumulative" color="#1f7a63" />,
-          ch.includes("ph") && <DataValue key="rate" value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label="Base rate, last 15 min" color="#1f7a63" />,
-          ch.includes("do2") && <DataValue key="do2" value={fmt(s?.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s?.extra?.do2_setpoint, 1)}`} />,
-          ch.includes("stirrer") && <DataValue key="st" value={fmt(s?.stirrer, 0)} unit="rpm" label={`Stirrer · set ${fmt(s?.stirrer_setpoint, 0)}`} />,
-        ].filter(Boolean).slice(0, 4)}
+      <div className="dv-grid">{liveValues(s, ch, { baseRate: lastBin?.rate_ml_min, acidRate: lastAcid?.rate_ml_min })}</div>
+      <div className="row between" style={{ gap: 8 }}>
+        <span className="xs muted">Preview</span>
+        <select aria-label="Preview chart" value={preview} style={{ height: 32, width: "auto", fontSize: 13 }}
+          onChange={(x) => { setPreview(x.target.value); savePreview(r.reactor_id, x.target.value); }}>
+          {choices.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+        </select>
       </div>
-      <EChart option={option} className="chart mini" ariaLabel={`${r.reactor_id}: main channel since start`} />
+      <EChart option={option} className="chart mini" ariaLabel={`${r.reactor_id}: ${choices.find((c) => c.key === preview)?.label ?? ""} since start`} />
       {alert && (
         <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={20} /><span>{alert.message}</span></div>
       )}
       <div className="row between small muted">
         <span>{exp.status === "preparing" ? <>Not recording · t = —</> : <>t = <span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span></>} · last reading{" "}
           <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
-        <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
+        <span className="row" style={{ gap: 8 }}>
+          <Link className="btn text" to={`/reactors/${r.reactor_id}`}>Controller</Link>
+          <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
+        </span>
       </div>
     </div>
   );

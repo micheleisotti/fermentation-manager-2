@@ -461,6 +461,51 @@ def test_counter_reset_is_stitched_in_readings_and_logged(env):
     assert p["summary"]["total_base_ml"] >= before - 0.05
 
 
+def test_counter_reset_with_fm2_restarts_the_curve_and_keeps_totals(env):
+    c, clock, app, drivers = env
+    e = c.post("/api/experiments", json={"name": "manual reset", "reactor_id": "R1", "strain": "Lp187"}).json()
+    c.post(f"/api/experiments/{e['id']}/start")
+    run_hours(app, clock, 8)
+    before = drivers["R1"]._base_ml
+    assert before > 0.5
+    st = c.get("/api/reactors/R1/counters").json()
+    assert st["reachable"] and {x["key"] for x in st["counters"]} == {"base", "acid", "antifoam"}
+    assert c.post("/api/reactors/R1/counters/reset", json={"counters": ["nope"]}).status_code == 422
+    assert c.post("/api/reactors/R1/counters/reset", json={"counters": []}).status_code == 422
+    r = c.post("/api/reactors/R1/counters/reset", json={"counters": ["base"]}).json()["results"]
+    assert r[0]["status"] == "confirmed" and r[0]["before"] == pytest.approx(before, abs=0.01) and r[0]["after"] == 0
+    run_hours(app, clock, 2)
+    ev = c.get(f"/api/experiments/{e['id']}/events").json()
+    assert sum(x["kind"] == "counter_reset_manual:base" for x in ev) == 1
+    assert not any(x["kind"] == "counter_reset" for x in ev)        # not reported as an external reset
+    rd = c.get(f"/api/experiments/{e['id']}/readings").json()
+    cols, rows = rd["columns"], rd["rows"]
+    shown = [row[cols.index("base_cumulative_ml")] for row in rows]
+    total = [row[cols.index("base_total_ml")] for row in rows]
+    reset_t = next(x["t_h"] for x in ev if x["kind"] == "counter_reset_manual:base")
+    t = [row[cols.index("t_h")] for row in rows]
+    after = [v for tt, v in zip(t, shown) if tt >= reset_t]
+    assert after[0] < 0.1 and max(shown) >= before - 0.05        # the curve restarts from 0
+    assert total[-1] >= before - 0.05 and total[-1] >= shown[-1] + before - 0.1
+    a = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    assert a["summary"]["total_base_ml"] >= before - 0.05            # analysis: whole volume since Start
+    assert "acid_rate_bins" in a
+
+
+def test_commands_without_experiment_are_logged_on_the_reactor(env):
+    c, clock, app, drivers = env
+    app.state.acq.poll_once()
+    assert c.post("/api/reactors/R2/setpoints", json={"parameter": "temperature", "value": 25.0}).status_code == 200
+    r = c.post("/api/reactors/R2/counters/reset", json={"counters": ["base", "acid"]}).json()["results"]
+    assert [x["status"] for x in r] == ["confirmed", "confirmed"]
+    act = c.get("/api/reactors/R2/activity").json()
+    kinds = [x["kind"] for x in act["events"]]
+    assert "counter_reset_manual:base" in kinds and "counter_reset_manual:acid" in kinds
+    assert all(x["experiment_id"] is None for x in act["events"])
+    assert any(x["parameter"] == "temperature" and x["new"] == 25.0 for x in act["changes"])
+    assert c.get("/api/reactors/R9/activity").status_code == 404
+
+
 def test_loop_config_temperature_profile_and_assignment_check(env):
     from dataclasses import replace
     c, clock, app, drivers = env

@@ -154,8 +154,16 @@ LIMIT_ADDRESSES = frozenset(f"1.{k}.{s}" for s in LIMIT_SENSORS.values() for k i
 SWITCH_SENSORS = {"ph": PH, "temperature": TEMPERATURE, "stirrer": STIRRER, "do2": DO2, "level": LEVEL}
 LOOP_ACTIVE_ADDRESSES = {loop: f"1.14.{s}" for loop, s in SWITCH_SENSORS.items()}
 
+# Dose counter reset: writing "1" to 2.13.<actuator> resets that counter to 0. It is what the
+# controller's own "Reset Dose Monitor" / "Reset All Dose Monitors" buttons do
+# (dosesettings.js and rightpanelactuators.js -> actuatorData.doseValue(id, 1)); any login level.
+# Only "1" is accepted: the counter value itself can never be written.
+DOSE_RESET_ADDRESSES = {"base": f"2.13.{BASE_ACTUATOR}", "acid": f"2.13.{ACID_ACTUATOR}",
+                        "antifoam": f"2.13.{ANTIFOAM_ACTUATOR}"}
+
 WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | frozenset(LOOP_TYPE_ADDRESSES.values())
                       | frozenset(LOOP_ACTIVE_ADDRESSES.values())
+                      | frozenset(DOSE_RESET_ADDRESSES.values())
                       | frozenset(a for d in LOOP_PARAM_ADDRESSES.values() for a in d.values())
                       | LIMIT_ADDRESSES)
 
@@ -165,6 +173,8 @@ def build_write_request(address: str, text: str) -> bytes:
         raise DriverError(f"refusing to write {address}: not an address FM2 may write")
     if not text or any(c in text for c in "\rJSs|"):
         raise DriverError(f"refusing to write malformed value {text!r}")
+    if address in DOSE_RESET_ADDRESSES.values() and text != "1":
+        raise DriverError(f"refusing to write {text!r} to the dose counter {address}: only the reset command 1")
     if address in LOOP_ACTIVE_ADDRESSES.values() and text not in ("0", "1"):
         raise DriverError(f"refusing to write {text!r} to the loop switch {address}: only 0 or 1")
     if address in LOOP_TYPE_ADDRESSES.values() and text not in WRITABLE_PH_MODES.values():
@@ -595,6 +605,13 @@ class Ez2ControlDriver(ControllerDriver):
             raise DriverError(f"cannot switch the {loop!r} loop")
         with self._lock:
             self._logged_in_writes([(LOOP_ACTIVE_ADDRESSES[loop], "1" if on else "0", 0)])
+
+    def reset_dose_counter(self, counter: str) -> None:
+        """Reset one dose counter to 0 (the controller's "Reset Dose Monitor")."""
+        if counter not in DOSE_RESET_ADDRESSES:
+            raise DriverError(f"cannot reset the {counter!r} counter")
+        with self._lock:
+            self._logged_in_writes([(DOSE_RESET_ADDRESSES[counter], "1", 0)])
 
     # -- loop configuration (read only) ----------------------------------------------
     def read_loop_config(self) -> LoopConfig:

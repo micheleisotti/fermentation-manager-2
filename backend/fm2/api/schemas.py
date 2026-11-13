@@ -62,6 +62,10 @@ class LoopSwitchIn(BaseModel):
     on: bool
 
 
+class CounterResetIn(BaseModel):
+    counters: list[str]
+
+
 class StartIn(BaseModel):
     checklist: Optional[list[str]] = None   # pre-start checks the user ticked (logged in the Start event)
 

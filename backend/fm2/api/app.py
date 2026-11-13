@@ -37,7 +37,7 @@ from ..backup import BackupError, BackupManager
 from ..notify import Notifier, NotifyError, send as notify_send
 from ..services.app_settings import AppSettings, SettingsError
 from ..db import add_missing_columns, make_engine, make_session_factory, session_scope
-from ..drivers.base import CHANNELS, DEFAULT_CHANNELS, EXTRA_FIELDS
+from ..drivers.base import CHANNELS, DEFAULT_CHANNELS, DOSE_COUNTER_LABELS, DOSE_COUNTERS, EXTRA_FIELDS, counter_value
 from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
 from ..models import (
     DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event,
@@ -184,6 +184,16 @@ def who(request: Request, db: Session) -> str:
 def _event(db: Session, e: Experiment, kind: str, message: str, t_h: Optional[float] = None,
            severity: str = "info") -> None:
     db.add(Event(experiment_id=e.id, reactor_id=e.reactor_id, kind=kind, severity=severity, message=message, t_h=t_h))
+
+
+def _reactor_event(db: Session, request: Request, reactor_id: str, exp: Optional[Experiment], kind: str,
+                   message: str, severity: str = "info") -> None:
+    """Event of a command on a reactor: in the experiment if one is active, else on the reactor itself."""
+    if exp is not None:
+        t_h = _t_h(exp, now_of(request)) if (exp.started_at or exp.prepared_at) else None
+        _event(db, exp, kind, message, t_h, severity=severity)
+    else:
+        db.add(Event(experiment_id=None, reactor_id=reactor_id, kind=kind, severity=severity, message=message))
 
 
 def channels_of(e: Experiment) -> list[str]:
@@ -869,9 +879,10 @@ READING_FIELDS = ["t_h", "ph", "ph_setpoint", "temperature", "temperature_setpoi
 def _readings_df(db: Session, exp_id: int, since_h: float = 0.0) -> pd.DataFrame:
     """
     Controller readings, one column per field; optional-channel values become columns too.
-    base_cumulative_ml is continued across controller counter resets (stitch_counter); when a
-    reset happened, the raw counter is kept as base_counter_raw_ml. The whole series is read
-    so that the offset is right also for since_h > 0.
+    The dose counters (base_, acid_, antifoam_cumulative_ml) are continued across counter resets
+    (stitch_counter): they are the total dosed since Start, used by the analysis. When a reset
+    happened, the raw counter is kept as <x>_counter_raw_ml. The whole series is read so that the
+    offset is right also for since_h > 0. Resets made with FM2 are shown from 0 by get_readings.
     """
     rows = db.execute(select(ControllerReading).where(ControllerReading.experiment_id == exp_id)
                       .order_by(ControllerReading.t_h)).scalars().all()
@@ -880,19 +891,61 @@ def _readings_df(db: Session, exp_id: int, since_h: float = 0.0) -> pd.DataFrame
                        | {"ts": r.ts} for r in rows])
     if df.empty:
         return pd.DataFrame(columns=cols + ["ts"])
-    raw = pd.to_numeric(df["base_cumulative_ml"], errors="coerce").to_numpy(dtype=float)
-    if base_dosing.count_resets(raw):
-        df["base_counter_raw_ml"] = raw
-        df["base_cumulative_ml"] = base_dosing.stitch_counter(raw)
+    for col in DOSE_COUNTERS.values():
+        if col not in df:
+            continue
+        raw = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        if base_dosing.count_resets(raw):
+            df[col.replace("_cumulative_ml", "_counter_raw_ml")] = raw
+            df[col] = base_dosing.stitch_counter(raw)
     if since_h > 0:
         df = df[df["t_h"] >= since_h].reset_index(drop=True)
+    return df
+
+
+def _manual_resets(db: Session, exp_id: int) -> dict[str, list[float]]:
+    """{counter: [t_h, …]} of the counter resets made with FM2 during the experiment."""
+    out: dict[str, list[float]] = {}
+    for ev in db.scalars(select(Event).where(Event.experiment_id == exp_id,
+                                             Event.kind.like(f"{MANUAL_RESET_KIND}:%"),
+                                             Event.severity == "info")):
+        if ev.t_h is not None:
+            out.setdefault(ev.kind.split(":", 1)[1], []).append(ev.t_h)
+    return out
+
+
+def _restart_at_manual_resets(db: Session, exp_id: int, df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For the charts: a counter reset with FM2 shows as a restart from 0 (as on the controller), while
+    a reset FM2 did not make (power cycle, display) stays continued. The complete totals are kept as
+    <x>_total_ml when a manual reset happened.
+    """
+    resets = _manual_resets(db, exp_id)
+    if df.empty or not resets:
+        return df
+    t = df["t_h"].to_numpy(dtype=float)
+    for counter, times in resets.items():
+        col = DOSE_COUNTERS.get(counter)
+        if col not in df:
+            continue
+        total = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        shown = total.copy()
+        for tr in sorted(times):
+            before = np.where((t < tr) & np.isfinite(total))[0]
+            base = total[before[-1]] if len(before) else 0.0
+            after = t >= tr
+            shown[after] = total[after] - base
+        df[col.replace("_cumulative_ml", "_total_ml")] = total
+        df[col] = np.maximum(shown, 0.0)
     return df
 
 
 @router.get("/experiments/{exp_id}/readings")
 def get_readings(exp_id: int, db: Session = Depends(get_db), since_h: float = 0.0, max_points: int = 2000):
     _404(db.get(Experiment, exp_id))
-    df = _readings_df(db, exp_id, since_h)
+    df = _restart_at_manual_resets(db, exp_id, _readings_df(db, exp_id))
+    if since_h > 0:
+        df = df[df["t_h"] >= since_h].reset_index(drop=True)
     if len(df) > max_points:  # decimate for the browser; full data stays in the database/exports
         df = df.iloc[np.linspace(0, len(df) - 1, max_points).astype(int)]
     df = df.drop(columns=["ts"]).replace({np.nan: None})
@@ -1068,10 +1121,65 @@ def switch_loops(reactor_id: str, body: S.LoopSwitchIn, request: Request, db: Se
         msg = (f"{reactor_id}: {label} loop {'started' if body.on else 'stopped'} by {author}"
                + (f" (with {', '.join(view[x]['label'] for x in extra)} in cascade)" if extra else "")
                + ("" if r.status == "confirmed" else f" — NOT confirmed: {r.message}"))
-        if exp:
-            _event(db, exp, "loop_started" if body.on else "loop_stopped", msg, _t_h(exp, now_of(request)),
-                   severity="info" if r.status == "confirmed" else "alert")
+        _reactor_event(db, request, reactor_id, exp, "loop_started" if body.on else "loop_stopped", msg,
+                       severity="info" if r.status == "confirmed" else "alert")
     return {"results": [r.__dict__ for r in results]}
+
+
+# --- dose counters ----------------------------------------------------------------------
+MANUAL_RESET_KIND = "counter_reset_manual"     # kind "counter_reset_manual:<counter>"
+
+
+@router.get("/reactors/{reactor_id}/counters")
+def counters_state(reactor_id: str, request: Request):
+    """Dose counters FM2 can reset, with their current value (None = not reported by the controller)."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    snap = acq.live[reactor_id].snapshot
+    return {"reachable": snap is not None,
+            "counters": [{"key": k, "label": DOSE_COUNTER_LABELS[k],
+                          "value": None if snap is None else counter_value(snap, k)} for k in DOSE_COUNTERS]}
+
+
+@router.post("/reactors/{reactor_id}/counters/reset")
+def reset_counters(reactor_id: str, body: S.CounterResetIn, request: Request, db: Session = Depends(get_db)):
+    """Reset the selected dose counters to 0 (like "Reset Dose Monitor" on the controller), with read-back.
+    During an experiment the cumulative curve restarts from 0 there; totals in the analysis stay complete."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    _check_remote(request)
+    if not body.counters:
+        raise HTTPException(422, "No counter selected")
+    bad = [c for c in body.counters if c not in DOSE_COUNTERS]
+    if bad:
+        raise HTTPException(422, f"Unknown counter {bad[0]!r}")
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
+    alert_state = acq.alert_state_for(exp.id, reactor_id, exp.status == ExperimentStatus.preparing) if exp else None
+    results = commands.reset_counters(driver, list(dict.fromkeys(body.counters)), alert_state)
+    author = who(request, db)
+    for r in results:
+        label = DOSE_COUNTER_LABELS[r.counter]
+        before = "—" if r.before is None else f"{r.before:.2f} mL"
+        msg = (f"{reactor_id}: {label} counter reset by {author} (was {before})"
+               + ("" if r.status == "confirmed" else f" — NOT confirmed: {r.message}"))
+        _reactor_event(db, request, reactor_id, exp, f"{MANUAL_RESET_KIND}:{r.counter}", msg,
+                       severity="info" if r.status == "confirmed" else "alert")
+    return {"results": [r.__dict__ for r in results]}
+
+
+@router.get("/reactors/{reactor_id}/activity")
+def reactor_activity(reactor_id: str, request: Request, db: Session = Depends(get_db), hours: float = 72.0):
+    """Commands and events of a reactor (with or without an experiment) in the last hours: monitoring page."""
+    _404(request.app.state.acq.drivers.get(reactor_id), "Unknown reactor")
+    since = now_of(request) - timedelta(hours=hours)
+    ev = db.scalars(select(Event).where(Event.reactor_id == reactor_id, Event.at >= since)
+                    .order_by(Event.at.desc()).limit(200)).all()
+    cmds = db.scalars(select(SetpointCommand).where(SetpointCommand.reactor_id == reactor_id, SetpointCommand.at >= since)
+                      .order_by(SetpointCommand.at.desc()).limit(200)).all()
+    return {"events": [S.EventOut.model_validate(x).model_dump() for x in ev],
+            "changes": [{"at": c.at, "parameter": c.parameter, "old": c.old_value, "new": c.requested_value,
+                         "readback": c.readback_value, "status": c.status, "origin": c.origin, "author": c.author,
+                         "experiment_id": c.experiment_id} for c in cmds]}
 
 
 def is_local(request: Request) -> bool:
@@ -1231,6 +1339,10 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
     df = _readings_df(db, exp_id)
     res["rate_bins"] = [] if df.empty else [b.__dict__ for b in base_dosing.rate_bins(
         df["t_h"].astype(float), df["base_cumulative_ml"].astype(float), bin_h)]
+    # Addition 2 (acid) on the same bins, when the controller reports its counter
+    acid = pd.to_numeric(df["acid_cumulative_ml"], errors="coerce") if "acid_cumulative_ml" in df else None
+    res["acid_rate_bins"] = [] if acid is None or not acid.notna().any() else [
+        b.__dict__ for b in base_dosing.rate_bins(df["t_h"].astype(float), acid.astype(float), bin_h)]
     ch = channels_of(e)
     manual, fits = {}, {}
     for v in _measured_variables(db, exp_id):

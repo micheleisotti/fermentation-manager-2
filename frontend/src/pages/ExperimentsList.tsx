@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, type Channel, type Experiment, type LoopsState, type Status, type SwitchLoop } from "../api";
+import { api, type Experiment, type Status } from "../api";
 import { usePolling } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 
@@ -218,82 +218,3 @@ export function StartExperimentButton({ e, onDone, compact = false }: { e: Exper
   );
 }
 
-/**
- * "Start / Stop selected loops": switches control loops on the controller (actuators driven by the
- * loop rules); sensors keep being read either way. Only loops enabled in Settings › Loop control,
- * set up on the controller and (to start) with an actuator; each change is read back and logged.
- */
-export function LoopButtons({ e, compact = false }: { e: Experiment; compact?: boolean }) {
-  const [open, setOpen] = useState<"start" | "stop" | null>(null);
-  const [st, setSt] = useState<LoopsState | null>(null);
-  const [sel, setSel] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
-  const style = compact ? { flex: "1 1 0", justifyContent: "center" } : undefined;
-  const show = async (mode: "start" | "stop") => {
-    setOpen(mode); setSt(null); setSel([]); setMsg(null);
-    try { setSt(await api.loopsState(e.reactor_id)); } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-  };
-  const loops = (st?.loops ?? []).filter((l) => e.channels.includes(l.key as Channel) || l.active);
-  const why = (l: SwitchLoop): string | null => {
-    if (!l.allowed) return "not enabled in Settings › Loop control";
-    if (open === "start") return l.active ? "already on" : l.start_refused;
-    return l.active ? null : "already off";
-  };
-  const chosen = loops.filter((l) => sel.includes(l.key));
-  const cascades = open === "start" ? chosen.flatMap((l) => l.also_switches) : [];
-  return (
-    <>
-      <button className="btn outlined" style={style} onClick={() => show("start")}>Start selected loops</button>
-      <button className="btn outlined" style={style} onClick={() => show("stop")}>Stop selected loops</button>
-      {open && (
-        <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) setOpen(null); }}>
-          <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="loops-t" style={{ width: "min(560px, 100vw)" }}>
-            <h2 id="loops-t" style={{ fontSize: 20 }}>{open === "start" ? "Start" : "Stop"} control loops on {e.reactor_id}</h2>
-            {!st && !msg && <span className="muted small">Reading the controller…</span>}
-            {st && !st.reachable && <div className="banner alert small">{e.reactor_id} not reachable: {st.message}</div>}
-            {st?.reachable && (
-              <div className="stack" style={{ gap: 8 }}>
-                {loops.map((l) => {
-                  const reason = why(l);
-                  return (
-                    <label key={l.key} className="choice" style={reason ? { opacity: 0.55, cursor: "not-allowed" } : undefined}>
-                      <input type="checkbox" disabled={!!reason || busy} checked={sel.includes(l.key)}
-                        onChange={() => setSel(sel.includes(l.key) ? sel.filter((k) => k !== l.key) : [...sel, l.key])} />
-                      <span className="stack" style={{ gap: 2 }}>
-                        <span><b>{l.label}</b> <span className={`status ${l.active ? "fermenting" : "planned"}`} style={{ marginLeft: 6 }}>{l.active ? "On" : "Off"}</span></span>
-                        <span className="small muted">Actuators: {l.actuators.length ? l.actuators.map((a) => `${a.name}${a.kind === "sensor" ? " (cascade)" : ""}`).join(", ") : "none"}
-                          {l.also_switches.length > 0 && ` · switches the ${l.also_switches.join(", ")} loop too`}</span>
-                        {reason && <span className="xs muted">{reason}</span>}
-                      </span>
-                    </label>
-                  );
-                })}
-                {loops.length === 0 && <span className="muted small">No loop for the channels of this experiment.</span>}
-              </div>
-            )}
-            {cascades.length > 0 && <div className="banner warn small"><Icon name="warn" color="#8a5a00" size={18} />
-              <span>The controller also starts the <b>{cascades.join(", ")}</b> loop (cascade).</span></div>}
-            {msg && <div className={`banner ${msg.kind} small`}>{msg.text}</div>}
-            <span className="xs muted">Only the control loops (actuators) are affected: sensors and probes keep being read and shown live.
-              The controller is asked to switch, then read back; each change is logged as an event.</span>
-            <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-              <button className="btn text" disabled={busy} onClick={() => setOpen(null)}>Close</button>
-              <button className="btn filled" disabled={busy || sel.length === 0} onClick={async () => {
-                setBusy(true); setMsg(null);
-                try {
-                  const r = await api.switchLoops(e.reactor_id, sel, open === "start");
-                  const bad = r.results.filter((x) => x.status !== "confirmed");
-                  setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.loop} (${b.message || b.status})`).join(", ")}` }
-                    : { kind: "good", text: `${open === "start" ? "Started" : "Stopped"} and confirmed by the controller.` });
-                  setSel([]); setSt(await api.loopsState(e.reactor_id));
-                } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-                finally { setBusy(false); }
-              }}>{busy ? "Switching…" : `${open === "start" ? "Start" : "Stop"} ${sel.length || ""} loop${sel.length === 1 ? "" : "s"}`}</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}

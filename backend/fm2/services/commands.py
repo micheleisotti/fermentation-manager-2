@@ -189,3 +189,39 @@ def switch_loops(driver: ControllerDriver, loops: list[str], on: bool, cascades:
         out.append(LoopResult(loop, on, rb, "confirmed" if ok else "mismatch",
                               "" if ok else f"controller reports the loop {'on' if rb else 'off' if rb is not None else 'unknown'}"))
     return out
+
+
+@dataclass
+class CounterResult:
+    counter: str
+    before: Optional[float]
+    after: Optional[float]
+    status: str            # confirmed | mismatch | error
+    message: str = ""
+
+
+# After a reset the counter reads 0.00; a pump already dosing again by the read-back may add a little.
+COUNTER_RESET_TOL_ML = 0.05
+
+
+def reset_counters(driver: ControllerDriver, counters: list[str], alert_state=None) -> list[CounterResult]:
+    """Reset dose counters to 0 one by one, reading each back (the value must drop to ~0)."""
+    from ..drivers.base import DOSE_COUNTERS, counter_value
+    out = []
+    for c in counters:
+        if c not in DOSE_COUNTERS:
+            out.append(CounterResult(c, None, None, "error", f"unknown counter {c!r}"))
+            continue
+        try:
+            before = counter_value(driver.read(), c)
+            if alert_state is not None:
+                alert_state.expect_counter_reset(c)
+            driver.reset_dose_counter(c)
+            after = counter_value(driver.read(), c)
+        except DriverError as ex:
+            out.append(CounterResult(c, None, None, "error", str(ex)))
+            continue
+        ok = after is not None and after <= COUNTER_RESET_TOL_ML
+        out.append(CounterResult(c, before, after, "confirmed" if ok else "mismatch",
+                                 "" if ok else f"controller reports {after!r} mL after the reset"))
+    return out
