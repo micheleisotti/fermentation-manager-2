@@ -178,6 +178,7 @@ class MeasurementIn(BaseModel):
     variable_id: int
     value: float
     sampled_at: Optional[datetime] = None   # default: now
+    t_h: Optional[float] = None             # alternative to sampled_at: hours since Start (e.g. a frozen aliquot)
     unit: str = ""
     note: str = ""
     author: str = ""

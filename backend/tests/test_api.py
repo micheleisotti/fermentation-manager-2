@@ -152,6 +152,16 @@ def test_manual_edit_is_audited_and_time_from_start(env):
     earlier = (clock() - timedelta(minutes=30)).isoformat()
     m2 = c.patch(f"/api/measurements/{m['id']}", json={"sampled_at": earlier, "author": "michele"}).json()
     assert m2["t_h"] == pytest.approx(2.5)
+    # after the end: values measured days later on frozen aliquots, entered at their sampling time
+    c.post(f"/api/experiments/{e['id']}/end")
+    clock.advance(hours=72)
+    m3 = c.post(f"/api/experiments/{e['id']}/measurements", json={"variable_id": od_id, "value": 12.5, "t_h": 24}).json()
+    assert m3["t_h"] == pytest.approx(24.0)
+    assert c.post(f"/api/experiments/{e['id']}/measurements",
+                  json={"variable_id": od_id, "value": 1, "t_h": -1}).status_code == 422
+    assert c.post(f"/api/experiments/{e['id']}/measurements",
+                  json={"variable_id": od_id, "value": 1, "t_h": 1, "sampled_at": earlier}).status_code == 422
+    assert c.get(f"/api/system").json()["version"]
 
 
 def test_silent_controller_alert(env):
