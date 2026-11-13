@@ -106,9 +106,9 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
     return choices.some((c) => c.key === k) ? k! : choices[0]?.key ?? "";
   });
   const option = useMemo(() => {
-    if (preview === "ph_rate") return phAndRateOption(readings.data, analysis.data?.rate_bins);
+    if (preview === "ph_rate") return phAndRateOption(readings.data, analysis.data?.rate_bins, undefined, analysis.data?.estimated_end?.t_end_h);
     const v = vars.find((x) => x.key === preview);
-    return v ? trendsOption(readings.data, v, null, { setpoints: true, limits: true, compact: true, bins: analysis.data?.rate_bins }) : {};
+    return v ? trendsOption(readings.data, v, null, { setpoints: true, limits: true, compact: true, bins: analysis.data?.rate_bins, endH: analysis.data?.estimated_end?.t_end_h }) : {};
   }, [readings.data, analysis.data, preview, ch.join()]);
   const lastBin = analysis.data?.rate_bins.filter((b) => b.complete).at(-1);
   const lastAcid = analysis.data?.acid_rate_bins?.filter((b) => b.complete).at(-1);

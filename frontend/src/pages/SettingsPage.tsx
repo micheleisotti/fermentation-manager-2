@@ -6,16 +6,20 @@ import { usePolling } from "../hooks";
 import { DataValue, Icon } from "../components/ui";
 import { REACTOR_LABEL } from "./Home";
 import { initials, useUser } from "../components/UserGate";
+import { AppQr } from "../components/AppQr";
+import { CHANGELOG } from "../changelog";
 import { getTheme, setTheme, type Theme } from "../theme";
 
+// Order (13 Nov 2026): loop control right after the bioreactors; notifications and remote access together
+// (both are about reaching the lab from outside); appearance last before the credits.
 const SECTIONS = [
   { id: "users", label: "Users" },
-  { id: "appearance", label: "Appearance" },
   { id: "bioreactors", label: "Bioreactors" },
-  { id: "remote", label: "Remote access" },
   { id: "loops", label: "Loop control" },
   { id: "alerts", label: "Notifications" },
+  { id: "remote", label: "Remote access" },
   { id: "backup", label: "Data and backup" },
+  { id: "appearance", label: "Appearance" },
   { id: "credits", label: "Credits and license" },
 ];
 
@@ -213,7 +217,7 @@ export function SettingsPage() {
   const st: BackupStatus | undefined = backup.data;
 
   const CAPS: [string, string][] = [["read_values", "Read values"], ["read_limits", "Read process limits"],
-    ["write_setpoints", "Write setpoints"], ["write_limits", "Write process limits"], ["write_ph_control", "Load pH control (planning)"]];
+    ["write_setpoints", "Write setpoints"], ["write_limits", "Write process limits"], ["write_ph_control", "Load pH and temperature control (planning)"]];
   const RULES: { k: string; t: string; d: string }[] = [
     { k: "limits", t: "Outside process limits", d: `At Start if already outside; during the run after ${a.out_of_limits_after_min} min outside. Once per excursion, re-armed after ${a.rearm_min} min back within limits` },
     { k: "setpoint_ph", t: "Setpoint reached — pH", d: `Within ±${a.ph_tolerance} for ${a.hold_min} min, once per setpoint` },
@@ -245,10 +249,6 @@ export function SettingsPage() {
 
           <UsersSection />
 
-          <Section id="appearance" title="Appearance" sub="Saved on this device only: each phone or PC keeps its own choice.">
-            <AppearancePicker />
-          </Section>
-
           <Section id="bioreactors" title="Bioreactors"
             sub={<>Read from the service configuration (address and driver change with a service restart). Sampling every <span className="mono">{sys.data?.sampling_interval_s ?? "—"} s</span>.</>}>
             <div className="grid-cards">
@@ -268,43 +268,12 @@ export function SettingsPage() {
                         <Icon name={x.capabilities[k] ? "check" : "close"} size={16} color={x.capabilities[k] ? "#1f7a63" : "#9a9ca0"} width={2.2} />{label}
                       </span>
                     ))}
-                    <span className="row small muted" style={{ gap: 8 }}><Icon name="close" size={16} color="#9a9ca0" width={2.2} />Actuators, dose counters, calibration, interlocks: controller only</span>
+                    <span className="row small muted" style={{ gap: 8 }}><Icon name="close" size={16} color="#9a9ca0" width={2.2} />Actuator assignments, calibration, interlocks: controller only (dose counters: reset only)</span>
                   </div>
                   {x.address && <a className="btn text" style={{ alignSelf: "flex-start", paddingLeft: 0 }} href={`http://${x.address}`} target="_blank" rel="noreferrer">Open controller web UI</a>}
                 </div>
               ))}
             </div>
-          </Section>
-
-          <Section id="remote" title="Remote access" sub="Through the private network (Tailscale): nothing is exposed to the public internet.">
-            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
-            <fieldset className="plain" disabled={!local}>
-            <div className="row between" style={{ flexWrap: "nowrap", gap: 16 }}>
-              <span className="stack" style={{ gap: 0 }}>Allow setpoint and limit changes from remote devices
-                <span className="xs muted">Always with confirmation, read-back from the controller and a log entry</span></span>
-              <Switch on={r.allow_remote_setpoints} label="Allow remote changes" onChange={(v) => remote.edit((x) => { x.allow_remote_setpoints = v; })} />
-            </div>
-            <div className="table-wrap">
-              <table className="data" style={{ minWidth: 460 }}>
-                <caption className="small muted" style={{ textAlign: "left", paddingBottom: 6 }}>Allowed range for setpoint changes from this software (local and remote)</caption>
-                <thead><tr><th>Parameter</th><th>Min</th><th>Max</th><th>Max step per change</th></tr></thead>
-                <tbody>
-                  {([["ph", "pH"], ["temperature", "Temperature (°C)"], ["stirrer", "Stirrer (rpm)"]] as const).map(([k, label]) => (
-                    <tr key={k}>
-                      <td>{label}</td>
-                      {(["min", "max", "max_step"] as const).map((f) => (
-                        <td key={f}><input className="cell-input" {...NUM} aria-label={`${label} ${f}`} defaultValue={r.ranges[k][f]}
-                          key={`${k}-${f}-${remote.ver}`}
-                          onChange={(e) => remote.edit((x) => { x.ranges[k][f] = num(e.target.value); })} /></td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <span className="xs muted">The controller's own sensor ranges always apply on top.</span>
-            {local && remote.footer}
-            </fieldset>
           </Section>
 
           <Section id="loops" title="Loop control" sub="Which control loops can be started and stopped from this software (Start / Stop selected loops on the fermentation page).">
@@ -407,6 +376,39 @@ export function SettingsPage() {
             </details>
           </Section>
 
+          <Section id="remote" title="Remote access" sub="Through the private network (Tailscale): nothing is exposed to the public internet.">
+            <AppQr saved={r.app_url || undefined} canSave={local}
+              onSave={(u) => { remote.edit((x) => { x.app_url = u; }); }} />
+            {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
+            <fieldset className="plain" disabled={!local}>
+            <div className="row between" style={{ flexWrap: "nowrap", gap: 16 }}>
+              <span className="stack" style={{ gap: 0 }}>Allow setpoint and limit changes from remote devices
+                <span className="xs muted">Always with confirmation, read-back from the controller and a log entry</span></span>
+              <Switch on={r.allow_remote_setpoints} label="Allow remote changes" onChange={(v) => remote.edit((x) => { x.allow_remote_setpoints = v; })} />
+            </div>
+            <div className="table-wrap">
+              <table className="data" style={{ minWidth: 460 }}>
+                <caption className="small muted" style={{ textAlign: "left", paddingBottom: 6 }}>Allowed range for setpoint changes from this software (local and remote)</caption>
+                <thead><tr><th>Parameter</th><th>Min</th><th>Max</th><th>Max step per change</th></tr></thead>
+                <tbody>
+                  {([["ph", "pH"], ["temperature", "Temperature (°C)"], ["stirrer", "Stirrer (rpm)"]] as const).map(([k, label]) => (
+                    <tr key={k}>
+                      <td>{label}</td>
+                      {(["min", "max", "max_step"] as const).map((f) => (
+                        <td key={f}><input className="cell-input" {...NUM} aria-label={`${label} ${f}`} defaultValue={r.ranges[k][f]}
+                          key={`${k}-${f}-${remote.ver}`}
+                          onChange={(e) => remote.edit((x) => { x.ranges[k][f] = num(e.target.value); })} /></td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <span className="xs muted">The controller's own sensor ranges always apply on top.</span>
+            {local && remote.footer}
+            </fieldset>
+          </Section>
+
           <Section id="backup" title="Data and backup">
             <div className="dv-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
               <DataValue value={st?.last_ok ? new Date(st.last_ok).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}
@@ -471,6 +473,10 @@ export function SettingsPage() {
               Restore from a backup is done with the service stopped (procedure in the docs).</span>
           </Section>
 
+          <Section id="appearance" title="Appearance" sub="Saved on this device only: each phone or PC keeps its own choice.">
+            <AppearancePicker />
+          </Section>
+
           <Section id="credits" title="Credits and license">
             <div className="stack" style={{ gap: 0 }}>
               {[
@@ -488,6 +494,17 @@ export function SettingsPage() {
                 </div>
               ))}
             </div>
+            <details>
+              <summary className="small" style={{ cursor: "pointer", padding: "8px 0" }}>What changed in each version</summary>
+              <div className="stack" style={{ gap: 12, paddingTop: 4 }}>
+                {CHANGELOG.map((c) => (
+                  <div key={c.version} className="stack" style={{ gap: 2 }}>
+                    <span><b className="mono">{c.version}</b> <span className="xs muted">{c.date}</span></span>
+                    <ul className="small" style={{ margin: 0, paddingLeft: 20 }}>{c.items.map((t) => <li key={t}>{t}</li>)}</ul>
+                  </div>
+                ))}
+              </div>
+            </details>
           </Section>
         </div>
       </div>

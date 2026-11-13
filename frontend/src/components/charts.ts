@@ -14,13 +14,30 @@ function range(series: Pair[], extra: (number | null)[], minSpan: number, digits
   return { min: Math.floor((lo - pad) * f) / f, max: Math.ceil((hi + pad) * f) / f };
 }
 
+/**
+ * Estimated end of fermentation (same rule as the "probably finished" notification): a vertical dashed
+ * line, added to the marks of the first series.
+ */
+export function addEndLine(series: object[], endH: number | null | undefined, compact = false) {
+  if (endH == null || !series.length) return;
+  const s0 = series[0] as { markLine?: { symbol?: string; silent?: boolean; data: object[] } };
+  s0.markLine = s0.markLine ?? { symbol: "none", silent: true, data: [] };
+  s0.markLine.symbol = "none";
+  s0.markLine.data.push({ xAxis: endH, lineStyle: { color: C.ink, type: [6, 4], width: 1.2, opacity: 0.75 },
+    label: compact ? { show: false } : { formatter: `est. end ${endH.toFixed(1)} h`, position: "insideEndTop", color: C.ink, fontSize: 10 } });
+}
+
+/** Manual measurements for the trend chart: points by variable name. */
+export type ManualPoints = Record<string, { unit: string; t: number[]; y: number[] }>;
+export const MANUAL_PREFIX = "m:";
+
 const lastVal = (s: Pair[]) => {
   for (let i = s.length - 1; i >= 0; i--) if (s[i][1] !== null) return s[i][1] as number;
   return null;
 };
 
 /** pH (left) + base rate bars (right): used on Home cards and the phone view. */
-export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undefined, xMax?: number): EChartsCoreOption {
+export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undefined, xMax?: number, endH?: number | null): EChartsCoreOption {
   const ph = col(r, "ph");
   const lo = lastVal(col(r, "ph_low_limit")), hi = lastVal(col(r, "ph_high_limit")), sp = lastVal(col(r, "ph_setpoint"));
   const bars = (bins ?? []).map((b) => [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min, b.complete]);
@@ -28,6 +45,7 @@ export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undef
   if (sp !== null) marks.push({ yAxis: sp, lineStyle: { color: C.blue, type: "dashed", opacity: 0.6 }, label: { show: false } });
   if (lo !== null) marks.push({ yAxis: lo, lineStyle: { color: C.blue, type: "dotted", width: 1, opacity: 0.8 }, label: { show: false } });
   if (hi !== null) marks.push({ yAxis: hi, lineStyle: { color: C.blue, type: "dotted", width: 1, opacity: 0.8 }, label: { show: false } });
+  if (endH != null) marks.push({ xAxis: endH, lineStyle: { color: C.ink, type: [6, 4], width: 1.2, opacity: 0.75 }, label: { show: false } });
   return {
     animation: false,
     grid: { left: 44, right: 52, top: 12, bottom: 36 },
@@ -83,7 +101,8 @@ export const BASE_RATE_VAR: TrendVar = { key: "base_rate", label: "Base rate (15
 
 export function trendsOption(r: Readings | undefined, left: TrendVar, right: TrendVar | null,
   opts: { setpoints: boolean; limits: boolean; partner?: Readings; partnerLabel?: string;
-    bins?: RateBin[]; xRange?: { min?: number; max?: number }; compact?: boolean }): EChartsCoreOption {
+    bins?: RateBin[]; xRange?: { min?: number; max?: number }; compact?: boolean;
+    endH?: number | null; manual?: ManualPoints }): EChartsCoreOption {
   const colors = [C.blue, opts.compact ? C.greenDark : C.orange];
   const series: object[] = [];
   const yAxes: object[] = [];
@@ -91,6 +110,16 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
     if (!v) return;
     const color = colors[i];
     const textColor = i === 0 ? C.blue : opts.compact ? C.greenDark : C.orangeText;
+    if (v.key.startsWith(MANUAL_PREFIX)) {   // manual variable: points
+      const m = opts.manual?.[v.key.slice(MANUAL_PREFIX.length)];
+      yAxes.push({ ...axisBase, type: "value", scale: true, name: `${v.label}${v.unit ? ` (${v.unit})` : ""}`, nameLocation: "middle",
+        nameGap: 44, position: i ? "right" : "left", axisLine: { show: true, lineStyle: { color: textColor, width: 1.5 } },
+        axisLabel: { ...axisBase.axisLabel, color: textColor } });
+      series.push({ type: "line", name: v.label, yAxisIndex: i, data: (m?.t ?? []).map((t, k) => [t, m!.y[k]]),
+        showSymbol: true, symbol: "circle", symbolSize: 8, lineStyle: { color, width: 1, opacity: 0.5, type: "dotted" },
+        itemStyle: { color } });
+      return;
+    }
     if (v.key === "base_rate") {      // bars from the rate bins, on the right axis
       yAxes.push({ ...axisBase, type: "value", min: 0, name: `${v.label} (${v.unit})`, nameLocation: "middle", nameGap: 44,
         position: "right", axisLine: { show: true, lineStyle: { color: C.greenDark, width: 1.5 } },
@@ -127,6 +156,7 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
         showSymbol: false, symbol: "none", lineStyle: { color: C.grey, width: 1.5 }, itemStyle: { color: C.grey }, z: 1 });
     }
   });
+  addEndLine(series, opts.endH, opts.compact);
   return {
     animation: false,
     grid: opts.compact ? { left: 56, right: right ? 60 : 16, top: 12, bottom: 40 } : { left: 64, right: right ? 64 : 24, top: 28, bottom: 64 },
@@ -149,17 +179,26 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
   };
 }
 
-/** Base dosing: rate bins (left) + cumulative staircase from the controller (right). */
-export function baseOption(r: Readings | undefined, bins: RateBin[] | undefined, partner?: Readings): EChartsCoreOption {
-  const series: object[] = [
-    // series-level colour too: the legend takes it from here, not from the bars
-    { type: "bar", name: "Rate (mL/min)", yAxisIndex: 0, barWidth: "70%", itemStyle: { color: C.green },
-      data: (bins ?? []).map((b) => ({ value: [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min], itemStyle: { color: C.green, opacity: b.complete ? 0.85 : 0.35 } })) },
-    { type: "line", name: "Cumulative (controller)", yAxisIndex: 1, data: col(r, "base_cumulative_ml"), step: "end",
-      showSymbol: false, lineStyle: { color: C.ink, width: 2 }, itemStyle: { color: C.ink } },
-  ];
-  if (partner) series.push({ type: "line", name: "Cumulative R2 (paired)", yAxisIndex: 1, step: "end",
+/**
+ * Buffer dosing: rate bins (left) + cumulative staircase from the controller (right). Base buffer in green;
+ * acid buffer (Addition 2 on the pH loop) in blue, shown only when it was dosed.
+ */
+export function baseOption(r: Readings | undefined, bins: RateBin[] | undefined, partner?: Readings,
+  endH?: number | null, acidBins?: RateBin[], partnerLabel = "paired"): EChartsCoreOption {
+  const acidCum = col(r, "acid_cumulative_ml");
+  const acid = acidCum.some((p) => p[1] != null && p[1] > 0);
+  const bars = (name: string, list: RateBin[] | undefined, color: string) => ({
+    type: "bar", name, yAxisIndex: 0, barWidth: acid ? "40%" : "70%", barGap: "0%", itemStyle: { color },   // series colour: used by the legend
+    data: (list ?? []).map((b) => ({ value: [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min], itemStyle: { color, opacity: b.complete ? 0.85 : 0.35 } })) });
+  const series: object[] = [bars("Base buffer, rate", bins, C.green)];
+  if (acid) series.push(bars("Acid buffer, rate", acidBins, C.blue));
+  series.push({ type: "line", name: "Base buffer, cumulative", yAxisIndex: 1, data: col(r, "base_cumulative_ml"), step: "end",
+    showSymbol: false, lineStyle: { color: C.greenDark, width: 2 }, itemStyle: { color: C.greenDark } });
+  if (acid) series.push({ type: "line", name: "Acid buffer, cumulative", yAxisIndex: 1, data: acidCum, step: "end",
+    showSymbol: false, lineStyle: { color: C.blue, width: 2 }, itemStyle: { color: C.blue } });
+  if (partner) series.push({ type: "line", name: `Base buffer, cumulative (${partnerLabel})`, yAxisIndex: 1, step: "end",
     data: col(partner, "base_cumulative_ml"), showSymbol: false, lineStyle: { color: C.grey, width: 1.5 }, itemStyle: { color: C.grey } });
+  addEndLine(series, endH);
   return {
     animation: false,
     grid: { left: 64, right: 64, top: 20, bottom: 64 },

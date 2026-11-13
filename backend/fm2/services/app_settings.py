@@ -39,6 +39,8 @@ DEFAULT_ALLOWED_LOOPS = ["ph", "temperature", "stirrer"]
 DEFAULTS: dict[str, dict[str, Any]] = {
     "remote": {
         "allow_remote_setpoints": True,
+        "app_url": "",     # address to open from phones (QR code in Settings); empty = Tailscale name/address
+
         "ranges": {   # allowed range and max step for setpoint changes from this software
             "ph": {"min": 4.0, "max": 8.0, "max_step": 1.0},
             "temperature": {"min": 10.0, "max": 45.0, "max_step": 25.0},
@@ -95,7 +97,10 @@ def _num(d: dict, key: str, lo: float, hi: float) -> float:
 
 def _validate(section: str, v: dict) -> dict:
     if section == "remote":
-        out = {"allow_remote_setpoints": bool(v.get("allow_remote_setpoints", True)), "ranges": {}}
+        url = str(v.get("app_url") or "").strip()
+        if url and (not url.startswith(("http://", "https://")) or len(url) > 200 or any(c.isspace() for c in url)):
+            raise SettingsError("App address must start with http:// or https:// (no spaces)")
+        out = {"allow_remote_setpoints": bool(v.get("allow_remote_setpoints", True)), "app_url": url, "ranges": {}}
         bounds = {"ph": (0, 14), "temperature": (0, 100), "stirrer": (0, 5000)}
         for p, (lo, hi) in bounds.items():
             r = (v.get("ranges") or {}).get(p) or {}

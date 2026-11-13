@@ -1,3 +1,4 @@
+import { sidesText } from "../loopText";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, type Experiment, type ExperimentDraft, type LiveReactor, type LoopConfigView, type Named, type PlanCheckRow, type PlanParams, type Profile, DEFAULT_CHANNELS, type Channel } from "../api";
@@ -101,7 +102,6 @@ function LoopConfigBox({ cfg, channels, reactor }: { cfg?: LoopConfigView; chann
   if (!cfg.reachable) return <span className="xs muted">Loop configuration of {reactor}: read when the controller is on.</span>;
   const shown = cfg.loops.filter((l) => channels.includes(l.key as Channel));
   const nWarn = shown.reduce((n, l) => n + l.warnings.length, 0);
-  const sideSign = (s: number) => (s > 0 ? "+" : s < 0 ? "−" : "");
   return (
     <div className="stack" style={{ gap: 6, border: "1px solid var(--outline-variant, #c4c7cc)", borderRadius: 12, padding: "8px 12px" }}>
       <button className="row between btn text" style={{ height: 30, padding: 0, justifyContent: "space-between" }} onClick={() => setOpen(!open)}
@@ -114,7 +114,7 @@ function LoopConfigBox({ cfg, channels, reactor }: { cfg?: LoopConfigView; chann
         <div key={l.key} className="small" style={{ lineHeight: 1.4 }}>
           <b>{l.label}</b>
           <span className="muted"> · {!l.installed ? "not installed" : `${l.active ? "loop ON" : "loop off"}${l.control_type ? ` · ${l.control_type}` : ""}`}</span>
-          {l.installed && l.actuators.length > 0 && <span className="muted"> · {l.actuators.map((a) => `${a.name}${a.kind === "sensor" ? " (cascade)" : ""} ${sideSign(a.side)}`).join(", ")}</span>}
+          {l.installed && <span className="muted"> · {sidesText(l.actuators)}</span>}
           {open && l.probe && <span className="muted"> · {l.probe}</span>}
           {open && l.value != null && <span className="muted"> · now {l.value}{l.setpoint != null && l.installed && !["level", "redox"].includes(l.key) ? `, SP ${l.setpoint}` : ""}</span>}
           {open ? l.warnings.map((w) => <div key={w} className="xs" style={{ color: "#8a5a00", paddingLeft: 12 }}>⚠ {w}</div>)
@@ -124,7 +124,7 @@ function LoopConfigBox({ cfg, channels, reactor }: { cfg?: LoopConfigView; chann
       {open && cfg.unassigned_pumps.length > 0 && (
         <span className="xs muted">Pumps in no loop: {cfg.unassigned_pumps.map((a) => a.name).join(", ")}</span>
       )}
-      {open && <span className="xs muted">+ acts below the setpoint, − above. Actuators, cascades and calibration are changed on the controller's display;
+      {open && <span className="xs muted">Actuators, cascades, limits and calibration are changed on the controller's display;
         a profile records the actuators it was tuned for and does not load a loop's control settings if they differ.</span>}
     </div>
   );

@@ -20,6 +20,7 @@ const PATHS: Record<string, string> = {
   warn: "M12 3 2 21h20L12 3zM12 10v5M12 18v.5",
   check: "m5 12 5 5L20 7",
   stop: "M7 7h10v10H7z",
+  info: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v6M12 7.5v.5",
   play: "M8 5v14l11-7z",
   expand: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
   drop: "M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z",
@@ -86,7 +87,7 @@ export function EChart({ option, className = "chart", ariaLabel }: { option: ech
 }
 
 /** Palette colours that must follow the theme when used as text (dark theme: lighter variants). */
-const THEMED: Record<string, string> = {
+export const THEMED: Record<string, string> = {
   "#22294d": "var(--ink)", "#1d3786": "var(--data-blue-text, #1d3786)", "#1f7a63": "var(--data-green-text, #1f7a63)",
   "#8a5a00": "var(--data-orange-text)", "#455e6f": "var(--data-slate-text, #455e6f)",
 };

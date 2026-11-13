@@ -154,3 +154,50 @@ def summarize(t_h, cum_ml, final_od: Optional[float] = None, bin_h: float = 0.25
         t_half_total_h=half, last_hour_rate_ml_min=last_rate,
         n_doses=steps, base_per_final_od=bpo,
     )
+
+
+@dataclass
+class EstimatedEnd:
+    t_end_h: Optional[float]        # when the base rate fell (for good) below the threshold
+    t_notified_h: Optional[float]   # when the "probably finished" notification fires (t_end + hold)
+    fraction: float
+    hold_h: float
+    window_h: float
+
+
+def estimate_end(t_h, cum_ml, fraction: float = 0.10, hold_h: float = 0.5, window_h: float = 0.25) -> EstimatedEnd:
+    """
+    The rule of the "fermentation probably finished" notification (alerts._finished_rule), applied to
+    the recorded series: base rate over the trailing `window_h` (only once a full window is available),
+    running peak; the end is the first time the rate drops below `fraction` × peak and stays below for
+    `hold_h`. The notification fires `hold_h` later. None when the rule never triggered.
+    """
+    out = EstimatedEnd(None, None, fraction, hold_h, window_h)
+    t = np.asarray(t_h, dtype=float)
+    c = np.asarray(cum_ml, dtype=float)
+    m = np.isfinite(t) & np.isfinite(c) & (t >= 0)
+    t, c = t[m], c[m]
+    if len(t) < 3:
+        return out
+    o = np.argsort(t)
+    t, c = t[o], np.maximum.accumulate(stitch_counter(c[o]))
+    full = t - t[0] >= window_h * 0.9
+    c_before = np.interp(t - window_h, t, c)
+    span_h = np.minimum(window_h, t - t[0])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rate = np.where(full & (span_h > 0), (c - c_before) / (span_h * 60.0), np.nan)
+    peak = np.fmax.accumulate(np.where(np.isfinite(rate), rate, 0.0))
+    low = np.isfinite(rate) & (peak > 0) & (rate < fraction * peak)
+    i = 0
+    while i < len(t):
+        if not low[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(t) and low[j + 1]:
+            j += 1
+        if t[j] - t[i] >= hold_h:
+            out.t_end_h, out.t_notified_h = float(t[i]), float(t[i] + hold_h)
+            return out
+        i = j + 1
+    return out

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling } from "../hooks";
-import { baseOption, trendsOption, varsFor } from "../components/charts";
+import { baseOption, MANUAL_PREFIX, trendsOption, varsFor, type ManualPoints, type TrendVar } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { DeleteExperiment } from "../components/DeleteExperiment";
 import { ControllerPanel, LoopsButton, ResetCountersButton } from "../components/ReactorControls";
@@ -77,14 +77,25 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const live = usePolling(api.live, running ? 10000 : 600000);
   const events = usePolling(() => api.events(e.id), 20000, [e.id]);
   const log = usePolling(() => api.setpointLog(e.id), 30000, [e.id]);
+  const meas = usePolling(() => api.measurements(e.id), 60000, [e.id]);
 
   const ch = e.channels;
-  const vars = varsFor(ch);
+  // manual variables (OD, AFU, …) can go on the chart too, as points
+  const manual = useMemo(() => {
+    const out: ManualPoints = {};
+    for (const m of [...(meas.data ?? [])].sort((a, b) => a.t_h - b.t_h)) {
+      (out[m.variable_name] ??= { unit: m.unit, t: [], y: [] });
+      out[m.variable_name].t.push(m.t_h); out[m.variable_name].y.push(m.value);
+    }
+    return out;
+  }, [meas.data]);
+  const vars: TrendVar[] = [...varsFor(ch),
+    ...Object.entries(manual).map(([n, m]) => ({ key: `${MANUAL_PREFIX}${n}`, label: `${n} (manual)`, unit: m.unit, digits: 2 }))];
   const main = vars.filter((v) => ["ph", "temperature", "stirrer", "do2"].includes(v.key));
   const saved = loadTrendPrefs();
-  const valid = (k: string | undefined) => (k && vars.some((v) => v.key === k) ? k : undefined);
-  const [left, setLeftRaw] = useState(valid(saved.left) ?? main[0]?.key ?? vars[0]?.key ?? "ph");
-  const [right, setRightRaw] = useState(saved.right === "none" ? "none" : valid(saved.right) ?? main[1]?.key ?? "none");
+  // the saved choice is kept even if a manual variable is not loaded yet: it applies once available
+  const [left, setLeftRaw] = useState(saved.left ?? main[0]?.key ?? vars[0]?.key ?? "ph");
+  const [right, setRightRaw] = useState(saved.right ?? main[1]?.key ?? "none");
   const [showSp, setShowSpRaw] = useState(saved.setpoints ?? true);
   const [showLim, setShowLimRaw] = useState(saved.limits ?? true);
   const setLeft = (k: string) => { setLeftRaw(k); saveTrendPrefs({ left: k }); };
@@ -96,14 +107,17 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const [allEvents, setAllEvents] = useState(false);
   const [allLog, setAllLog] = useState(false);
 
-  const lv = vars.find((v) => v.key === left) ?? vars[0];
+  const lv = vars.find((v) => v.key === left) ?? main[0] ?? vars[0];
   const rv = vars.find((v) => v.key === right && v.key !== lv?.key) ?? null;
+  const endH = analysis.data?.estimated_end?.t_end_h ?? null;
   const trend = useMemo(() => !lv ? {} : trendsOption(readings.data, lv, rv, {
-    setpoints: showSp, limits: showLim,
-    partner: showPartner && partner ? partnerReadings.data : undefined, partnerLabel: partner ? `${lv.label} ${partner.reactor_id} (paired)` : undefined,
-  }), [readings.data, partnerReadings.data, lv, rv, showSp, showLim, showPartner, partner]);
-  const base = useMemo(() => baseOption(readings.data, analysis.data?.rate_bins, showPartnerBase ? partnerReadings.data : undefined),
-    [readings.data, analysis.data, partnerReadings.data, showPartnerBase]);
+    setpoints: showSp, limits: showLim, endH, manual,
+    partner: showPartner && partner && !lv.key.startsWith(MANUAL_PREFIX) ? partnerReadings.data : undefined,
+    partnerLabel: partner ? `${lv.label} ${partner.reactor_id} (paired)` : undefined,
+  }), [readings.data, partnerReadings.data, lv, rv, showSp, showLim, showPartner, partner, endH, manual]);
+  const base = useMemo(() => baseOption(readings.data, analysis.data?.rate_bins, showPartnerBase ? partnerReadings.data : undefined,
+    endH, analysis.data?.acid_rate_bins, partner?.reactor_id),
+    [readings.data, analysis.data, partnerReadings.data, showPartnerBase, endH, partner]);
 
   const r = live.data?.find((x) => x.reactor_id === e.reactor_id);
   const s = running ? r?.snapshot : null;
@@ -187,8 +201,8 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           {ch.includes("ph") && <section className="card" aria-labelledby="base">
             <div className="row between">
               <div className="stack" style={{ gap: 2 }}>
-                <h2 id="base" style={{ fontSize: 18 }}>Base dosing</h2>
-                <span className="small muted">Cumulative volume as reported by the controller; rate computed per bin</span>
+                <h2 id="base" style={{ fontSize: 18 }}>Buffer dosing</h2>
+                <span className="small muted">Base buffer (and acid buffer, Addition 2, when dosed): cumulative volume as reported by the controller; rate computed per bin</span>
               </div>
               <div className="row" style={{ gap: 8 }}>
                 <span className="small muted">Rate averaged over</span>
@@ -197,10 +211,11 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               </div>
             </div>
             <div className="dv-grid">
-              <DataValue value={fmt(bd?.total_ml as number, 1)} unit="mL" label="Total since Start (controller)" color="#1f7a63" />
+              <DataValue value={fmt(bd?.total_ml as number, 1)} unit="mL" label="Base buffer, total since Start" color="#1f7a63" />
               <DataValue value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label={`Last complete ${binH === "1" ? "hour" : "15 min"}`} color="#1f7a63" />
               <DataValue value={fmt(bd?.peak_rate_ml_min as number, 3)} unit="mL/min" label={`Peak rate · t = ${fmt(bd?.t_peak_h as number, 1)} h`} />
               <DataValue value={fmt(s?.base_pump_pct, 0)} unit="%" label="Pump activation · now" />
+              {endH != null && <DataValue value={fmt(endH, 1)} unit="h" label="Estimated end of fermentation" />}
             </div>
             <EChart option={base} className="chart short" ariaLabel="Base rate bins and cumulative base over time" />
           </section>}
@@ -213,7 +228,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             <section className="card tight" aria-labelledby="ctrl">
               <div className="row between" style={{ padding: "0 8px" }}>
                 <h2 id="ctrl" style={{ fontSize: 18 }}>Controller · <span className="mono">{e.reactor_id}</span></h2>
-                <span className="xs muted">measured · setpoint</span>
+                <span className="xs muted">measured · target and limits</span>
               </div>
               <ControllerPanel reactor={e.reactor_id} s={s} channels={ch} phMode={r?.ph_control?.mode}
                 onChanged={() => { live.refresh(); log.refresh(); }} />

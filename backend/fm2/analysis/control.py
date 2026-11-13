@@ -235,8 +235,9 @@ def dose_episodes(t_h, cum_ml, ph, ph_sp, counter: str = "base") -> DoseEpisodes
     return out
 
 
-def summarize(df, channels: list[str]) -> dict:
-    """{"loops": [LoopPerformance…], "doses": {"base": DoseEpisodes, "acid": …}} for the channels in use."""
+def summarize(df, channels: list[str], plan: Optional[dict] = None) -> dict:
+    """{"loops": [LoopPerformance…], "doses": {"base": DoseEpisodes, "acid": …}} for the channels in use.
+    With the experiment's plan (control mode and loop parameters loaded), each loop also gets "hints"."""
     loops = []
     for loop, (vcol, scol, acol) in COLUMNS.items():
         if loop not in channels or vcol not in df or scol not in df:
@@ -252,4 +253,74 @@ def summarize(df, channels: list[str]) -> dict:
                                   df["ph_setpoint"].astype(float), counter)
                 if d.n or counter == "base":
                     doses[counter] = asdict(d)
+    plan = plan or {}
+    for lp in loops:
+        mode = plan.get(f"{lp['loop']}_control_mode")
+        lp["control_mode"] = mode
+        lp["hints"] = hints(lp, doses if lp["loop"] == "ph" else None, mode, plan.get(f"{lp['loop']}_pid"))
     return {"loops": loops, "doses": doses}
+
+
+# --- rule-based hints (decision 12 Nov 2026, "level 2"): indications to evaluate, never values to apply ---
+OSCILLATION_PER_H = 4.0     # more crossings of the tolerance band per hour than this = oscillating
+
+
+def hints(perf: dict, doses: Optional[dict], mode: Optional[str], pid: Optional[dict]) -> list[dict]:
+    """
+    Plain-language hints from the regulation metrics of one loop. Each hint: {"kind": "ok"|"hint"|"note",
+    "text"}. The rules are general control practice; how much to change is left to the user, and the ez2-Control
+    conventions for I (integral time or gain) are not assumed. Adaptive: the controller tunes itself, so only
+    the evaluation is given.
+    """
+    out: list[dict] = []
+    if not perf.get("regulated") or perf.get("mean") is None:
+        return out
+    loop, tol = perf["loop"], perf["tolerance"]
+    unit = f" {perf['unit']}" if perf["unit"] else ""
+    bias, within = perf.get("bias") or 0.0, perf.get("within_tol_pct") or 0.0
+    cross = perf.get("crossings_per_h") or 0.0
+    if mode == "adaptive":
+        out.append({"kind": "note", "text": "Adaptive control: the controller tunes P, I and D itself; "
+                                            "only the evaluation applies (no parameter hints)."})
+    if within >= 95 and abs(bias) <= tol / 2 and cross < OSCILLATION_PER_H:
+        out.append({"kind": "ok", "text": f"Held within ±{tol:g}{unit} for {within:.0f} % of the time with no "
+                                          "systematic offset: no change suggested."})
+        return out
+    if mode == "adaptive":
+        return out
+    p = pid or {}
+    if cross >= OSCILLATION_PER_H:
+        out.append({"kind": "hint", "text": f"Oscillates around the target ({cross:.1f} crossings of the ±{tol:g}{unit} band "
+                                            "per hour): the loop reacts too strongly. Try a smaller P"
+                                            + (" or a little more D" if loop == "temperature" else "") + "."})
+    if abs(bias) > tol / 2 and cross < OSCILLATION_PER_H:
+        side = "below" if bias < 0 else "above"
+        out.append({"kind": "hint", "text": f"On average {abs(bias):.3g}{unit} {side} the target: a persistent offset. "
+                                            "The integral action (I) is what removes it — make it act more strongly "
+                                            "(check on the controller whether I is an integral time or a gain)."})
+    ov = perf.get("overshoot")
+    if loop == "temperature" and ov is not None and ov > 2 * tol:
+        out.append({"kind": "hint", "text": f"Overshoot of {ov:.2g}{unit} after first reaching the target: "
+                                            "try a smaller P or more D for the heat-up."})
+    if loop == "ph" and doses:
+        b = doses.get("base") or {}
+        sp, start, peak = b.get("setpoint_mean"), b.get("start_below_setpoint_median"), b.get("ph_peak_median")
+        db = p.get("deadband")
+        if b.get("n", 0) >= 3 and start is not None and start > 2 * tol:
+            if db is not None and start <= db + 0.03:
+                out.append({"kind": "hint", "text": f"Base dosing starts {start:.2f} pH below the target, about at the "
+                                                    f"dead band in the plan ({db:g}): to dose earlier and in smaller steps, reduce the "
+                                                    "dead band."})
+            else:
+                out.append({"kind": "hint", "text": f"Base dosing starts {start:.2f} pH below the target"
+                                                    + (f", beyond the dead band in the plan ({db:g})" if db is not None else "")
+                                                    + ": small errors give too little output. A larger P, or a shorter "
+                                                    "cycle time, makes the pump start earlier."})
+        if b.get("n", 0) >= 3 and sp is not None and peak is not None and peak - sp > tol:
+            out.append({"kind": "hint", "text": f"After each dosing episode the pH peaks {peak - sp:.2f} above the target: "
+                                                "doses are too large or mixing is slow. Smaller P (or pulse time) gives "
+                                                "smaller doses; stirring speed also affects the delay."})
+    if not any(h["kind"] == "hint" for h in out):
+        out.append({"kind": "note", "text": f"Within ±{tol:g}{unit} for {within:.0f} % of the time; no specific pattern "
+                                            "found by the rules."})
+    return out

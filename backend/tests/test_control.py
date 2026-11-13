@@ -92,3 +92,36 @@ def test_summarize_uses_the_channels():
     s = control.summarize(df, ["ph", "temperature"])
     assert [lp["loop"] for lp in s["loops"]] == ["ph", "temperature"]
     assert s["doses"]["base"]["n"] > 0 and "acid" not in s["doses"]
+
+
+def test_hints_from_the_sawtooth():
+    t, ph, cum, sp = _sawtooth()
+    df = pd.DataFrame({"t_h": t, "ph": ph, "ph_setpoint": sp, "base_cumulative_ml": cum})
+    s = control.summarize(df, ["ph"], {"ph_control_mode": "pid", "ph_pid": {"P": 100, "deadband": 0.10}})
+    texts = " ".join(h["text"] for h in s["loops"][0]["hints"])
+    assert "starts 0.13 pH below" in texts and "dead band" in texts
+    assert "below the target: a persistent offset" in texts
+    a = control.summarize(df, ["ph"], {"ph_control_mode": "adaptive"})
+    assert [h["kind"] for h in a["loops"][0]["hints"]] == ["note"]          # adaptive: evaluation only
+
+
+def test_hints_good_regulation_and_oscillation():
+    t = np.arange(0, 6, DT_H)
+    good = control.loop_performance("temperature", t, 30 + 0.05 * np.sin(t * 20), np.full(len(t), 30.0))
+    from dataclasses import asdict
+    assert control.hints(asdict(good), None, "pid", {})[0]["kind"] == "ok"
+    osc = control.loop_performance("temperature", t, 30 + 0.8 * np.sin(t * 30), np.full(len(t), 30.0))
+    h = control.hints(asdict(osc), None, "pid", {})
+    assert any("Oscillates" in x["text"] for x in h)
+
+
+def test_estimated_end_like_the_notification():
+    from fm2.analysis.base_dosing import estimate_end
+    t = np.arange(0, 20, DT_H)
+    rate = np.where(t < 12, 0.05 * np.exp(-((t - 8) / 3) ** 2), 0.0)          # mL/min
+    cum = np.round(np.cumsum(rate * 5 / 60), 2)
+    e = estimate_end(t, cum, 0.10, 0.5, 0.25)
+    assert 11.9 < e.t_end_h < 12.3 and e.t_notified_h == pytest.approx(e.t_end_h + 0.5)
+    assert estimate_end(t, np.round(np.cumsum(np.full(len(t), 0.03) * 5 / 60), 2)).t_end_h is None   # never slows
+    short = estimate_end(t[t < 12.2], cum[t < 12.2])                            # low for less than the hold time
+    assert short.t_end_h is None

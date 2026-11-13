@@ -80,6 +80,14 @@ def assignments_of(config: LoopConfig, loops=CONTROL_LOOPS) -> dict:
             for lp in config.loops if lp.key in loops}
 
 
+def sides_text(items) -> str:
+    """'below target Alkali · above target Addition 2': what acts on each side of the setpoint."""
+    def names(sign):
+        return ", ".join(f"{x['name']}{' (cascade)' if x.get('kind') == 'sensor' else ''}"
+                         for x in items or [] if (x["side"] > 0) == (sign > 0) and x["side"] != 0) or "nothing"
+    return f"below target {names(1)} · above target {names(-1)}"
+
+
 def _norm(items) -> list[tuple]:
     return sorted((it.get("kind", "actuator"), int(it["id"]), int(it["side"])) for it in (items or []))
 
@@ -92,8 +100,6 @@ def assignment_differences(expected: Optional[dict], config: LoopConfig) -> dict
     out = {}
     for loop, items in expected.items():
         if _norm(items) != _norm(now.get(loop)):
-            def fmt(xs):
-                return ", ".join(f"{x['name']} ({'+' if x['side'] > 0 else '−' if x['side'] < 0 else '0'})"
-                                 for x in xs) or "nothing"
-            out[loop] = (f"profile made for {fmt(items)}; controller has {fmt(now.get(loop, []))}")
+            out[loop] = (f"profile made for {sides_text(items)}; the controller now has {sides_text(now.get(loop, []))}. "
+                         "Change the actuators on the controller display (Loop configuration), or record the profile again")
     return out

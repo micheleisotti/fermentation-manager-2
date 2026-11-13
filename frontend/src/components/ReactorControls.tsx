@@ -1,62 +1,70 @@
 import { useState } from "react";
 import { api, type Channel, type CountersState, type LiveReactor, type LoopsState, type Snapshot, type SwitchLoop } from "../api";
 import { fmt } from "../hooks";
-import { DataValue, Icon } from "./ui";
-import { SetpointDialog } from "./SetpointDialog";
-import { LimitsDialog } from "./LimitsDialog";
+import { Icon, THEMED } from "./ui";
+import { ControlEditDialog } from "./ControlEditDialog";
+import { sidesText } from "../loopText";
 
 const isRemote = () => !["localhost", "127.0.0.1"].includes(location.hostname);
 
 /**
- * Live values and commands of one controller: setpoints, process limits. Used on the fermentation
+ * Live values and commands of one controller: one row per channel with the name, the value and the
+ * setpoint/limits below, and a single Edit (target and limits) on the right. Used on the fermentation
  * page and on the reactor monitoring page (also with no experiment: the controller does not need one).
  * `channels` limits the rows to the experiment's channels; without it, every channel the controller reports.
  */
 export function ControllerPanel({ reactor, s, channels, phMode, onChanged }:
   { reactor: string; s: Snapshot; channels?: Channel[]; phMode?: string | null; onChanged?: () => void }) {
-  const [dialog, setDialog] = useState<string | null>(null);
-  const [limits, setLimits] = useState<string | null>(null);
+  const [edit, setEdit] = useState<string | null>(null);
   const x = s.extra ?? {};
   const has = (c: Channel, reported: boolean) => (channels ? channels.includes(c) : reported);
-  const rows: { p: string; v: string; u: string; l: string; c?: string; edit?: boolean; lim?: boolean; note?: string }[] = [];
+  const out = (v: number | null | undefined, lo: number | null | undefined, hi: number | null | undefined) =>
+    v != null && lo != null && hi != null && (v < lo || v > hi);
+  const rows: { p: string; name: string; v: string; u: string; info: string[]; c?: string; edit?: boolean; note?: string }[] = [];
   if (has("ph", s.ph != null)) {
-    rows.push({ p: "ph", v: fmt(s.ph), u: "", l: `pH · set ${fmt(s.ph_setpoint)} · limits ${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}`, c: "#1d3786", edit: true, lim: true });
-    rows.push({ p: "base", v: fmt(s.base_cumulative_ml, 2), u: "mL", l: `Base buffer, counter · pump ${fmt(s.base_pump_pct, 0)} %`, c: "#1f7a63" });
+    rows.push({ p: "ph", name: "pH", v: fmt(s.ph), u: "", c: out(s.ph, s.ph_low_limit, s.ph_high_limit) ? "#b30020" : "#1d3786", edit: true,
+      info: [`target ${fmt(s.ph_setpoint)}`, `limits ${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}`, `control ${phMode ?? "—"}`] });
+    rows.push({ p: "base", name: "Base buffer", v: fmt(s.base_cumulative_ml, 2), u: "mL", c: "#1f7a63", info: ["dose counter", `pump ${fmt(s.base_pump_pct, 0)} %`] });
     if (x.acid_cumulative_ml != null)
-      rows.push({ p: "acid", v: fmt(x.acid_cumulative_ml, 2), u: "mL", l: `Addition 2 (acid), counter${x.acid_pump_pct != null ? ` · pump ${fmt(x.acid_pump_pct, 0)} %` : ""}` });
+      rows.push({ p: "acid", name: "Acid buffer (Addition 2)", v: fmt(x.acid_cumulative_ml, 2), u: "mL", c: "#1d3786",
+        info: ["dose counter", ...(x.acid_pump_pct != null ? [`pump ${fmt(x.acid_pump_pct, 0)} %`] : [])] });
   }
   if (has("temperature", s.temperature != null))
-    rows.push({ p: "temperature", v: fmt(s.temperature, 1), u: "°C", edit: true, lim: true,
-      l: `T · set ${fmt(s.temperature_setpoint, 1)} · limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} · heating ${fmt(x.heating_pct, 0)} % · cooling ${fmt(x.cooling_pct, 0)} %` });
+    rows.push({ p: "temperature", name: "Temperature", v: fmt(s.temperature, 1), u: "°C", edit: true,
+      c: out(s.temperature, s.temperature_low_limit, s.temperature_high_limit) ? "#b30020" : undefined,
+      info: [`target ${fmt(s.temperature_setpoint, 1)}`, `limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)}`,
+        `heating ${fmt(x.heating_pct, 0)} %`, `cooling ${fmt(x.cooling_pct, 0)} %`] });
   if (has("stirrer", s.stirrer != null))
-    rows.push({ p: "stirrer", v: fmt(s.stirrer, 0), u: "rpm", l: `Stirrer · set ${fmt(s.stirrer_setpoint, 0)}`, edit: true });
+    rows.push({ p: "stirrer", name: "Stirrer", v: fmt(s.stirrer, 0), u: "rpm", edit: true, info: [`target ${fmt(s.stirrer_setpoint, 0)}`] });
   if (has("do2", x.do2 != null))
-    rows.push({ p: "do2", v: fmt(x.do2, 1), u: "%", l: `dO2 · set ${fmt(x.do2_setpoint, 1)} · N2 ${fmt(x.n2_pct, 0)} % · air ${fmt(x.air_pct, 0)} %`, note: "set on the controller" });
+    rows.push({ p: "do2", name: "dO2", v: fmt(x.do2, 1), u: "%", note: "set on the controller",
+      info: [`target ${fmt(x.do2_setpoint, 1)}`, `N2 ${fmt(x.n2_pct, 0)} %`, `air ${fmt(x.air_pct, 0)} %`] });
   if (has("level", x.level_contact != null))
-    rows.push({ p: "level", v: x.level_contact == null ? "—" : x.level_contact ? "Contact" : "No contact", u: "",
-      l: `Level / foam probe${x.antifoam_cumulative_ml != null ? ` · antifoam counter ${fmt(x.antifoam_cumulative_ml, 2)}` : ""}`, note: "set on the controller" });
+    rows.push({ p: "level", name: "Level / foam probe", v: x.level_contact == null ? "—" : x.level_contact ? "Contact" : "No contact", u: "",
+      note: "set on the controller", info: x.antifoam_cumulative_ml != null ? [`antifoam counter ${fmt(x.antifoam_cumulative_ml, 2)} mL`] : [] });
   if (has("redox", x.redox_mv != null))
-    rows.push({ p: "redox", v: fmt(x.redox_mv, 0), u: "mV", l: "Redox", note: "read only" });
+    rows.push({ p: "redox", name: "Redox", v: fmt(x.redox_mv, 0), u: "mV", note: "read only", info: [] });
   return (
     <>
       {rows.map((row) => (
-        <div key={row.p} className="row between" style={{ padding: "8px", borderBottom: "1px solid var(--divider)" }}>
-          <DataValue value={row.v} unit={row.u} label={row.l} color={row.c} />
-          <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
-            {row.lim && <button className="btn text" onClick={() => setLimits(row.p)} aria-label={`Edit ${row.p} process limits`}>Limits</button>}
-            {row.edit && <button className="btn tonal" onClick={() => setDialog(row.p)}>Edit</button>}
-            {row.note && <span className="xs muted">{row.note}</span>}
-          </span>
+        <div key={row.p} className="ctrl-row">
+          <div className="ctrl-main">
+            <span className="ctrl-name">{row.name}</span>
+            <span className="ctrl-value mono" style={{ color: row.c && THEMED[row.c] ? THEMED[row.c] : row.c }}>{row.v}{row.u && <span className="u">{row.u}</span>}</span>
+            {row.info.length > 0 && <span className="ctrl-info">{row.info.map((t, k) => <span key={k}>{t}</span>)}</span>}
+          </div>
+          <div className="ctrl-act">
+            {row.edit ? <button className="btn tonal" onClick={() => setEdit(row.p)} aria-label={`Edit ${row.name} target${row.p !== "stirrer" ? " and limits" : ""}`}>Edit</button>
+              : row.note && <span className="xs muted">{row.note}</span>}
+          </div>
         </div>
       ))}
       {rows.length === 0 && <span className="small muted" style={{ padding: 8 }}>No channel reported.</span>}
       <span className="xs muted" style={{ padding: "4px 8px" }}>
-        pH control: {phMode ?? "—"}. Dose calibration, interlocks and actuator assignments stay on the controller.
+        Dose calibration, interlocks and actuator assignments stay on the controller.
       </span>
-      {limits && <LimitsDialog reactor={reactor} parameter={limits} snapshot={s} remote={isRemote()}
-        onClose={(changed) => { setLimits(null); if (changed) onChanged?.(); }} />}
-      {dialog && <SetpointDialog reactor={reactor} parameter={dialog} snapshot={s} remote={isRemote()}
-        onClose={(changed) => { setDialog(null); if (changed) onChanged?.(); }} />}
+      {edit && <ControlEditDialog reactor={reactor} parameter={edit} snapshot={s} remote={isRemote()}
+        onClose={(changed) => { setEdit(null); if (changed) onChanged?.(); }} />}
     </>
   );
 }
@@ -111,7 +119,7 @@ export function LoopsButton({ reactor, channels, compact = false }: { reactor: s
                   <div key={l.key} className="row between" style={{ padding: "10px 0", borderBottom: "1px solid var(--divider)", flexWrap: "nowrap", alignItems: "flex-start" }}>
                     <span className="stack" style={{ gap: 2, minWidth: 0 }}>
                       <span><b>{l.label}</b> <span className={`status ${l.active ? "fermenting" : "planned"}`} style={{ marginLeft: 6 }}>{l.active ? "On" : "Off"}</span></span>
-                      <span className="small muted">Actuators: {l.actuators.length ? l.actuators.map((a) => `${a.name}${a.kind === "sensor" ? " (cascade)" : ""}`).join(", ") : "none"}
+                      <span className="small muted">{sidesText(l.actuators)}
                         {l.also_switches.length > 0 && ` · switches the ${l.also_switches.join(", ")} loop too`}</span>
                       {(!l.allowed || (!l.active && startWhy)) && <span className="xs muted">{l.allowed ? `Cannot start: ${startWhy}` : startWhy}</span>}
                     </span>
