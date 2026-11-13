@@ -216,7 +216,7 @@ export const api = {
   deleteVariable: (id: number) => req<{ deleted: number }>(`/variables/${id}`, { method: "DELETE" }),
   readings: (id: number, sinceH = 0) => req<Readings>(`/experiments/${id}/readings?since_h=${sinceH}`),
   measurements: (id: number) => req<Measurement[]>(`/experiments/${id}/measurements`),
-  addMeasurement: (id: number, body: { variable_id: number; value: number; sampled_at?: string; unit?: string; note?: string }) =>
+  addMeasurement: (id: number, body: { variable_id: number; value: number; sampled_at?: string; t_h?: number; unit?: string; note?: string }) =>
     req<Measurement>(`/experiments/${id}/measurements`, { method: "POST", body: JSON.stringify(body) }),
   variables: () => req<Variable[]>("/variables"),
   events: (id: number) => req<EventItem[]>(`/experiments/${id}/events`),
@@ -277,7 +277,7 @@ export interface SwitchLoop extends LoopInfo { allowed: boolean; start_refused: 
 export interface LoopsState { reachable: boolean; message?: string; allowed: string[]; loops: SwitchLoop[] }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
-export interface SystemInfo { version: string; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;
+export interface SystemInfo { version: string; branch?: string | null; commit?: string | null; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;
   reactors: { reactor_id: string; driver: string; address: string; online: boolean; capabilities: Record<string, boolean> }[] }
 export interface SystemStatus {
   server: { host: string; started_at: string; uptime_s: number; version: string };

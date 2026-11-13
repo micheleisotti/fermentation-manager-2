@@ -42,7 +42,7 @@ export function phAndRateOption(r: Readings | undefined, bins: RateBin[] | undef
     ],
     series: [
       { type: "bar", yAxisIndex: 1, data: bars.map((b) => ({ value: [b[0], b[1]], itemStyle: { color: C.green, opacity: b[2] ? 0.45 : 0.2 } })),
-        barWidth: "60%", name: "Base rate (15 min)" },
+        barWidth: "60%", name: "Base rate (15 min)", itemStyle: { color: C.green } },
       { type: "line", data: ph, showSymbol: false, lineStyle: { color: C.blue, width: 1.6 }, name: "pH",
         markLine: { symbol: "none", silent: true, data: marks } },
     ],
@@ -95,7 +95,7 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
       yAxes.push({ ...axisBase, type: "value", min: 0, name: `${v.label} (${v.unit})`, nameLocation: "middle", nameGap: 44,
         position: "right", axisLine: { show: true, lineStyle: { color: C.greenDark, width: 1.5 } },
         axisLabel: { ...axisBase.axisLabel, color: C.greenDark } });
-      series.push({ type: "bar", name: v.label, yAxisIndex: i, barWidth: "60%",
+      series.push({ type: "bar", name: v.label, yAxisIndex: i, barWidth: "60%", itemStyle: { color: C.green },
         data: (opts.bins ?? []).map((b) => ({ value: [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min],
           itemStyle: { color: C.green, opacity: b.complete ? 0.55 : 0.25 } })) });
       return;
@@ -152,7 +152,8 @@ export function trendsOption(r: Readings | undefined, left: TrendVar, right: Tre
 /** Base dosing: rate bins (left) + cumulative staircase from the controller (right). */
 export function baseOption(r: Readings | undefined, bins: RateBin[] | undefined, partner?: Readings): EChartsCoreOption {
   const series: object[] = [
-    { type: "bar", name: "Rate (mL/min)", yAxisIndex: 0, barWidth: "70%",
+    // series-level colour too: the legend takes it from here, not from the bars
+    { type: "bar", name: "Rate (mL/min)", yAxisIndex: 0, barWidth: "70%", itemStyle: { color: C.green },
       data: (bins ?? []).map((b) => ({ value: [(b.t_start_h + b.t_end_h) / 2, b.rate_ml_min], itemStyle: { color: C.green, opacity: b.complete ? 0.85 : 0.35 } })) },
     { type: "line", name: "Cumulative (controller)", yAxisIndex: 1, data: col(r, "base_cumulative_ml"), step: "end",
       showSymbol: false, lineStyle: { color: C.ink, width: 2 }, itemStyle: { color: C.ink } },

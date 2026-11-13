@@ -11,7 +11,7 @@ import re
 import os
 import ipaddress
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 import numpy as np
@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.orm import Session, object_session
 
+from ..build_info import build_info
 from .. import __version__
 from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
@@ -915,7 +916,17 @@ def list_measurements(exp_id: int, db: Session = Depends(get_db)):
 def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Session = Depends(get_db)):
     e = _404(db.get(Experiment, exp_id))
     var = _404(db.get(Variable, body.variable_id), "Unknown variable")
-    at = body.sampled_at or now_of(request)
+    # any status once started: e.g. riboflavin measured days later on frozen aliquots of a completed run
+    if body.t_h is not None:
+        if body.sampled_at is not None:
+            raise HTTPException(422, "Give either the sampling time or t (h), not both")
+        if e.started_at is None:
+            raise HTTPException(409, "Experiment not started: t (h) is counted from Start")
+        if body.t_h < 0:
+            raise HTTPException(422, "t (h) must be ≥ 0")
+        at = _as_utc(e.started_at) + timedelta(hours=body.t_h)
+    else:
+        at = body.sampled_at or now_of(request)
     m = ManualMeasurement(experiment_id=e.id, variable_id=var.id, sampled_at=at, t_h=_t_h(e, at),
                           value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db))
     db.add(m)
@@ -1930,7 +1941,7 @@ def system_info(request: Request, db: Session = Depends(get_db)):
     st: Settings = request.app.state.settings
     acq: Acquisition = request.app.state.acq
     return {
-        "version": __version__, "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
+        "version": __version__, **build_info(), "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
         "experiments": db.scalar(select(func.count()).select_from(Experiment)),
         "reactors": [{"reactor_id": r.reactor_id, "driver": r.driver, "address": r.address,
                       "online": acq.live[r.reactor_id].last_error is None and acq.live[r.reactor_id].last_ok is not None,

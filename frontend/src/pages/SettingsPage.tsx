@@ -474,7 +474,11 @@ export function SettingsPage() {
           <Section id="credits" title="Credits and license">
             <div className="stack" style={{ gap: 0 }}>
               {[
-                ["Version", <span className="mono">{sys.data?.version ?? "—"}</span>],
+                ["Version", <span className="mono">{sys.data?.version ?? "—"}
+                  {sys.data?.commit && <span className="muted"> · {sys.data.branch ?? "detached"} @ {sys.data.commit}</span>}
+                  {sys.data && sys.data.branch !== "main" && (sys.data.branch || sys.data.commit) &&
+                    <span className="small" style={{ display: "block", color: "var(--data-orange-text)" }}>Not on main: a version under test. Run update.ps1 to return to main.</span>}
+                </span>],
                 ["Developed by", "Michele Isotti · DeFENS, University of Milan · DiSAFA, University of Turin"],
                 ["License", <span>GNU General Public License v3.0 or later <span className="muted">(GPL-3.0-or-later) · free software, provided without warranty</span></span>],
                 ["Source code", <a className="mono" href="https://github.com/micheleisotti/fermentation-manager-2" target="_blank" rel="noreferrer">github.com/micheleisotti/fermentation-manager-2</a>],

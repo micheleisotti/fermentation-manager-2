@@ -82,14 +82,22 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const ch = e.channels;
   const vars = varsFor(ch);
   const main = vars.filter((v) => ["ph", "temperature", "stirrer", "do2"].includes(v.key));
-  const [left, setLeft] = useState(main[0]?.key ?? vars[0]?.key ?? "ph");
-  const [right, setRight] = useState(main[1]?.key ?? "none");
-  const [showSp, setShowSp] = useState(true);
-  const [showLim, setShowLim] = useState(true);
+  const saved = loadTrendPrefs();
+  const valid = (k: string | undefined) => (k && vars.some((v) => v.key === k) ? k : undefined);
+  const [left, setLeftRaw] = useState(valid(saved.left) ?? main[0]?.key ?? vars[0]?.key ?? "ph");
+  const [right, setRightRaw] = useState(saved.right === "none" ? "none" : valid(saved.right) ?? main[1]?.key ?? "none");
+  const [showSp, setShowSpRaw] = useState(saved.setpoints ?? true);
+  const [showLim, setShowLimRaw] = useState(saved.limits ?? true);
+  const setLeft = (k: string) => { setLeftRaw(k); saveTrendPrefs({ left: k }); };
+  const setRight = (k: string) => { setRightRaw(k); saveTrendPrefs({ right: k }); };
+  const setShowSp = (b: boolean) => { setShowSpRaw(b); saveTrendPrefs({ setpoints: b }); };
+  const setShowLim = (b: boolean) => { setShowLimRaw(b); saveTrendPrefs({ limits: b }); };
   const [showPartner, setShowPartner] = useState(true);
   const [showPartnerBase, setShowPartnerBase] = useState(false);
   const [dialog, setDialog] = useState<string | null>(null);
   const [limitsDialog, setLimitsDialog] = useState<string | null>(null);
+  const [allEvents, setAllEvents] = useState(false);
+  const [allLog, setAllLog] = useState(false);
 
   const lv = vars.find((v) => v.key === left) ?? vars[0];
   const rv = vars.find((v) => v.key === right && v.key !== lv?.key) ?? null;
@@ -189,6 +197,8 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             </div>
             <EChart option={base} className="chart short" ariaLabel="Base rate bins and cumulative base over time" />
           </section>}
+
+          <ManualVariables e={e} />
         </div>
 
         <aside className="side">
@@ -224,8 +234,9 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           )}
 
           <section className="card tight" aria-labelledby="ev">
-            <h3 id="ev">Events</h3>
-            {(events.data ?? []).slice(0, 8).map((x) => (
+            <div className="row between"><h3 id="ev">Events</h3>
+              <MoreToggle n={(events.data ?? []).length} shown={EVENTS_SHOWN} open={allEvents} onToggle={() => setAllEvents(!allEvents)} /></div>
+            {(events.data ?? []).slice(0, allEvents ? undefined : EVENTS_SHOWN).map((x) => (
               <div key={x.id} className="row" style={{ gap: 10, alignItems: "flex-start", flexWrap: "nowrap" }}>
                 <span className={`dot ${x.severity === "alert" ? "bad" : x.severity === "good" ? "ok" : "idle"}`} style={{ marginTop: 6, flex: "0 0 auto" }} />
                 <span className="small" style={{ flexGrow: 1 }}>{x.message}</span>
@@ -236,10 +247,11 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           </section>
 
           <section className="card tight" aria-labelledby="log">
-            <h3 id="log">Change log</h3>
-            {(log.data ?? []).map((c, i) => (
+            <div className="row between"><h3 id="log">Change log</h3>
+              <MoreToggle n={(log.data ?? []).length} shown={LOG_SHOWN} open={allLog} onToggle={() => setAllLog(!allLog)} /></div>
+            {[...(log.data ?? [])].reverse().slice(0, allLog ? undefined : LOG_SHOWN).map((c, i) => (
               <div key={i} className="small row" style={{ gap: 10, flexWrap: "nowrap" }}>
-                <span className="mono muted">{new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                <span className="mono muted" title={new Date(c.at).toLocaleString()}>{new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
                 <span>{c.parameter} {c.old ?? "—"} → {c.new} · {c.origin} · {c.status}</span>
               </div>
             ))}
@@ -247,8 +259,6 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           </section>
         </aside>
       </div>
-
-      <ManualVariables e={e} />
 
       {limitsDialog && s && (
         <LimitsDialog reactor={e.reactor_id} parameter={limitsDialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
@@ -262,14 +272,35 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   );
 }
 
+const EVENTS_SHOWN = 8, LOG_SHOWN = 5;
+
+/** "Show all (n)" / "Show fewer" for the event and change lists (newest first). */
+function MoreToggle({ n, shown, open, onToggle }: { n: number; shown: number; open: boolean; onToggle: () => void }) {
+  if (n <= shown) return null;
+  return <button className="btn text" onClick={onToggle} aria-expanded={open}>{open ? "Show fewer" : `Show all (${n})`}</button>;
+}
+
+/** Trend axes and toggles: the last choice is remembered in this browser (all experiments). */
+type TrendPrefs = { left?: string; right?: string; setpoints?: boolean; limits?: boolean };
+const TREND_KEY = "fm2.trendPrefs";
+function loadTrendPrefs(): TrendPrefs {
+  try { return JSON.parse(localStorage.getItem(TREND_KEY) ?? "{}") as TrendPrefs; } catch { return {}; }
+}
+function saveTrendPrefs(p: TrendPrefs) {
+  try { localStorage.setItem(TREND_KEY, JSON.stringify({ ...loadTrendPrefs(), ...p })); } catch { /* storage unavailable */ }
+}
+
 function ManualVariables({ e }: { e: Experiment }) {
   const vars = usePolling(api.variables, 600000);
   const meas = usePolling(() => api.measurements(e.id), 30000, [e.id]);
   const [variable, setVariable] = useState<number | "">("");
   const [value, setValue] = useState("");
   const [time, setTime] = useState("");
+  const [tH, setTH] = useState("");
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const live = e.status === "fermenting";
+  const started = e.started_at != null;
   const varId = variable === "" ? (vars.data?.find((v) => v.name === "OD600") ?? vars.data?.[0])?.id : variable;
   const unit = vars.data?.find((v) => v.id === varId)?.unit ?? "";
 
@@ -278,25 +309,43 @@ function ManualVariables({ e }: { e: Experiment }) {
     const v = Number(value.replace(",", "."));
     if (!varId || !Number.isFinite(v) || value === "") { setErr("Enter a numeric value"); return; }
     let sampled_at: string | undefined;
-    if (time) {
+    let t_h: number | undefined;
+    if (tH.trim() !== "") {
+      t_h = Number(tH.replace(",", "."));
+      if (!Number.isFinite(t_h) || t_h < 0) { setErr("t (h) must be a number ≥ 0"); return; }
+    } else if (live && time) {
       const [hh, mm] = time.split(":").map(Number);
       const d = new Date(); d.setHours(hh, mm, 0, 0);
       if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1); // sample taken before midnight
       sampled_at = d.toISOString();
+    } else if (!live && time) {
+      sampled_at = new Date(time).toISOString();       // date and time of sampling
+    } else if (!live) {
+      setErr("Give when the sample was taken: t (h) since start, or date and time"); return;
     }
     try {
-      await api.addMeasurement(e.id, { variable_id: varId, value: v, sampled_at, note });
-      setValue(""); setNote(""); setTime(""); meas.refresh();
+      await api.addMeasurement(e.id, { variable_id: varId, value: v, sampled_at, t_h, note });
+      setValue(""); setNote(""); setTime(""); setTH(""); meas.refresh();
     } catch (x) { setErr((x as Error).message); }
   }
 
   return (
     <section className="card" aria-labelledby="man">
       <h2 id="man" style={{ fontSize: 18 }}>Manual variables</h2>
-      {e.status === "fermenting" && (
+      {!started && <span className="small muted">Manual variables can be added once the experiment has started (time is counted from Start).</span>}
+      {started && !live && <span className="small muted">
+        The run has ended: values measured later (e.g. on frozen aliquots) are entered at the time the sample was taken.</span>}
+      {started && (
         <div className="row" style={{ alignItems: "flex-end" }}>
-          <label className="field" style={{ flex: "1 1 140px" }}>Sampling time (empty = now)
-            <input type="time" value={time} onChange={(x) => setTime(x.target.value)} />
+          {live
+            ? <label className="field" style={{ flex: "1 1 140px" }}>Sampling time (empty = now)
+                <input type="time" value={time} disabled={tH.trim() !== ""} onChange={(x) => setTime(x.target.value)} />
+              </label>
+            : <label className="field" style={{ flex: "1 1 200px" }}>Sampling date and time
+                <input type="datetime-local" value={time} disabled={tH.trim() !== ""} onChange={(x) => setTime(x.target.value)} />
+              </label>}
+          <label className="field" style={{ flex: "0 1 110px" }}>or t (h)
+            <input inputMode="decimal" value={tH} onChange={(x) => setTH(x.target.value)} placeholder="e.g. 24" style={{ fontFamily: "var(--font-mono)" }} />
           </label>
           <label className="field" style={{ flex: "1 1 160px" }}>Variable
             <select value={varId ?? ""} onChange={(x) => setVariable(Number(x.target.value))}>

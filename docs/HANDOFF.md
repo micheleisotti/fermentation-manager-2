@@ -228,7 +228,7 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 ## Versioning
 - PEP 440 in `pyproject.toml` / `fm2/__init__.py` (frontend `package.json` mirrors it). 2.0.0.dev1–dev19
   followed the merged PR numbers. Since the loop-control work (new functions) the line is **2.1.0.devN**,
-  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21; 2.1.0.dev2 = loop configuration in planning, PR #22; 2.1.0.dev3 = loop start/stop, PR #23; 2.1.0.dev4 = planning save fix + temperature dead band + no bot token in logs).
+  N counted from 1 and increased at each merged PR (2.1.0.dev1 = counter-reset handling, PR #21; 2.1.0.dev2 = loop configuration in planning, PR #22; 2.1.0.dev3 = loop start/stop, PR #23; 2.1.0.dev4 = planning save fix + temperature dead band + no bot token in logs). After the test fermentation (10–12 Nov 2026) the roadmap uses semver: **2.1.1** = corrections (this release), 2.1.2 = controller use without an experiment, 2.1.3 = analysis of loop performance, 2.2 = interface + manual + citability.
   Release 2.1.0 (git tag) after the test fermentations; then semantic versioning — bug fixes 2.1.1,
   new features 2.2.0, incompatible changes (data/format) 3.0.0. The version is shown in Settings › Credits.
 
@@ -246,3 +246,10 @@ The ez2-Control shows and uses "Dead Band" (3.9.<sensor>) only where `1.29.<sens
 only) is 1. On R1 and R2: pH 1 (dead band 0.10 pH on 10 Nov), temperature 0. FM2 reads the flag
 (`PhControl.deadband_enabled`), hides the temperature dead band in Profiles/Planning, does not write it and
 ignores it in read-back checks.
+
+## 2.1.1 (13 Nov 2026)
+Planning save fix and temperature dead band (from 2.1.0.dev4); base-rate legend colour; manual variables
+also after the end of a run (sampling given as t (h) since Start or date/time: `MeasurementIn.t_h`);
+trend axes/toggles remembered per browser (`localStorage` "fm2.trendPrefs"); events and change log show the
+latest 8/5 with "Show all"; manual variables moved under the charts; Settings › Credits shows branch and
+commit (`fm2/build_info.py`, reads .git without the git executable) and warns when not on main.
