@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import * as echarts from "echarts/core";
 import { CustomChart, ScatterChart } from "echarts/charts";
-import { api, type AnalysisResult, type Experiment } from "../api";
+import { api, type AnalysisResult, type DoseEpisodes, type LoopPerformance, type Experiment } from "../api";
 import { fmt, usePolling } from "../hooks";
 import { C, DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 
@@ -138,6 +138,7 @@ export function ExperimentAnalysisPage() {
           <div className="split">
             <div className="wide">
               <KineticsCard a={a} model={model} setModel={setModel} />
+              <ControlCard a={a} />
             </div>
             <div className="side">
               <ExportCard e={e} on={panels.map((p) => p.key)} model={model} step={step} showFit={showFit} />
@@ -286,6 +287,74 @@ function KineticsCard({ a, model, setModel }: { a: AnalysisResult; model: string
           Compare with {partner.code} (parallel run) in a new analysis session
         </Link>
       )}
+    </section>
+  );
+}
+
+/** How well the loops held their setpoints (analysis.control): descriptive, no suggestion yet. */
+function ControlCard({ a }: { a: AnalysisResult }) {
+  const c = a.control;
+  if (!c || (c.loops.length === 0 && Object.keys(c.doses).length === 0)) return null;
+  const d = (loop: string) => (loop === "ph" ? 3 : loop === "temperature" ? 2 : 1);
+  const sgn = (v: number | null, n: number) => {
+    if (v == null) return "—";
+    const r = Number(v.toFixed(n));      // no "−0.00"
+    return `${r > 0 ? "+" : r < 0 ? "−" : ""}${fmt(Math.abs(r), n)}`;
+  };
+  const ok = (l: LoopPerformance) => l.regulated && l.mean != null;
+  const why = (l: LoopPerformance) => (!l.regulated ? "never reached the setpoint" : l.loop_state_recorded ? "loop off while at the setpoint" : "too few readings");
+  const loopRows: { p: string; u?: string; v: (l: LoopPerformance) => ReactNode }[] = [
+    { p: "Setpoint", v: (l) => <>{fmt(l.setpoint_mean, d(l.loop))}{l.setpoint_changes ? <span className="muted"> ({l.setpoint_changes} change{l.setpoint_changes > 1 ? "s" : ""})</span> : ""}</> },
+    { p: "Effective mean ± SD", v: (l) => `${fmt(l.mean, d(l.loop))} ± ${fmt(l.sd, d(l.loop))}` },
+    { p: "Mean deviation from setpoint", v: (l) => <span style={{ color: l.bias != null && Math.abs(l.bias) > l.tolerance ? "#8a5a00" : undefined }}>{sgn(l.bias, d(l.loop))}</span> },
+    { p: "Mean absolute deviation", v: (l) => fmt(l.mae, d(l.loop)) },
+    { p: "Time within tolerance", v: (l) => <>{fmt(l.within_tol_pct, 0)} % <span className="muted">(±{l.tolerance})</span></> },
+    { p: "Largest excursion above / below", v: (l) => `+${fmt(l.max_above, d(l.loop))} / −${fmt(l.max_below, d(l.loop))}` },
+    { p: "Setpoint first reached", u: "h", v: (l) => fmt(l.t_reached_h, 1) },
+    { p: "Crossings of the tolerance band", u: "per h", v: (l) => fmt(l.crossings_per_h, 1) },
+    { p: "Time counted", u: "h", v: (l) => fmt(l.regulated_h, 1) },
+  ];
+  const doses = Object.values(c.doses);
+  const doseRows: { p: string; v: (x: DoseEpisodes) => ReactNode }[] = [
+    { p: "Dosing episodes", v: (x) => x.n },
+    { p: "pH at pump start (median, range)", v: (x) => <>{fmt(x.ph_start_median, 2)}{x.ph_start_range && <span className="muted"> ({fmt(x.ph_start_range[0], 2)}–{fmt(x.ph_start_range[1], 2)})</span>}</> },
+    { p: "Distance from setpoint at start", v: (x) => `${fmt(x.start_below_setpoint_median, 2)} ${x.counter === "base" ? "below" : "above"}` },
+    { p: "pH at the last dose", v: (x) => fmt(x.ph_stop_median, 2) },
+    { p: "pH peak in the 5 min after", v: (x) => fmt(x.ph_peak_median, 2) },
+    { p: "Volume per episode", v: (x) => `${fmt(x.volume_median_ml, 2)} mL` },
+    { p: "Interval between episodes", v: (x) => (x.interval_median_min == null ? "—" : `${fmt(x.interval_median_min, 0)} min`) },
+  ];
+  return (
+    <section className="card" aria-labelledby="ctl">
+      <div className="stack" style={{ gap: 2 }}>
+        <h2 id="ctl" style={{ fontSize: 18 }}>Regulation</h2>
+        <span className="small muted">How closely each loop held its setpoint, from the first time the value reached it to the end of the run.
+          Time-weighted; the setpoint in force at each reading is used.</span>
+      </div>
+      {c.loops.length > 0 && (
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Parameter</th>{c.loops.map((l) => <th key={l.loop} className="num">{l.label}{l.unit && <span className="muted"> ({l.unit})</span>}</th>)}</tr></thead>
+            <tbody>{loopRows.map((r, i) => (
+              <tr key={r.p}><td>{r.p} {r.u && <span className="muted">{r.u}</span>}</td>
+                {c.loops.map((l) => <td key={l.loop} className="num mono">{i === 0 || ok(l) ? r.v(l) : i === 1 ? <span className="muted small">{why(l)}</span> : "—"}</td>)}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {doses.length > 0 && (
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Dosing on the pH loop</th>{doses.map((x) => <th key={x.counter} className="num">{x.counter === "base" ? "Base buffer" : "Acid (Addition 2)"}</th>)}</tr></thead>
+            <tbody>{doseRows.map((r, i) => (
+              <tr key={r.p}><td>{r.p}</td>{doses.map((x) => <td key={x.counter} className="num mono">{i === 0 || x.n ? r.v(x) : "—"}</td>)}</tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <span className="small muted">Medians over the dosing episodes (doses less than 1 min apart form one episode). "pH at pump start" is the last reading
+        before the counter grew: its resolution is the sampling interval.
+        {c.loops.some((l) => l.regulated && !l.loop_state_recorded) && " Loop on/off was not recorded in this run: the loops are assumed on from the moment the setpoint was reached."}</span>
     </section>
   );
 }

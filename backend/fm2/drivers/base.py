@@ -115,6 +115,8 @@ EXTRA_FIELDS = {
     "acid_cumulative_ml": "ph", "acid_pump_pct": "ph",
     "level_contact": "level", "antifoam_cumulative_ml": "level", "antifoam_pct": "level",
     "redox_mv": "redox",
+    # loop on/off at each reading (1/0), from snapshot.loops_active
+    "loop_ph": "ph", "loop_temperature": "temperature", "loop_stirrer": "stirrer", "loop_do2": "do2", "loop_level": "level",
 }
 
 

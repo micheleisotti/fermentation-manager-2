@@ -26,7 +26,7 @@ from ..build_info import build_info
 from .. import __version__
 from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
-from ..analysis import base_dosing, kinetics, report, stats
+from ..analysis import base_dosing, control, kinetics, report, stats
 from ..services.app_settings import SWITCHABLE_LOOPS
 from .. import loops
 from ..config import Settings
@@ -1344,6 +1344,7 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
     res["acid_rate_bins"] = [] if acid is None or not acid.notna().any() else [
         b.__dict__ for b in base_dosing.rate_bins(df["t_h"].astype(float), acid.astype(float), bin_h)]
     ch = channels_of(e)
+    res["control"] = control.summarize(df, ch) if not df.empty else {"loops": [], "doses": {}}
     manual, fits = {}, {}
     for v in _measured_variables(db, exp_id):
         t, y = _manual_series(db, exp_id, v.name)
@@ -1437,7 +1438,25 @@ SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model
     ("t_half_total_h", "Time to 50 % of total base", "h", "controller, cumulative"),
     ("last_hour_rate_ml_min", "Base rate in the last hour", "mL min⁻¹", "slowdown at end of run"),
     ("base_per_final_od", "Total base per final OD600", "mL AU⁻¹", "acid produced per biomass, proxy"),
+    # how well the loops held the setpoint (analysis.control): effective mean vs setpoint
+    ("ph_mean", "pH, effective mean during regulation", "", "control"),
+    ("ph_bias", "pH, mean deviation from setpoint", "", "control"),
+    ("ph_within_tol_pct", "pH, time within ±0.05 of setpoint", "%", "control"),
+    ("ph_dose_start", "pH when base dosing starts (median)", "", "control"),
+    ("temperature_mean", "T, effective mean during regulation", "°C", "control"),
+    ("temperature_bias", "T, mean deviation from setpoint", "°C", "control"),
+    ("temperature_within_tol_pct", "T, time within ±0.3 °C of setpoint", "%", "control"),
 ]
+
+
+def _control_values(ctrl: dict) -> dict:
+    """Flat values of analysis.control.summarize() for SESSION_PARAMS and the export."""
+    out = {}
+    for lp in ctrl.get("loops", []):
+        k = lp["loop"]
+        out[f"{k}_mean"], out[f"{k}_bias"], out[f"{k}_within_tol_pct"] = lp["mean"], lp["bias"], lp["within_tol_pct"]
+    out["ph_dose_start"] = (ctrl.get("doses", {}).get("base") or {}).get("ph_start_median")
+    return out
 SESSION_CTRL_VARS = {"ph": ("pH", ""), "temperature": ("T", "°C"), "base_cumulative_ml": ("Base, cumulative", "mL"),
                      "base_rate": ("Base rate", "mL min⁻¹"), "stirrer": ("Stirrer", "rpm"), "do2": ("dO2", "%")}
 
@@ -1529,7 +1548,8 @@ def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str
     if "ph" in channels_of(e) and not df.empty:
         bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
                                    float(od[-1]) if len(od) else None).__dict__
-    vals = {k: (p.get(k) if src == "fit" else bd.get(k)) for k, _, _, src in SESSION_PARAMS}
+    cv = _control_values(control.summarize(df, channels_of(e))) if not df.empty else {}
+    vals = {k: (p.get(k) if src == "fit" else cv.get(k) if src == "control" else bd.get(k)) for k, _, _, src in SESSION_PARAMS}
     return {"values": vals, "fit_error": err, "fit_warnings": p.get("warnings", [])}
 
 
@@ -1857,6 +1877,15 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
                 rows.append({"block": f"kinetics {v.name}", "parameter": "error", "value": err})
         bd = experiment_parameters(db, exp_id, model=model)["base_dosing"] if "ph" in channels_of(e) else None
         rows += [{"block": "base dosing", "parameter": k, "value": v} for k, v in (bd or {}).items()]
+        rd = _readings_df(db, exp_id)
+        if not rd.empty:
+            ctrl = control.summarize(rd, channels_of(e))
+            for lp in ctrl["loops"]:
+                rows += [{"block": f"regulation {lp['loop']}", "parameter": k, "value": v}
+                         for k, v in lp.items() if k not in ("loop", "label")]
+            for name, d in ctrl["doses"].items():
+                rows += [{"block": f"dose episodes {name}", "parameter": k, "value": "; ".join(map(str, v)) if isinstance(v, list) else v}
+                         for k, v in d.items() if k not in ("counter", "episodes")]
         out["Parameters"] = pd.DataFrame(rows, columns=["block", "parameter", "value"])
     if "metadata" in blocks:
         meta = {"code": e.code, "name": e.name, "strain": e.strain, "reactor": e.reactor_id,

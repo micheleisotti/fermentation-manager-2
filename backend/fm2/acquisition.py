@@ -104,7 +104,9 @@ class Acquisition:
                     ph_low_limit=snap.ph_low_limit, ph_high_limit=snap.ph_high_limit,
                     temperature_low_limit=snap.temperature_low_limit,
                     temperature_high_limit=snap.temperature_high_limit,
-                    extra=dict(snap.extra) or None,
+                    # loop on/off recorded too (1/0), for the analysis of the regulation (2.1.3)
+                    extra=(dict(snap.extra) | {f"loop_{k}": 1.0 if on else 0.0
+                                               for k, on in (snap.loops_active or {}).items()}) or None,
                 ))
             state = self.alert_state_for(exp.id, reactor_id, pre_start=pre)
             state.channels = frozenset(exp.channels or DEFAULT_CHANNELS)   # may change during the run
