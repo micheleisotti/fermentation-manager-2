@@ -493,7 +493,8 @@ function PlanControllerTable({ value, channels, reactor, onChange }: {
       set: (x) => ({ ...v, ph_setpoint: x as number | null }) });
     rows.push({ id: "ph_mode", group: "pH controller", label: "pH control mode", kind: "mode", plan: v.ph_control_mode, ctrl: pc?.mode,
       set: (x) => ({ ...v, ph_control_mode: (x as string) || null }) });
-    for (const p of PID_PARAMS.filter((q) => (MODE_KEYS[v.ph_control_mode ?? ""] ?? []).includes(q.k))) {
+    for (const p of PID_PARAMS.filter((q) => (MODE_KEYS[v.ph_control_mode ?? ""] ?? []).includes(q.k)
+      && (q.k !== "deadband" || pc?.deadband_enabled !== false))) {
       rows.push({ id: `pid_${p.k}`, group: "pH controller", label: `pH loop · ${p.label}${p.unit ? ` (${p.unit})` : ""}`, kind: "num",
         plan: v.ph_pid?.[p.k] ?? null, ctrl: pc?.pid?.[p.k], set: (x) => ({ ...v, ph_pid: { ...(v.ph_pid ?? {}), [p.k]: x as number | null } }) });
     }
@@ -506,7 +507,10 @@ function PlanControllerTable({ value, channels, reactor, onChange }: {
       ctrl: snap?.temperature_setpoint, set: (x) => ({ ...v, temperature_setpoint: x as number | null }) });
     rows.push({ id: "t_mode", group: "Temperature controller", label: "Temperature control mode", kind: "mode", plan: v.temperature_control_mode ?? null,
       ctrl: tc?.mode, set: (x) => ({ ...v, temperature_control_mode: (x as string) || null }) });
-    for (const p of PID_PARAMS.filter((q) => (MODE_KEYS[v.temperature_control_mode ?? ""] ?? []).includes(q.k))) {
+    // dead band only where the controller uses it (temperature: disabled on R1/R2)
+    const tDeadband = tc?.deadband_enabled === true;
+    for (const p of PID_PARAMS.filter((q) => (MODE_KEYS[v.temperature_control_mode ?? ""] ?? []).includes(q.k)
+      && (q.k !== "deadband" || tDeadband))) {
       rows.push({ id: `tpid_${p.k}`, group: "Temperature controller", label: `T loop · ${p.label}${p.k === "deadband" ? " (°C)" : p.unit === "s" ? " (s)" : ""}`, kind: "num",
         plan: v.temperature_pid?.[p.k] ?? null, ctrl: tc?.pid?.[p.k],
         set: (x) => ({ ...v, temperature_pid: { ...(v.temperature_pid ?? {}), [p.k]: x as number | null } }) });

@@ -32,6 +32,7 @@ R2_VALUES = {
     "2.12.19": "35", "2.4.19": "100", "2.12.46": "0", "2.4.46": "100", "2.12.18": "400",
     "2.12.0": "0", "2.4.0": "100", "2.12.1": "20", "2.4.1": "100",
     # temperature loop (R2: Adaptive), fake ranges like pH
+    "1.29.0": "1", "1.29.2": "0",        # dead band enabled on the pH loop only (as on R1/R2)
     "1.19.2": "1", "3.0.2": "50.0", "3.3.2": "6086.4", "3.6.2": "20.0", "3.9.2": "0.0", "3.12.2": "5", "3.71.2": "1500",
     "3.1.2": "1000.0", "3.2.2": "0.0", "3.4.2": "20000.0", "3.5.2": "0.0", "3.7.2": "1000.0", "3.8.2": "0.0",
     "3.10.2": "10.0", "3.11.2": "0.0", "3.13.2": "3600", "3.14.2": "1",
@@ -473,6 +474,26 @@ def test_temperature_loop_control_write(fake):
     assert snap.temperature_control.mode == "pid" and snap.temperature_control.pid["P"] == 25.2
     with pytest.raises(DriverError):
         drv.write_loop_control("stirrer", PhControl("pid", {"P": 1.0}))
+
+
+def test_temperature_dead_band_not_used_when_disabled(fake):
+    """R1/R2 have the dead band enabled on pH (1.29.0 = 1) and disabled on temperature (1.29.2 = 0):
+    the controller neither shows nor uses it there, so FM2 does not report nor write it."""
+    from fm2.drivers.base import PhControl
+    from fm2.services.commands import ph_control_differences
+    drv = make_driver("ez2control", "R2", f"127.0.0.1:{fake.port}")
+    snap = drv.read()
+    assert snap.ph_control.deadband_enabled is True and "deadband" in snap.ph_control.pid
+    assert snap.temperature_control.deadband_enabled is False and "deadband" not in snap.temperature_control.pid
+    plan = PhControl("adaptive", {"P": 50.0, "deadband": 0.5})
+    drv.write_loop_control("temperature", plan)
+    assert not any(a == "3.9.2" for a, _ in fake.writes)
+    assert ph_control_differences(plan, drv.read().temperature_control) == []
+    # where it is enabled, it is still written
+    fake.values["1.29.2"] = "1"
+    drv.write_loop_control("temperature", plan)
+    assert ("3.9.2", "0.5") in fake.writes
+    drv.close()
 
 
 def test_loop_on_off_write_and_read_back(fake):

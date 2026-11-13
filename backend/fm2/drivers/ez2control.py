@@ -62,6 +62,7 @@ READ_MAP: dict[str, str] = {
     "ph_pid_i":                 f"3.3.{PH}",
     "ph_pid_d":                 f"3.6.{PH}",
     "ph_deadband":              f"3.9.{PH}",
+    "ph_deadband_enabled":      f"1.29.{PH}",
     "ph_cycle_time":            f"3.12.{PH}",
     "ph_settling_time":         f"3.71.{PH}",
     "temperature":              f"1.15.{TEMPERATURE}",
@@ -94,6 +95,7 @@ READ_MAP: dict[str, str] = {
     "temperature_pid_i":        f"3.3.{TEMPERATURE}",
     "temperature_pid_d":        f"3.6.{TEMPERATURE}",
     "temperature_deadband":     f"3.9.{TEMPERATURE}",
+    "temperature_deadband_enabled": f"1.29.{TEMPERATURE}",
     "temperature_cycle_time":   f"3.12.{TEMPERATURE}",
     "temperature_settling_time": f"3.71.{TEMPERATURE}",
     # Addition 2 (acid when on the pH loop's high side), level/antifoam, redox
@@ -245,7 +247,12 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
         pid = {"P": f(f"{loop}_pid_p"), "I": f(f"{loop}_pid_i"), "D": f(f"{loop}_pid_d"),
                "deadband": f(f"{loop}_deadband"), "cycle_time": f(f"{loop}_cycle_time"),
                "settling_time": f(f"{loop}_settling_time")}
-        return PhControl(mode=mode, pid={k: v for k, v in pid.items() if v is not None} or None)
+        db_flag = f(f"{loop}_deadband_enabled")
+        db_enabled = None if db_flag is None else db_flag == 1
+        if db_enabled is False:      # not shown nor used by the controller: not reported
+            pid.pop("deadband")
+        return PhControl(mode=mode, pid={k: v for k, v in pid.items() if v is not None} or None,
+                         deadband_enabled=db_enabled)
 
     def pct(out_key: str, factor_key: str):
         v, fac = f(out_key), f(factor_key)
@@ -544,6 +551,13 @@ class Ez2ControlDriver(ControllerDriver):
             raise DriverError(f"unknown {loop} loop parameters {sorted(unknown)}: expected {sorted(addresses)}")
         params = {k: v for k, v in params.items() if k in PH_MODE_PARAMS[control.mode]}
         with self._lock:
+            if "deadband" in params:
+                # The controller only uses a dead band where it is enabled (1.29.<sensor>, read only);
+                # elsewhere the value is not shown on the display and is not written.
+                flag = to_float(self._query({"db": f"1.29.{CONTROL_SENSORS[loop]}"}).get("db"))
+                if flag != 1:
+                    log.info("%s %s loop: dead band not enabled on the controller, not written", self.reactor_id, loop)
+                    params.pop("deadband")
             keys = {"type": LOOP_TYPE_ADDRESSES[loop]}
             for term in params:
                 keys[term] = addresses[term]

@@ -11,6 +11,9 @@ from .api.app import create_app
 from .config import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# httpx logs every request URL at INFO: Telegram URLs contain the bot token, which must not end up in the log files
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 def _clock():
     """Real clock, or an accelerated one for demos (FM2_SIM_SPEED > 1, simulator only)."""

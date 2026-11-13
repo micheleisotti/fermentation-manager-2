@@ -41,6 +41,9 @@ class PhControl:
     mode: Optional[str] = None            # "adaptive" | "pid"
     # pH loop parameters: P, I, D, deadband, cycle_time [s], settling_time [s] (ez2-Control names)
     pid: Optional[dict] = None
+    # Whether the controller uses a dead band on this loop (1.29.<sensor>). The ez2-Control only shows
+    # and applies "Dead Band" when it is enabled (on R1/R2: pH yes, temperature no). None = unknown.
+    deadband_enabled: Optional[bool] = None
 
 
 LoopControl = PhControl   # same structure for the temperature loop

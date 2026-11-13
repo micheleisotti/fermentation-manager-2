@@ -263,6 +263,10 @@ def _clean_assignments(v) -> Optional[dict]:
 
 
 def _same(a, b) -> bool:
+    """Equality of plan values: numbers with a tolerance, nested dicts and lists (loop assignments)."""
+    if isinstance(a, (list, tuple)) or isinstance(b, (list, tuple)):
+        a, b = list(a or []), list(b or [])
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
     if isinstance(a, dict) or isinstance(b, dict):
         a, b = a or {}, b or {}
         return all(_same(a.get(k), b.get(k)) for k in set(a) | set(b))
@@ -643,7 +647,8 @@ def plan_check(exp_id: int, request: Request, db: Session = Depends(get_db)):
             param_diffs = [d for d in commands.ph_control_differences(PhControl(mode, pid), ctl)
                            if not d.startswith("mode ")]
             applicable = {k: v for k, v in (pid or {}).items()
-                          if v is not None and k in commands.PH_MODE_PARAMS[mode]}
+                          if v is not None and k in commands.PH_MODE_PARAMS[mode]
+                          and not (k == "deadband" and ctl.deadband_enabled is False)}
             if applicable:
                 rows.append({"parameter": pid_key, "plan": applicable,
                              "controller": {k: (ctl.pid or {}).get(k) for k in applicable},

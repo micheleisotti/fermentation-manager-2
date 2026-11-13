@@ -467,6 +467,17 @@ def test_loop_config_temperature_profile_and_assignment_check(env):
     assert prof["temperature_control_mode"] == "pid" and prof["loop_assignments"]["ph"][0]["name"] == "Alkali"
     e = c.post("/api/experiments", json={"name": "loops", "reactor_id": "R1", "strain": "Lp187",
                                         "profile_id": prof["id"]}).json()
+    # planning saves the plan (with the profile's loop assignments): used to fail with "Internal error"
+    # (10 Nov 2026) because lists could not be compared with the profile
+    plan = {k: prof[k] for k in ("ph_setpoint", "temperature_setpoint", "stirrer_setpoint", "ph_control_mode",
+                                 "ph_pid", "temperature_control_mode", "temperature_pid", "loop_assignments")}
+    out = c.patch(f"/api/experiments/{e['id']}", json={"plan_params": plan})
+    assert out.status_code == 200 and out.json()["profile_modified"] is False
+    out = c.patch(f"/api/experiments/{e['id']}", json={"plan_params": {**plan, "stirrer_setpoint": 150}})
+    assert out.status_code == 200 and out.json()["profile_modified"] is True
+    out = c.patch(f"/api/experiments/{e['id']}", json={"plan_params": {**plan, "loop_assignments": {"ph": rec["ph"][:1]}}})
+    assert out.status_code == 200 and out.json()["profile_modified"] is True
+    c.patch(f"/api/experiments/{e['id']}", json={"plan_params": plan})
     chk = c.get(f"/api/experiments/{e['id']}/plan-check").json()
     assert any(r["parameter"] == "temperature_control_mode" and not r["match"] for r in chk["rows"])
     assert chk["assignment_differences"] == {}
