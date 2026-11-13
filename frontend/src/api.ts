@@ -85,11 +85,13 @@ export interface BaseDosing {
   total_ml: number | null; peak_rate_ml_min: number | null; t_peak_h: number | null; t_half_total_h: number | null;
   last_hour_rate_ml_min: number | null; n_doses: number | null; base_per_final_od: number | null;
 }
+export interface EstimatedEnd { t_end_h: number | null; t_notified_h: number | null; fraction: number; hold_h: number; window_h: number }
 export interface LoopPerformance {
   loop: string; label: string; unit: string; tolerance: number; regulated: boolean; t_reached_h: number | null;
   regulated_h: number | null; loop_state_recorded: boolean; setpoint_mean: number | null; setpoint_changes: number;
   mean: number | null; sd: number | null; bias: number | null; mae: number | null; rmse: number | null;
   max_above: number | null; max_below: number | null; within_tol_pct: number | null; crossings_per_h: number | null; overshoot: number | null;
+  control_mode?: string | null; hints?: { kind: "ok" | "hint" | "note"; text: string }[];
 }
 export interface DoseEpisodes {
   counter: string; n: number; ph_start_median: number | null; ph_start_range: number[] | null; ph_stop_median: number | null;
@@ -100,7 +102,7 @@ export interface AnalysisResult {
   experiment: { id: number; code: string; reactor_id: string; channels: Channel[];
     partner: { id: number; code: string; reactor_id: string; status: Status; parallel_run: string } | null };
   summary: { recorded_h: number | null; final_od: number | null; max_afu: number | null; total_base_ml: number | null;
-    peak_base_rate_ml_min: number | null; out_of_limit_events: number };
+    peak_base_rate_ml_min: number | null; out_of_limit_events: number; t_end_h?: number | null };
   models: Record<string, string>;
   manual: Record<string, { unit: string; category: string; t: number[]; mean: number[]; sd: (number | null)[]; n: number[] }>;
   fits: Record<string, { params?: FitParams; curve?: { t: number[]; y: number[] }; error?: string; skipped?: boolean }>;
@@ -108,6 +110,7 @@ export interface AnalysisResult {
   series: { t: number[] } & Record<string, (number | null)[]>;
   base_dosing: BaseDosing | null; rate_bins: RateBin[]; step_h: number; bin_h: number;
   control?: { loops: LoopPerformance[]; doses: Record<string, DoseEpisodes> };
+  estimated_end?: EstimatedEnd | null;
 }
 
 export interface SessionBody { name: string; members: Record<number, string>; conditions: string[]; fit_variable: string; model: string }
@@ -255,7 +258,7 @@ export const api = {
     req<SessionResults>(`/analysis-sessions/${id}/results?step_h=${stepH}${variable ? `&variable=${encodeURIComponent(variable)}` : ""}`),
   analysisFull: (id: number, model = "gompertz", stepH = 1) =>
     req<AnalysisResult>(`/experiments/${id}/analysis?model=${model}&step_h=${stepH}`),
-  analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; acid_rate_bins?: RateBin[]; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),
+  analysis: (id: number, binH = 0.25) => req<{ rate_bins: RateBin[]; acid_rate_bins?: RateBin[]; estimated_end?: EstimatedEnd | null; base_dosing: Record<string, number | null> | null }>(`/experiments/${id}/analysis?bin_h=${binH}`),
   setpoint: (reactor: string, parameter: string, value: number, origin = "local") =>
     req<CommandResult>(`/reactors/${reactor}/setpoints`, { method: "POST", body: JSON.stringify({ parameter, value, origin }) }),
   limits: (reactor: string, parameter: string, low: number | null, high: number | null, origin = "local") =>
@@ -280,7 +283,7 @@ export function col(r: Readings | undefined, name: string): [number, number | nu
 
 export interface Range { min: number; max: number; max_step: number }
 export interface AppSettings {
-  remote: { allow_remote_setpoints: boolean; ranges: Record<"ph" | "temperature" | "stirrer", Range> };
+  remote: { allow_remote_setpoints: boolean; app_url?: string; ranges: Record<"ph" | "temperature" | "stirrer", Range> };
   alerts: { out_of_limits_after_min: number; rearm_min: number; ph_tolerance: number; temp_tolerance: number;
     hold_min: number; silent_after_min: number; finished_fraction_pct: number; finished_hold_min: number };
   notifications: { channel: "none" | "ntfy" | "telegram"; ntfy_server: string; ntfy_topic: string; ntfy_token: string;

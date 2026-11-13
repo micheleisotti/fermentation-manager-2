@@ -4,6 +4,7 @@ import * as echarts from "echarts/core";
 import { CustomChart, ScatterChart } from "echarts/charts";
 import { api, type AnalysisResult, type DoseEpisodes, type LoopPerformance, type Experiment } from "../api";
 import { fmt, usePolling } from "../hooks";
+import { addEndLine } from "../components/charts";
 import { C, DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 
 echarts.use([ScatterChart, CustomChart]);
@@ -97,6 +98,8 @@ export function ExperimentAnalysisPage() {
             <DataValue value={fmt(a.summary.max_afu, 0)} unit="AFU" label="Max AFU" color={C.blue} />
             <DataValue value={fmt(a.summary.total_base_ml, 1)} unit="mL" label="Total base" color={C.greenDark} />
             <DataValue value={fmt(a.summary.peak_base_rate_ml_min, 3)} unit="mL/min" label="Peak base rate" color={C.greenDark} />
+            {a.estimated_end && <DataValue value={fmt(a.summary.t_end_h, 1)} unit="h"
+              label={`Estimated end · base rate < ${Math.round(a.estimated_end.fraction * 100)} % of peak for ${Math.round(a.estimated_end.hold_h * 60)} min`} color={C.ink} />}
             <DataValue value={a.summary.out_of_limit_events} label="Out-of-limit events" color={a.summary.out_of_limit_events ? "#b30020" : C.ink} />
           </section>
 
@@ -131,7 +134,7 @@ export function ExperimentAnalysisPage() {
               </div>
             )}
             <span className="small muted">Time since start (h). Free y scales. Manual variables: points (mean ± SD where a time point has
-              repeated readings), line = fitted {a.models[model]} model. Controller data: mean over each interval;
+              repeated readings), line = fitted {a.models[model]} model.{a.summary.t_end_h != null && " Dashed vertical line: estimated end of fermentation."} Controller data: mean over each interval;
               base rate from the cumulative volume (gaps shown as breaks).</span>
           </section>
 
@@ -186,6 +189,7 @@ function facetOption(a: AnalysisResult, p: PanelDef, tMax: number, showFit: bool
       showSymbol: a.series.t.length < 40, symbolSize: 5, connectNulls: false, step: p.key === "base_rate" ? "middle" : undefined,
       itemStyle: { color: p.color }, lineStyle: { color: p.color, width: 1.4 } });
   }
+  addEndLine(series as object[], a.estimated_end?.t_end_h, true);
   return {
     animation: false,
     grid: { left: 48, right: 14, top: 8, bottom: 26, show: true, backgroundColor: "#ebebeb", borderWidth: 0 },
@@ -350,6 +354,24 @@ function ControlCard({ a }: { a: AnalysisResult }) {
               <tr key={r.p}><td>{r.p}</td>{doses.map((x) => <td key={x.counter} className="num mono">{i === 0 || x.n ? r.v(x) : "—"}</td>)}</tr>
             ))}</tbody>
           </table>
+        </div>
+      )}
+      {c.loops.some((l) => l.hints?.length) && (
+        <div className="stack" style={{ gap: 6 }}>
+          <h3 style={{ fontSize: 15 }}>Hints on the loop parameters</h3>
+          {c.loops.filter((l) => l.hints?.length).map((l) => (
+            <div key={l.loop} className="stack" style={{ gap: 4 }}>
+              <span className="small"><b>{l.label}</b>{l.control_mode && <span className="muted"> · {l.control_mode === "pid" ? "PID" : l.control_mode}</span>}</span>
+              {l.hints!.map((h, k) => (
+                <div key={k} className={`banner small ${h.kind === "ok" ? "good" : h.kind === "hint" ? "warn" : ""}`} style={{ padding: "6px 12px" }}>
+                  <Icon name={h.kind === "ok" ? "check" : h.kind === "hint" ? "warn" : "info"} size={16} />
+                  <span>{h.text}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+          <span className="xs muted">Indications from general control rules, to be evaluated: change one parameter at a time, by a small step, and compare
+            the next runs. Parameters are those of the plan; limits, calibration and actuators stay on the controller.</span>
         </div>
       )}
       <span className="small muted">Medians over the dosing episodes (doses less than 1 min apart form one episode). "pH at pump start" is the last reading

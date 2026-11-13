@@ -78,8 +78,8 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
   const lastBin = analysis.data?.rate_bins.filter((b) => b.complete).at(-1);
   const p = presets.find((x) => x.key === preset) ?? presets[0];
   const option = useMemo(() => (!p ? {} : p.key === "ph_rate"
-    ? phAndRateOption(readings.data, analysis.data?.rate_bins)
-    : trendsOption(readings.data, p.left, p.right, { setpoints: true, limits: true, bins: analysis.data?.rate_bins, compact: true })),
+    ? phAndRateOption(readings.data, analysis.data?.rate_bins, undefined, analysis.data?.estimated_end?.t_end_h)
+    : trendsOption(readings.data, p.left, p.right, { setpoints: true, limits: true, bins: analysis.data?.rate_bins, compact: true, endH: analysis.data?.estimated_end?.t_end_h })),
   [readings.data, analysis.data, p]);
   const values = [
     ch.includes("ph") && <DataValue key="ph" value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`} color={phOutOf() ? "#b30020" : "#1d3786"} />,
@@ -345,7 +345,7 @@ function FullscreenChart({ e, partner, partnerReadings, onClose }:
   const lv = leftVars.find((v) => v.key === left) ?? leftVars[0] ?? V("ph");
   const rv = right === "none" ? null : rightVars.find((v) => v.key === right && v.key !== lv.key) ?? null;
   const option = useMemo(() => trendsOption(readings.data, lv, rv, {
-    setpoints: showSp, limits: showLim, bins: analysis.data?.rate_bins, compact: true,
+    setpoints: showSp, limits: showLim, bins: analysis.data?.rate_bins, compact: true, endH: analysis.data?.estimated_end?.t_end_h,
     partner: showPartner && partner ? partnerReadings : undefined, partnerLabel: partner ? `${lv.label} ${partner.reactor_id}` : undefined,
     xRange: rg.h && tNow != null ? { min: Math.max(0, Math.floor((tNow - rg.h) * 10) / 10), max: Math.ceil(tNow * 10) / 10 } : undefined,
   }), [readings.data, analysis.data, lv, rv, showSp, showLim, showPartner, partner, partnerReadings, rg.h, tNow]);

@@ -601,3 +601,22 @@ def test_start_stop_selected_loops_settings_and_external_switch(env):
     run_hours(app, clock, 0.05)
     assert not any(x["kind"] == "loop_switched_off" and "Temperature" in x["message"]
                    for x in c.get(f"/api/experiments/{e['id']}/events").json())
+
+
+def test_estimated_end_and_regulation_hints_in_the_analysis(env):
+    c, clock, app, drivers = env
+    e = c.post("/api/experiments", json={"name": "end", "reactor_id": "R1", "strain": "Lp187"}).json()
+    c.post(f"/api/experiments/{e['id']}/start")
+    run_hours(app, clock, 30, step_min=2)
+    a = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    end = a["estimated_end"]
+    assert end["fraction"] == pytest.approx(0.10) and end["hold_h"] == pytest.approx(0.5)
+    assert end["t_end_h"] is not None and 5 < end["t_end_h"] < 30
+    assert a["summary"]["t_end_h"] == end["t_end_h"]
+    ph = next(lp for lp in a["control"]["loops"] if lp["loop"] == "ph")
+    assert "hints" in ph and "control_mode" in ph
+    # the threshold follows Settings › Notifications
+    st = c.get("/api/settings").json()["alerts"]
+    c.put("/api/settings/alerts", json={**st, "finished_fraction_pct": 2.0})
+    a2 = c.get(f"/api/experiments/{e['id']}/analysis").json()
+    assert a2["estimated_end"]["fraction"] == pytest.approx(0.02)

@@ -286,3 +286,25 @@ commit (`fm2/build_info.py`, reads .git without the git executable) and warns wh
   with the loop on count; older runs assume the loop on from the time the setpoint was reached.
 - Shown in Analysis › single experiment ("Regulation" card); key values in the session comparisons
   (pH/T effective mean, bias, % within tolerance, pH at base pump start) and in the export "Parameters".
+
+## 2.2.0 (13 Nov 2026)
+- **Estimated end of fermentation** (`base_dosing.estimate_end`): the rule of the "probably finished"
+  notification applied to the recorded series, with the thresholds of Settings › Notifications (fraction of
+  peak, hold time, 15-min window): the end is when the base rate fell below the threshold for good (the
+  notification fires `hold` later). Dashed vertical line in the trend, buffer-dosing, home/phone and analysis
+  charts; value in the analysis summary, session comparisons (`t_end_h`) and export.
+- **Buffer dosing** panel (was "Base dosing"): base buffer (green) and, when dosed, acid buffer = Addition 2
+  (blue) rates and cumulative volumes.
+- **Controller panel** redesigned (`ReactorControls.tsx`, `.ctrl-row`): name, value, target/limits; one Edit
+  (`ControlEditDialog.tsx`: target and limits, limits sent first, each read back).
+- **Manual variables in the trend chart**: keys `m:<name>`, shown as points.
+- **Loops as "below target / above target"** (`loopText.ts`, `loops.sides_text`) in planning, the Loops dialog,
+  profiles and the assignment-difference messages (which now say to change it on the display or record again).
+- **Hints on the loop parameters** (`control.hints`, decision 12 Nov "level 2"): from the regulation metrics and
+  the plan's mode/parameters; oscillation → smaller P; persistent offset → integral action (no assumption on
+  whether I is a time or a gain); pump starting far below target → dead band / P / cycle time; peak after
+  doses → smaller doses or mixing; temperature overshoot. Adaptive: evaluation only.
+- **Settings**: order Users, Bioreactors, Loop control, Notifications, Remote access, Data and backup,
+  Appearance, Credits. QR code to open the app on a phone (`AppQr.tsx`, npm `qrcode`; address from Tailscale
+  name/IPs or saved in `remote.app_url`). Short changelog in Credits (`frontend/src/changelog.ts`).
+- Deferred to 2.2.1 (13 Nov decision): license review, "cite as"/CITATION.cff/DOI, manual.

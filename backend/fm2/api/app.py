@@ -1323,7 +1323,7 @@ def _partner(e: Experiment) -> Optional[dict]:
 
 
 @router.get("/experiments/{exp_id}/analysis")
-def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable: str = "OD600",
+def experiment_analysis(exp_id: int, request: Request, db: Session = Depends(get_db), fit_variable: str = "OD600",
                         bin_h: float = 0.25, model: str = "gompertz", step_h: float = 1.0):
     """
     Everything the single-experiment analysis shows: summary, manual points (mean ± SD per
@@ -1344,7 +1344,8 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
     res["acid_rate_bins"] = [] if acid is None or not acid.notna().any() else [
         b.__dict__ for b in base_dosing.rate_bins(df["t_h"].astype(float), acid.astype(float), bin_h)]
     ch = channels_of(e)
-    res["control"] = control.summarize(df, ch) if not df.empty else {"loops": [], "doses": {}}
+    res["control"] = control.summarize(df, ch, plan_of(e)) if not df.empty else {"loops": [], "doses": {}}
+    res["estimated_end"] = _estimated_end(request, df) if "ph" in ch else None
     manual, fits = {}, {}
     for v in _measured_variables(db, exp_id):
         t, y = _manual_series(db, exp_id, v.name)
@@ -1372,7 +1373,8 @@ def experiment_analysis(exp_id: int, db: Session = Depends(get_db), fit_variable
                     "max_afu": max(afu["mean"]) if afu and afu["mean"] else None,
                     "total_base_ml": bd.get("total_ml") if "ph" in ch else None,
                     "peak_base_rate_ml_min": bd.get("peak_rate_ml_min") if "ph" in ch else None,
-                    "out_of_limit_events": int(n_out)},
+                    "out_of_limit_events": int(n_out),
+                    "t_end_h": (res.get("estimated_end") or {}).get("t_end_h")},
         "models": {k: v[0] for k, v in kinetics.MODELS.items()},
         "manual": manual, "fits": fits, "step_h": step_h, "bin_h": bin_h,
         "series_defs": [{"key": sd.key, "label": sd.label, "unit": sd.unit} for sd in report.CONTROLLER_SERIES
@@ -1392,14 +1394,14 @@ MANUAL_COLORS = ["#8a5300", "#006a6a", "#5c4d00", "#7d2a52"]
 @router.get("/experiments/{exp_id}/figure.{fmt}")
 def experiment_figure(exp_id: int, fmt: str, vars: str = "OD600,AFU,ph,base_rate", model: str = "gompertz",
                       step_h: float = 1.0, width_mm: float = 174, dpi: int = 300, theme: str = "grey",
-                      fit: bool = True, db: Session = Depends(get_db)):
+                      fit: bool = True, request: Request = None, db: Session = Depends(get_db)):
     """Time-course figure of the selected panels (manual variables by name, controller series by key)."""
     e = _404(db.get(Experiment, exp_id))
     if fmt not in report.FIG_FORMATS:
         raise HTTPException(404, "Format not available")
     if not (40 <= width_mm <= 500) or not (72 <= dpi <= 1200):
         raise HTTPException(422, "Width must be 40-500 mm and resolution 72-1200 dpi")
-    an = experiment_analysis(exp_id, db, model=model, step_h=step_h)
+    an = experiment_analysis(exp_id, request, db, model=model, step_h=step_h)
     labels = {d["key"]: d for d in an["series_defs"]}
     panels, other = [], 0
     for v in [x.strip() for x in vars.split(",") if x.strip()]:
@@ -1438,6 +1440,7 @@ SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model
     ("t_half_total_h", "Time to 50 % of total base", "h", "controller, cumulative"),
     ("last_hour_rate_ml_min", "Base rate in the last hour", "mL min⁻¹", "slowdown at end of run"),
     ("base_per_final_od", "Total base per final OD600", "mL AU⁻¹", "acid produced per biomass, proxy"),
+    ("t_end_h", "Estimated end of fermentation", "h", "base rate below the 'probably finished' threshold"),
     # how well the loops held the setpoint (analysis.control): effective mean vs setpoint
     ("ph_mean", "pH, effective mean during regulation", "", "control"),
     ("ph_bias", "pH, mean deviation from setpoint", "", "control"),
@@ -1447,6 +1450,19 @@ SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model
     ("temperature_bias", "T, mean deviation from setpoint", "°C", "control"),
     ("temperature_within_tol_pct", "T, time within ±0.3 °C of setpoint", "%", "control"),
 ]
+
+
+def _end_params(request: Optional[Request]):
+    return request.app.state.app_settings.alert_params() if request is not None else AlertParams()
+
+
+def _estimated_end(request: Optional[Request], df: pd.DataFrame) -> Optional[dict]:
+    """End of fermentation by the rule of the "probably finished" notification (same settings)."""
+    if df.empty or "base_cumulative_ml" not in df:
+        return None
+    p = _end_params(request)
+    return base_dosing.estimate_end(df["t_h"].astype(float), pd.to_numeric(df["base_cumulative_ml"], errors="coerce"),
+                                    p.finished_fraction, p.finished_hold_s / 3600.0, p.rate_window_s / 3600.0).__dict__
 
 
 def _control_values(ctrl: dict) -> dict:
@@ -1538,7 +1554,8 @@ def delete_session(sid: int, db: Session = Depends(get_db)):
     return {"deleted": code}
 
 
-def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str) -> dict:
+def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str,
+                       request: Optional[Request] = None) -> dict:
     """Per-experiment parameters used in the comparison (None where not available)."""
     f, err = _fit(db, e.id, fit_variable, model)
     p = f.summary() if f else {}
@@ -1549,6 +1566,8 @@ def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str
         bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
                                    float(od[-1]) if len(od) else None).__dict__
     cv = _control_values(control.summarize(df, channels_of(e))) if not df.empty else {}
+    if "ph" in channels_of(e) and not df.empty:
+        bd["t_end_h"] = (_estimated_end(request, df) or {}).get("t_end_h")
     vals = {k: (p.get(k) if src == "fit" else cv.get(k) if src == "control" else bd.get(k)) for k, _, _, src in SESSION_PARAMS}
     return {"values": vals, "fit_error": err, "fit_warnings": p.get("warnings", [])}
 
@@ -1601,7 +1620,8 @@ def _pooled_fit(db: Session, ids: list[int], variable: str, model: str) -> Optio
     return {"t": f.t_fit.tolist(), "y": (np.asarray(f.X_fit) * x0).tolist()}
 
 
-def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: Optional[str] = None) -> dict:
+def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: Optional[str] = None,
+                         request: Optional[Request] = None) -> dict:
     sess = _404(db.get(AnalysisSession, sid))
     out = _session_out(sess)
     model, fv = out["model"], sess.fit_variable
@@ -1610,7 +1630,7 @@ def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: O
     for m in sess.members:
         by_cond.setdefault(m.condition, []).append(m.experiment_id)
     exps = {e.id: e for e in db.scalars(select(Experiment).where(Experiment.id.in_(out["members"].keys())))}
-    per_exp = {eid: _experiment_values(db, e, fv, model) for eid, e in exps.items()}
+    per_exp = {eid: _experiment_values(db, e, fv, model, request) for eid, e in exps.items()}
     fv_unit = db.scalar(select(Variable.unit).where(Variable.name == fv)) or ""
     comparisons = []
     for key, label, unit, src in SESSION_PARAMS:
@@ -1660,10 +1680,11 @@ def session_results_data(db: Session, sid: int, step_h: float = 2.0, variable: O
 
 
 @router.get("/analysis-sessions/{sid}/results")
-def session_results(sid: int, db: Session = Depends(get_db), step_h: float = 2.0, variable: Optional[str] = None):
+def session_results(sid: int, request: Request, db: Session = Depends(get_db), step_h: float = 2.0,
+                    variable: Optional[str] = None):
     if not (0.05 <= step_h <= 24):
         raise HTTPException(422, "Interval out of range")
-    res = session_results_data(db, sid, step_h, variable)
+    res = session_results_data(db, sid, step_h, variable, request)
     # backwards-compatible shape: comparisons keyed by parameter, conditions -> n
     res["comparisons_by_key"] = {c["key"]: c for c in res["comparisons"]}
     return _json_safe(res)
@@ -1675,12 +1696,13 @@ SESSION_MARKERS = ["o", "^", "s", "D", "v", "P"]
 
 @router.get("/analysis-sessions/{sid}/figure.{fmt}")
 def session_figure(sid: int, fmt: str, variable: Optional[str] = None, step_h: float = 2.0, width_mm: float = 174,
-                   dpi: int = 300, theme: str = "grey", fit: bool = True, db: Session = Depends(get_db)):
+                   dpi: int = 300, theme: str = "grey", fit: bool = True, request: Request = None,
+                   db: Session = Depends(get_db)):
     if fmt not in report.FIG_FORMATS:
         raise HTTPException(404, "Format not available")
     if not (40 <= width_mm <= 500) or not (72 <= dpi <= 1200):
         raise HTTPException(422, "Width must be 40-500 mm and resolution 72-1200 dpi")
-    res = session_results_data(db, sid, step_h, variable)
+    res = session_results_data(db, sid, step_h, variable, request)
     opt = next((o for o in res["variable_options"] if o["key"] == res["variable"]), None)
     if opt is None:
         raise HTTPException(422, f"No data for '{res['variable']}' in this session")
@@ -1703,11 +1725,11 @@ def session_figure(sid: int, fmt: str, variable: Optional[str] = None, step_h: f
 
 
 @router.get("/analysis-sessions/{sid}/export.{fmt}")
-def session_export(sid: int, fmt: str, step_h: float = 2.0, db: Session = Depends(get_db)):
+def session_export(sid: int, fmt: str, request: Request, step_h: float = 2.0, db: Session = Depends(get_db)):
     """Experiments with conditions, per-experiment parameters, comparisons and mean ± SD curves of every variable."""
     if fmt not in ("xlsx", "zip"):
         raise HTTPException(404, "Format not available")
-    res = session_results_data(db, sid, step_h)
+    res = session_results_data(db, sid, step_h, request=request)
     letters = "ABCDEFGHIJ"
     label = {c: f"{letters[i]} · {c}" for i, c in enumerate(res["conditions"])}
     tables: dict[str, pd.DataFrame] = {}
@@ -1733,7 +1755,7 @@ def session_export(sid: int, fmt: str, step_h: float = 2.0, db: Session = Depend
     tables["Comparisons"] = pd.DataFrame(rows)
     crow = []
     for opt in res["variable_options"]:
-        r2 = session_results_data(db, sid, step_h, opt["key"])
+        r2 = session_results_data(db, sid, step_h, opt["key"], request)
         for cond, cv in r2["curves"].items():
             for t, m, s_ in zip(cv["t"], cv["mean"], cv["sd"]) if cv else []:
                 crow.append({"variable": opt["label"], "unit": opt["unit"], "condition": label.get(cond, cond),
@@ -1824,7 +1846,7 @@ def save_experiment_copy(db: Session, request: Request, exp_id: int, fmt: Option
     if fmt not in ("xlsx", "zip"):
         raise HTTPException(422, "Format must be xlsx or zip")
     sel = [b for b in (blocks or EXPORT_BLOCKS) if b in EXPORT_BLOCKS] or list(EXPORT_BLOCKS)
-    buf, _ = _write_export(export_tables(db, exp_id, sel, resample_min, model), fmt, e.code)
+    buf, _ = _write_export(export_tables(db, exp_id, sel, resample_min, model, request), fmt, e.code)
     target = folder / archive_file_name(e, fmt)
     tmp = target.with_name(target.name + ".part")
     try:
@@ -1845,7 +1867,7 @@ def archive_copy(exp_id: int, body: S.ArchiveIn, request: Request, db: Session =
 
 
 def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: Optional[float] = None,
-                  model: str = "gompertz") -> dict[str, pd.DataFrame]:
+                  model: str = "gompertz", request: Optional[Request] = None) -> dict[str, pd.DataFrame]:
     """One table per export sheet/CSV. Times: hours since start plus absolute UTC timestamps."""
     e = _404(db.get(Experiment, exp_id))
     out: dict[str, pd.DataFrame] = {}
@@ -1878,6 +1900,11 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
         bd = experiment_parameters(db, exp_id, model=model)["base_dosing"] if "ph" in channels_of(e) else None
         rows += [{"block": "base dosing", "parameter": k, "value": v} for k, v in (bd or {}).items()]
         rd = _readings_df(db, exp_id)
+        if not rd.empty and "ph" in channels_of(e):
+            end = _estimated_end(request, rd) or {}
+            rows += [{"block": "base dosing", "parameter": "estimated_end_h", "value": end.get("t_end_h")},
+                     {"block": "base dosing", "parameter": "estimated_end_rule",
+                      "value": f"base rate < {end.get('fraction', 0):.0%} of peak for {end.get('hold_h', 0) * 60:.0f} min"}]
         if not rd.empty:
             ctrl = control.summarize(rd, channels_of(e))
             for lp in ctrl["loops"]:
@@ -1915,7 +1942,7 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
 
 
 @router.get("/experiments/{exp_id}/export.{fmt}")
-def export_data(exp_id: int, fmt: str, db: Session = Depends(get_db), resample_min: Optional[float] = None,
+def export_data(exp_id: int, fmt: str, request: Request, db: Session = Depends(get_db), resample_min: Optional[float] = None,
                 blocks: str = ",".join(EXPORT_BLOCKS), model: str = "gompertz"):
     """XLSX with one sheet per block, or a zip of CSV files."""
     e = _404(db.get(Experiment, exp_id))
@@ -1926,7 +1953,7 @@ def export_data(exp_id: int, fmt: str, db: Session = Depends(get_db), resample_m
         raise HTTPException(422, f"Blocks must be among {', '.join(EXPORT_BLOCKS)}")
     if resample_min is not None and not (0.05 <= resample_min <= 1440):
         raise HTTPException(422, "Resampling interval out of range")
-    tables = export_tables(db, exp_id, sel, resample_min, model)
+    tables = export_tables(db, exp_id, sel, resample_min, model, request)
     buf, media = _write_export(tables, fmt, e.code)
     return StreamingResponse(buf, media_type=media, headers={"Content-Disposition": _attachment(archive_file_name(e, fmt))})
 

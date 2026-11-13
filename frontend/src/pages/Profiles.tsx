@@ -1,3 +1,4 @@
+import { sidesText } from "../loopText";
 import { useState } from "react";
 import { api, type LoopAssignments, type Profile } from "../api";
 import { usePolling } from "../hooks";
@@ -42,8 +43,9 @@ function showParams(mode: string | null, pid: Record<string, number> | null, uni
 }
 
 /** "Alkali (+), Addition 2 (−)" — + acts below the setpoint, − above. */
-export function showAssignments(items: { name: string; side: number }[] | undefined) {
-  return (items ?? []).map((a) => `${a.name} (${a.side > 0 ? "+" : a.side < 0 ? "−" : "0"})`).join(", ") || "nothing";
+/** "below target: Alkali · above target: Addition 2" */
+export function showAssignments(items: { name: string; side: number; kind?: string }[] | undefined) {
+  return sidesText(items?.map((a) => ({ kind: "actuator", ...a })));
 }
 
 function loopEntries(f: Form, prefix: "" | "t", mode: string) {
@@ -196,7 +198,7 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
             <div className="stack" style={{ gap: 6 }}>
               <span className="small" style={{ fontWeight: 500 }}>Actuators the loops are tuned for</span>
               {assign ? (
-                <span className="small">From {assign.from}: <b>pH</b> {showAssignments(assign.a.ph)} · <b>T</b> {showAssignments(assign.a.temperature)}
+                <span className="small">From {assign.from}: <b>pH</b> {showAssignments(assign.a.ph)}; <b>T</b> {showAssignments(assign.a.temperature)}
                   <button className="btn text" style={{ height: 28 }} onClick={() => setAssign(null)}>Clear</button></span>
               ) : <span className="xs muted">Not recorded: the control settings are loaded whatever the controller's actuators.</span>}
               <div className="row" style={{ gap: 8 }}>
