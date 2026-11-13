@@ -271,3 +271,18 @@ commit (`fm2/build_info.py`, reads .git without the git executable) and warns wh
   stitched total (analysis); `GET /readings` shows the counter restarting from 0 at FM2's resets and adds
   `<x>_total_ml`.
 - Fermentation page: header and command bar sticky (`.sticky-head`, off on screens < 760 px tall).
+
+## 2.1.3 (13 Nov 2026)
+- **Regulation analysis** (`analysis/control.py`, decision 12 Nov: descriptive metrics first, rule-based
+  suggestions in 2.2). Per loop (pH, T, stirrer, dO2): regulation starts the first time the error changes sign
+  or is within the tolerance (pH 0.05, T 0.3 °C, stirrer 5 rpm, dO2 5 %); from there to the end, time-weighted
+  (reading weight capped at max(120 s, 3 sampling intervals)), using the setpoint in force at each reading:
+  effective mean ± SD, bias, MAE, RMSE, max above/below, % time within tolerance, crossings of the band per hour,
+  overshoot in the first hour. Readings before Start (t < 0) are excluded.
+- **Dose episodes** on the pH loop (base and Addition 2): runs of counter increases, merged across pauses
+  < max(60 s, 2.5 sampling intervals); pH at pump start / at last dose / peak in the 5 min after, volume,
+  interval, distance from setpoint at start.
+- **Loop on/off recorded** at each reading from 2.1.3 (`loop_<key>` extra fields, 1/0). With it, only readings
+  with the loop on count; older runs assume the loop on from the time the setpoint was reached.
+- Shown in Analysis › single experiment ("Regulation" card); key values in the session comparisons
+  (pH/T effective mean, bias, % within tolerance, pH at base pump start) and in the export "Parameters".
