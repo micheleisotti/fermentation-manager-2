@@ -111,6 +111,7 @@ class ControllerProfile(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 # --- experiments --------------------------------------------------------------
@@ -141,6 +142,9 @@ class Experiment(Base):
     # Controller parameters of this plan (setpoints, limits, pH control): copied from the profile and
     # editable; differs from the profile when edited ("custom, based on <profile>")
     plan_params: Mapped[Optional[dict]] = mapped_column(JSON)
+    # The profile's values when this plan was saved (api.profile_params): a later edit of the profile
+    # shows "profile changed after this plan was saved"; renaming it does not (the name is not compared)
+    profile_ref: Mapped[Optional[dict]] = mapped_column(JSON)
     prepared_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # "Go to fermentation"
     parallel_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parallel_runs.id"))
     # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)

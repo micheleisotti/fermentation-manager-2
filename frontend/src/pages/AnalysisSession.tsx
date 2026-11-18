@@ -4,7 +4,7 @@ import * as echarts from "echarts/core";
 import { CustomChart, ScatterChart } from "echarts/charts";
 import { api, type Experiment, type SessionBody, type SessionInfo, type SessionResults } from "../api";
 import { fmt, usePolling } from "../hooks";
-import { EChart, Icon, Segmented } from "../components/ui";
+import { EChart, ExpName, Icon, Segmented } from "../components/ui";
 import { ExpTags } from "./ExperimentsList";
 
 echarts.use([ScatterChart, CustomChart]);
@@ -66,7 +66,7 @@ export function SessionPage() {
         <div className="row" style={{ gap: 12 }}>
           <Link to="/analysis" className="btn icon text" aria-label="Back to analysis"><Icon name="back" /></Link>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{sess.code}</span> · <InlineName value={sess.name} onSave={(name) => save({ ...body, name })} /></h1>
+            <h1 style={{ fontSize: 22, fontWeight: 600 }}><InlineName value={sess.name} onSave={(name) => save({ ...body, name })} /> <span className="mono code-chip">{sess.code}</span></h1>
             <span className="small muted">Analysis session · saved {new Date(sess.updated_at).toLocaleString()} · {Object.keys(sess.members).length} experiments
               {saving && " · saving…"}</span>
           </div>
@@ -127,8 +127,9 @@ export function SessionPage() {
                 : "Mean ± SD per condition of the per-experiment interval means; intervals missing in any replicate are left out."}
               {Object.values(r.curves).some((c) => c?.warning) && ` ${[...new Set(Object.values(r.curves).map((c) => c?.warning).filter(Boolean))].join(" ")}`}
             </span>
-            <FigureExport id={id} variable={r.variable} step={step} />
+            <FigureExport url={(fig) => `/api/analysis-sessions/${id}/figure.${fig}?variable=${encodeURIComponent(r.variable)}&step_h=${step}`} />
             <ComparisonTable r={r} />
+            <BoxPlotCard r={r} id={id} step={step} />
           </>
         )}
       </section>
@@ -239,7 +240,7 @@ function Step1({ sess, body, save, all, flags }: { sess: SessionInfo; body: Sess
                 <tr key={e.id}>
                   <td><input type="checkbox" checked={selected.has(e.id)} aria-label={`Include ${e.code}`} style={{ width: 20, height: 20 }}
                     onChange={() => setMember(e.id, selected.has(e.id) ? null : (sess.conditions[0] ?? "A"))} /></td>
-                  <td><Link to={`/analysis/experiments/${e.id}`} className="mono" style={{ fontWeight: 600 }}>{e.code}</Link> · {e.name}
+                  <td><ExpName name={e.name} code={e.code} to={`/analysis/experiments/${e.id}`} />
                     <span className="row" style={{ gap: 4, display: "inline-flex", marginLeft: 6 }}><ExpTags e={e} /></span></td>
                   <td className="mono">{e.started_at ? e.started_at.slice(0, 10) : "—"}</td>
                   <td className="mono">{e.strain || "—"}</td>
@@ -327,27 +328,127 @@ function SessionChart({ r }: { r: SessionResults }) {
   return <EChart option={option} className="session-chart" ariaLabel={`Mean ${opt?.label ?? ""} over time by condition`} />;
 }
 
-function FigureExport({ id, variable, step }: { id: number; variable: string; step: string }) {
+/** Figure download (PNG / SVG / PDF) of one server-side figure; `url` gets format and options appended. */
+function FigureExport({ url, label = "Figure", defaultWidth = "174" }: { url: (fig: string) => string; label?: string; defaultWidth?: string }) {
   const [fig, setFig] = useState("png");
-  const [width, setWidth] = useState("174");
+  const [width, setWidth] = useState(defaultWidth);
   const [dpi, setDpi] = useState("300");
   const [theme, setTheme] = useState("grey");
+  const [mono, setMono] = useState(false);
   const w = Number(width);
   const ok = Number.isFinite(w) && w >= 40 && w <= 500;
   return (
     <div className="row small" style={{ gap: 8 }}>
-      <span className="muted">Figure</span>
+      <span className="muted">{label}</span>
       <select value={fig} onChange={(x) => setFig(x.target.value)} style={{ height: 36 }} aria-label="Figure format">
         <option value="png">PNG</option><option value="svg">SVG</option><option value="pdf">PDF</option></select>
       <label className="row" style={{ gap: 4 }}><input value={width} onChange={(x) => setWidth(x.target.value)} className="mono"
-        style={{ height: 36, width: 64, padding: "0 8px", border: "1px solid #74777f", borderRadius: 4 }} aria-invalid={!ok} />mm</label>
+        style={{ height: 36, width: 64, padding: "0 8px", border: "1px solid #74777f", borderRadius: 4 }} aria-invalid={!ok} aria-label="Width in mm" />mm</label>
       <select value={dpi} onChange={(x) => setDpi(x.target.value)} style={{ height: 36 }} disabled={fig !== "png"} aria-label="Resolution">
         <option value="300">300 dpi</option><option value="600">600 dpi</option></select>
       <select value={theme} onChange={(x) => setTheme(x.target.value)} style={{ height: 36 }} aria-label="Theme">
         <option value="grey">ggplot grey</option><option value="bw">ggplot bw</option><option value="classic">Classic</option></select>
+      <select value={mono ? "1" : "0"} onChange={(x) => setMono(x.target.value === "1")} style={{ height: 36 }} aria-label="Series colours"
+        title="Black and white: conditions told apart by line type, marker shape (filled / open) and hatching">
+        <option value="0">Colour</option><option value="1">Black &amp; white</option></select>
       <a className="btn filled" style={{ height: 36 }} aria-disabled={!ok} download
-        href={ok ? `/api/analysis-sessions/${id}/figure.${fig}?variable=${encodeURIComponent(variable)}&step_h=${step}&width_mm=${w}&dpi=${dpi}&theme=${theme}` : undefined}>
-        Export figure</a>
+        href={ok ? `${url(fig)}&width_mm=${w}&dpi=${dpi}&theme=${theme}&mono=${mono}` : undefined}>
+        Export</a>
+    </div>
+  );
+}
+
+/** Quartiles as numpy / matplotlib compute them (linear interpolation). */
+function quantile(sorted: number[], q: number) {
+  const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+export function boxStats(values: number[]) {
+  const s = [...values].sort((a, b) => a - b);
+  const q1 = quantile(s, 0.25), med = quantile(s, 0.5), q3 = quantile(s, 0.75), iqr = q3 - q1;
+  const inside = s.filter((v) => v >= q1 - 1.5 * iqr && v <= q3 + 1.5 * iqr);
+  return { lo: inside[0], q1, med, q3, hi: inside[inside.length - 1], n: s.length };
+}
+
+/** Box-and-whisker of one per-experiment parameter by condition; every experiment is a point on top. */
+function BoxPlotCard({ r, id, step }: { r: SessionResults; id: number; step: string }) {
+  // Only parameters with at least one value in the selected experiments
+  const avail = r.comparisons.filter((c) => r.experiments.some((x) => x.values[c.key] != null));
+  const [param, setParam] = useState(avail[0]?.key ?? "");
+  const k = avail.find((x) => x.key === param) ?? avail[0];
+  const used = r.conditions.filter((c) => r.n_by_condition[c] > 0);
+  const option = useMemo(() => {
+    if (!k) return {};
+    const groups = used.map((c) => {
+      const i = r.conditions.indexOf(c);
+      const pts = r.experiments.filter((x) => x.condition === c && x.values[k.key] != null)
+        .map((x) => ({ v: x.values[k.key] as number, code: x.code, name: x.name }));
+      return { c, i, pts, st: pts.length ? boxStats(pts.map((p) => p.v)) : null };
+    });
+    const boxes = groups.map((g, gi) => [gi, g.st?.lo, g.st?.q1, g.st?.med, g.st?.q3, g.st?.hi, g.i]).filter((d) => d[1] != null);
+    let seed = 7;
+    const jitter = () => { seed = (seed * 9301 + 49297) % 233280; return (seed / 233280 - 0.5) * 0.24; };
+    return {
+      animation: false,
+      grid: { left: 72, right: 24, top: 16, bottom: 56, show: true, backgroundColor: "#ebebeb", borderWidth: 0 },
+      xAxis: { type: "value", min: -0.6, max: groups.length - 0.4, splitLine: { show: false }, axisLine: { onZero: false },
+        axisTick: { customValues: groups.map((_, gi) => gi) },
+        axisLabel: { fontSize: 12, color: "#4d4d4d", lineHeight: 16, customValues: groups.map((_, gi) => gi),
+          formatter: (v: number) => { const g = groups[Math.round(v)]; return g ? `${LETTERS[g.i]} · ${g.c}\n(n = ${g.pts.length})` : ""; } } },
+      yAxis: { type: "value", scale: true, name: `${k.label}${k.unit ? ` (${k.unit})` : ""}`, nameLocation: "middle", nameGap: 52,
+        axisLine: { show: false, onZero: false },
+        axisLabel: { fontSize: 12, color: "#4d4d4d" }, splitLine: { lineStyle: { color: "#ffffff", width: 1.3 } },
+        nameTextStyle: { fontSize: 13, color: "#000" } },
+      tooltip: { trigger: "item" },
+      series: [
+        { type: "custom", silent: true, data: boxes, z: 2,
+          renderItem: (_: unknown, api: { value: (i: number) => number; coord: (v: number[]) => number[]; size: (v: number[]) => number[] }) => {
+            const x = api.value(0), [lo, q1, med, q3, hi] = [1, 2, 3, 4, 5].map((j) => api.value(j));
+            const color = COND_COLORS[api.value(6) % 6];
+            const half = api.size([0.28, 0])[0];
+            const p = (y: number) => api.coord([x, y]);
+            const [cx] = p(med);
+            const st = { stroke: color, lineWidth: 1.2 };
+            return { type: "group", children: [
+              { type: "rect", shape: { x: cx - half, y: p(q3)[1], width: 2 * half, height: p(q1)[1] - p(q3)[1] },
+                style: { fill: color + "38", stroke: color, lineWidth: 1.2 } },
+              { type: "line", shape: { x1: cx - half, y1: p(med)[1], x2: cx + half, y2: p(med)[1] }, style: { stroke: "#000", lineWidth: 1.8 } },
+              { type: "line", shape: { x1: cx, y1: p(q3)[1], x2: cx, y2: p(hi)[1] }, style: st },
+              { type: "line", shape: { x1: cx, y1: p(q1)[1], x2: cx, y2: p(lo)[1] }, style: st },
+              { type: "line", shape: { x1: cx - half / 2, y1: p(hi)[1], x2: cx + half / 2, y2: p(hi)[1] }, style: st },
+              { type: "line", shape: { x1: cx - half / 2, y1: p(lo)[1], x2: cx + half / 2, y2: p(lo)[1] }, style: st },
+            ] };
+          } },
+        ...groups.map((g, gi) => ({
+          type: "scatter", z: 3, name: `${LETTERS[g.i]} · ${g.c}`, symbol: COND_SYMBOLS[g.i % 6], symbolSize: 9,
+          itemStyle: { color: COND_COLORS[g.i % 6], borderColor: "#fff", borderWidth: 1 },
+          data: g.pts.map((p) => ({ value: [gi + jitter(), p.v], code: p.code, nm: p.name })),
+          tooltip: { formatter: (q: { data: { value: number[]; code: string; nm: string }; seriesName: string }) =>
+            `${q.data.nm} <span style="opacity:.7">${q.data.code}</span><br/>${q.seriesName}: <b>${fmt(q.data.value[1], 4)}</b>` },
+        })),
+      ],
+    };
+  }, [r, k, used.join("|")]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!k) return <span className="small muted">Distribution by condition: no per-experiment values yet.</span>;
+  return (
+    <div className="stack" style={{ gap: 10 }}>
+      <div className="row" style={{ gap: 12 }}>
+        <h3 style={{ margin: 0 }}>Distribution by condition</h3>
+        <label className="row small" style={{ gap: 8 }}><span className="muted">Parameter</span>
+          <select value={k.key} onChange={(x) => setParam(x.target.value)} style={{ height: 36 }}>
+            {[...new Set(avail.map((c) => c.source))].map((src) => (
+              <optgroup key={src} label={src}>
+                {avail.filter((c) => c.source === src).map((c) => <option key={c.key} value={c.key}>{c.label}{c.unit ? ` (${c.unit})` : ""}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      </div>
+      <EChart option={option} className="box-chart" ariaLabel={`Box plot of ${k.label} by condition`} />
+      <span className="small muted">Box: median and quartiles; whiskers: most extreme values within 1.5 × IQR. Every experiment is a point.
+        With 2–3 experiments per condition the box only summarises the points: read them, not the box.</span>
+      <FigureExport label="Box plot" defaultWidth="85"
+        url={(fig) => `/api/analysis-sessions/${id}/boxplot.${fig}?param=${encodeURIComponent(k.key)}&variable=${encodeURIComponent(r.variable)}&step_h=${step}`} />
     </div>
   );
 }
@@ -400,7 +501,7 @@ function ComparisonTable({ r }: { r: SessionResults }) {
             <thead><tr><th>Experiment</th><th>Condition</th>{r.comparisons.map((k) => <th key={k.key} className="num" title={k.label}>{k.label}</th>)}</tr></thead>
             <tbody>{r.experiments.map((x) => (
               <tr key={x.id}>
-                <td><Link className="mono" to={`/analysis/experiments/${x.id}`}>{x.code}</Link>
+                <td><ExpName name={x.name} code={x.code} to={`/analysis/experiments/${x.id}`} />
                   {(x.fit_error || x.fit_warnings.length > 0) && <span className="xs" style={{ display: "block", color: "#8a5a00" }}>
                     <Icon name="warn" size={12} /> {x.fit_error ?? x.fit_warnings.join("; ")}</span>}</td>
                 <td>{LETTERS[r.conditions.indexOf(x.condition)]} · {x.condition}</td>

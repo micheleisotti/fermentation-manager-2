@@ -1,5 +1,13 @@
 /** Short changelog shown in Settings › Credits (newest first). Keep each line short. */
 export const CHANGELOG: { version: string; date: string; items: string[] }[] = [
+  { version: "2.2.1", date: "2026-11", items: [
+    "Controller profiles can be edited; experiments using one keep their values and show when it changed",
+    "Box-and-whisker plot of any parameter by condition in analysis sessions",
+    "Figures exportable in black and white (line types, markers, hatching)",
+    "Experiment names first, codes smaller; experiment list as rows on phones",
+    "Compact header on the monitoring page; Plan buttons removed from monitoring and Home",
+    "Dotted page, bolder main titles; themes Light, Cream, Sky, Dim, Dark (Grey became Sky)",
+  ] },
   { version: "2.2.0", date: "2026-11", items: [
     "Estimated end of fermentation: dashed line in the charts and value in the analysis",
     "Buffer dosing: base and acid buffer (Addition 2) rates and cumulative volumes",

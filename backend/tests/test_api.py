@@ -107,6 +107,15 @@ def test_full_workflow(env):
     assert c.get("/api/analysis-sessions").json()[0]["name"] == "renamed"
     f = c.get(f"/api/analysis-sessions/{sess['id']}/figure.svg?variable=OD600&dpi=100")
     assert f.status_code == 200 and f.content[:5] == b"<?xml"
+    f = c.get(f"/api/analysis-sessions/{sess['id']}/figure.png?variable=OD600&dpi=100&mono=true")
+    assert f.status_code == 200 and f.content[:4] == b"\x89PNG" and "-bw.png" in f.headers["content-disposition"]
+    keys = [k["key"] for k in res["comparisons"]]
+    for mono in ("false", "true"):
+        for k in keys[:3]:
+            f = c.get(f"/api/analysis-sessions/{sess['id']}/boxplot.svg?param={k}&dpi=100&mono={mono}")
+            assert f.status_code in (200, 422), (k, f.text)
+    assert c.get(f"/api/analysis-sessions/{sess['id']}/boxplot.png?param={keys[0]}&dpi=100").status_code == 200
+    assert c.get(f"/api/analysis-sessions/{sess['id']}/boxplot.png?param=bogus").status_code == 422
     x = c.get(f"/api/analysis-sessions/{sess['id']}/export.xlsx")
     assert x.status_code == 200 and x.content[:2] == b"PK"
     assert c.put(f"/api/analysis-sessions/{sess['id']}", json={"name": "x", "members": {}, "conditions": ["A", "A"]}).status_code == 422
@@ -128,7 +137,7 @@ def test_full_workflow(env):
     assert c.get(f"/api/experiments/{a['id']}/analysis?model=nope").status_code == 422
 
     for fmt, magic in (("png", b"\x89PNG"), ("svg", b"<?xml"), ("pdf", b"%PDF")):
-        f = c.get(f"/api/experiments/{a['id']}/figure.{fmt}?vars=OD600,ph,base_rate&dpi=100&theme=bw")
+        f = c.get(f"/api/experiments/{a['id']}/figure.{fmt}?vars=OD600,ph,base_rate&dpi=100&theme=bw&mono={fmt == 'png'}")
         assert f.status_code == 200 and f.content[:len(magic)] == magic, fmt
     assert c.get(f"/api/experiments/{a['id']}/figure.png?vars=bogus").status_code == 422
 
@@ -189,6 +198,36 @@ def test_delete_profile(env):
     assert [p["name"] for p in c.get("/api/profiles").json()] == []
     assert c.get(f"/api/experiments/{e['id']}").status_code == 200
     assert c.delete("/api/profiles/9999").status_code == 404
+
+
+def test_edit_profile_warns_experiments_but_rename_does_not(env):
+    c, clock, app, drivers = env
+    body = {"name": "std", "ph_setpoint": 6.2, "temperature_setpoint": 37.0}
+    p = c.post("/api/profiles", json=body).json()
+    plan = {"ph_setpoint": 6.2, "temperature_setpoint": 37.0}
+    e = c.post("/api/experiments", json={"name": "x", "reactor_id": "R1", "profile_id": p["id"], "plan_params": plan}).json()
+    legacy = c.post("/api/experiments", json={"name": "y", "reactor_id": "R2", "profile_id": p["id"]}).json()
+    assert not e["profile_changed"] and not e["profile_modified"] and e["profile_name"] == "std"
+    assert c.post(f"/api/experiments/{e['id']}/start").status_code == 200
+    # rename only: new name everywhere, no warning
+    r = c.put(f"/api/profiles/{p['id']}", json={**body, "name": "standard"})
+    assert r.status_code == 200 and r.json()["n_experiments"] == 2 and r.json()["updated_at"] is None
+    x = c.get(f"/api/experiments/{e['id']}").json()
+    assert x["profile_name"] == "standard" and not x["profile_changed"]
+    # change a value: both experiments warn and keep their own values
+    r = c.put(f"/api/profiles/{p['id']}", json={**body, "name": "standard", "ph_setpoint": 6.5})
+    assert r.status_code == 200 and r.json()["updated_at"]
+    for ex in (e, legacy):
+        x = c.get(f"/api/experiments/{ex['id']}").json()
+        assert x["profile_changed"] and not x["profile_modified"] and x["plan_params"]["ph_setpoint"] == 6.2
+    # re-saving the planned one against the new profile clears the warning
+    x = c.patch(f"/api/experiments/{legacy['id']}", json={"plan_params": {**plan, "ph_setpoint": 6.5}}).json()
+    assert not x["profile_changed"] and not x["profile_modified"]
+    # name clashes and bad limits are refused
+    c.post("/api/profiles", json={"name": "other"})
+    assert c.put(f"/api/profiles/{p['id']}", json={**body, "name": "other"}).status_code == 409
+    assert c.put(f"/api/profiles/{p['id']}", json={**body, "ph_low_limit": 7, "ph_high_limit": 6}).status_code == 422
+    assert c.put("/api/profiles/9999", json=body).status_code == 404
 
 
 def test_delete_experiment(env):

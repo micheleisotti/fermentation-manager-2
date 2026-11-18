@@ -109,7 +109,8 @@ function AppearancePicker() {
   const [t, setT] = useState<Theme>(getTheme());
   const opts: { k: Theme; label: string; help: string }[] = [
     { k: "light", label: "Light", help: "Light page and cards" },
-    { k: "grey", label: "Grey", help: "Softer grey page (#DADFE1), white cards" },
+    { k: "cream", label: "Cream", help: "Warm cream page, white cards" },
+    { k: "sky", label: "Sky", help: "Pale blue page, white cards" },
     { k: "dim", label: "Dim", help: "Dark teal page, white cards and charts" },
     { k: "dark", label: "Dark", help: "Dark page and cards; charts on light panels" },
   ];
@@ -240,7 +241,7 @@ export function SettingsPage() {
 
   return (
     <>
-      <h1>Settings</h1>
+      <h1 className="display">Settings</h1>
       <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
         <nav aria-label="Settings sections" className="settings-nav">
           {SECTIONS.map((x) => <a key={x.id} href={`#${x.id}`}>{x.label}</a>)}

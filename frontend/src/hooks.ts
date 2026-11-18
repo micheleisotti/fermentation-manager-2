@@ -58,3 +58,11 @@ export function fmtDuration(h: number | null | undefined): string {
   const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
   return `${hh} h ${String(mm).padStart(2, "0")} min`;
 }
+
+/** Age of the last reading: "15 s", "8 min", "3 h" ("—" when unknown). */
+export function fmtAge(s: number | null | undefined): string {
+  if (s === null || s === undefined) return "—";
+  if (s < 120) return `${Math.round(s)} s`;
+  if (s < 7200) return `${Math.round(s / 60)} min`;
+  return `${Math.round(s / 3600)} h`;
+}

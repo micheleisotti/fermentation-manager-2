@@ -48,6 +48,17 @@ export function showAssignments(items: { name: string; side: number; kind?: stri
   return sidesText(items?.map((a) => ({ kind: "actuator", ...a })));
 }
 
+const str = (v: number | null | undefined) => (v == null ? "" : String(v));
+/** The form filled with a saved profile (Edit). */
+function formOf(p: Profile): Form {
+  const pid = (pre: "" | "t", d: Record<string, number> | null) =>
+    Object.fromEntries(Object.keys(PARAMS).map((k) => [`${pre}${k}`, str(d?.[k])]));
+  return { ...EMPTY, name: p.name, ph: str(p.ph_setpoint), t: str(p.temperature_setpoint), stir: str(p.stirrer_setpoint),
+    mode: p.ph_control_mode ?? "", notes: p.notes ?? "", phLo: str(p.ph_low_limit), phHi: str(p.ph_high_limit),
+    tLo: str(p.temperature_low_limit), tHi: str(p.temperature_high_limit), tmode: p.temperature_control_mode ?? "",
+    ...pid("", p.ph_pid), ...pid("t", p.temperature_pid) };
+}
+
 function loopEntries(f: Form, prefix: "" | "t", mode: string) {
   const keys = (prefix === "t" ? T_MODE_PARAMS : MODE_PARAMS)[mode] ?? [];
   return keys.map((k) => [k, f[`${prefix}${k}` as keyof Form] as string] as const).filter(([, v]) => v.trim() !== "")
@@ -67,6 +78,7 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [assign, setAssign] = useState<{ from: string; a: LoopAssignments } | null>(null);
+  const [editing, setEditing] = useState<Profile | null>(null);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const modeParams = MODE_PARAMS[f.mode] ?? [];
   const tModeParams = T_MODE_PARAMS[f.tmode] ?? [];
@@ -78,6 +90,13 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
       setAssign({ from: reactor, a: c.assignments });
     } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
   }
+
+  function startEdit(p: Profile) {
+    setEditing(p); setF(formOf(p)); setMsg(null);
+    setAssign(p.loop_assignments ? { from: "the saved profile", a: p.loop_assignments } : null);
+    document.getElementById("profile-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function cancelEdit() { setEditing(null); setF(EMPTY); setAssign(null); }
 
   async function create() {
     const entries = loopEntries(f, "", f.mode), tEntries = loopEntries(f, "t", f.tmode);
@@ -91,14 +110,22 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
       if ((lim[0] !== null && lim[1] !== null && lim[0] >= lim[1]) || (lim[2] !== null && lim[3] !== null && lim[2] >= lim[3])) {
         setMsg({ kind: "alert", text: "Each low limit must be below its high limit." }); return;
       }
-      await api.createProfile({ name: f.name.trim(), ph_setpoint: num(f.ph), temperature_setpoint: num(f.t), stirrer_setpoint: num(f.stir),
+      const body = { name: f.name.trim(), ph_setpoint: num(f.ph), temperature_setpoint: num(f.t), stirrer_setpoint: num(f.stir),
         ph_low_limit: lim[0], ph_high_limit: lim[1], temperature_low_limit: lim[2], temperature_high_limit: lim[3],
         ph_control_mode: f.mode || null, ph_pid: entries.length ? Object.fromEntries(entries) as Record<string, number> : null,
         temperature_control_mode: f.tmode || null,
         temperature_pid: tEntries.length ? Object.fromEntries(tEntries) as Record<string, number> : null,
-        loop_assignments: assign?.a ?? null, notes: f.notes });
-      setF(EMPTY); setAssign(null);
-      setMsg({ kind: "good", text: "Profile saved." }); list.refresh();
+        loop_assignments: assign?.a ?? null, notes: f.notes };
+      if (editing) {
+        const r = await api.updateProfile(editing.id, body);
+        const n = r.n_experiments ?? 0;
+        setMsg({ kind: "good", text: `Profile “${r.name}” updated.` + (n && r.updated_at !== editing.updated_at
+          ? ` ${n} experiment${n > 1 ? "s" : ""} using it keep${n > 1 ? "" : "s"} its previous values and show that the profile changed.` : "") });
+      } else {
+        await api.createProfile(body);
+        setMsg({ kind: "good", text: "Profile saved." });
+      }
+      setF(EMPTY); setAssign(null); setEditing(null); list.refresh();
     } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
   }
 
@@ -114,7 +141,7 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <>
-      {!embedded && <h1>Controller profiles</h1>}
+      {!embedded && <h1 className="display">Controller profiles</h1>}
       <span className="muted small">A profile is a named set of setpoints, process limits and pH / temperature control settings, loaded onto a controller from the planning screen, before Start.
         It can record which actuators each loop had when it was made: if the controller has different ones, that loop's control settings are not loaded.</span>
       <div className="split">
@@ -127,17 +154,18 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
                 <tbody>
                   {(list.data ?? []).map((p) => (
                     <tr key={p.id}>
-                      <td style={{ fontWeight: 500 }}>{p.name}</td>
+                      <td><span style={{ fontWeight: 600 }}>{p.name}</span>
+                        {!!p.n_experiments && <span className="xs muted" style={{ display: "block" }}>used by {p.n_experiments} experiment{p.n_experiments > 1 ? "s" : ""}</span>}</td>
                       <td className="mono">{p.ph_setpoint ?? "—"}</td><td className="mono">{p.temperature_setpoint ?? "—"}</td>
                       <td className="mono">{p.stirrer_setpoint ?? "—"}</td>
                       <td className="mono small" style={{ whiteSpace: "nowrap" }}>{showLimits(p)}</td>
-                      <td className="stack" style={{ gap: 4 }}>
+                      <td><div className="stack" style={{ gap: 4 }}>
                         {!p.ph_control_mode && !p.temperature_control_mode && <span className="muted">—</span>}
                         {p.ph_control_mode && <span><span className="kicker">pH</span> {showParams(p.ph_control_mode, p.ph_pid, "pH")}
                           {p.loop_assignments?.ph && <span className="xs muted"><br />for {showAssignments(p.loop_assignments.ph)}</span>}</span>}
                         {p.temperature_control_mode && <span><span className="kicker">T</span> {showParams(p.temperature_control_mode, p.temperature_pid, "°C", T_MODE_PARAMS)}
                           {p.loop_assignments?.temperature && <span className="xs muted"><br />for {showAssignments(p.loop_assignments.temperature)}</span>}</span>}
-                      </td>
+                      </div></td>
                       <td style={{ whiteSpace: "nowrap", textAlign: "right", width: 1 }}>
                         {confirmId === p.id ? (
                           <>
@@ -145,7 +173,10 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
                             <button className="btn filled" onClick={() => remove(p)} aria-label={`Confirm deleting profile ${p.name}`}>Delete</button>
                           </>
                         ) : (
-                          <button className="btn text" onClick={() => { setConfirmId(p.id); setMsg(null); }} aria-label={`Delete profile ${p.name}`}>Delete</button>
+                          <>
+                            <button className="btn text" onClick={() => startEdit(p)} aria-label={`Edit profile ${p.name}`}>Edit</button>
+                            <button className="btn text" onClick={() => { setConfirmId(p.id); setMsg(null); }} aria-label={`Delete profile ${p.name}`}>Delete</button>
+                          </>
                         )}
                       </td>
                     </tr>
@@ -158,8 +189,12 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
           </section>
         </div>
         <aside className="side">
-          <section className="card">
-            <h2 style={{ fontSize: 18 }}>New profile</h2>
+          <section className="card" id="profile-form" style={{ scrollMarginTop: 16 }}>
+            <h2 style={{ fontSize: 18 }}>{editing ? `Edit profile “${editing.name}”` : "New profile"}</h2>
+            {editing && !!editing.n_experiments && (
+              <div className="banner warn small" role="note">Used by {editing.n_experiments} experiment{editing.n_experiments > 1 ? "s" : ""}.
+                They keep the values they were saved with; if you change any value they show that the profile changed after they were saved.
+                Renaming only changes the name everywhere.</div>)}
             <label className="field">Name<input value={f.name} onChange={set("name")} placeholder="e.g. plantarum standard 1" /></label>
             <div className="row" style={{ flexWrap: "nowrap" }}>
               <label className="field">pH setpoint<input inputMode="decimal" value={f.ph} onChange={set("ph")} /></label>
@@ -207,7 +242,10 @@ export function Profiles({ embedded = false }: { embedded?: boolean }) {
               <span className="xs muted">Reads which actuators act on the pH and temperature loops (+ below setpoint, − above). Nothing is written.</span>
             </div>
             <label className="field">Notes<textarea rows={3} value={f.notes} onChange={set("notes")} /></label>
-            <button className="btn filled" disabled={!f.name.trim()} onClick={create}>Save profile</button>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn filled" disabled={!f.name.trim()} onClick={create}>{editing ? "Save changes" : "Save profile"}</button>
+              {editing && <button className="btn text" onClick={cancelEdit}>Cancel</button>}
+            </div>
           </section>
         </aside>
       </div>

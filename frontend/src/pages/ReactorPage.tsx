@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { fmtDuration, usePolling } from "../hooks";
+import { fmtDuration, usePolling, fmtAge } from "../hooks";
 import { Icon, StatusChip } from "../components/ui";
 import { ControllerPanel, LoopsButton, ResetCountersButton } from "../components/ReactorControls";
 import { REACTOR_LABEL } from "./Home";
@@ -26,34 +26,35 @@ export function ReactorPage() {
 
   return (
     <>
-      <div className="sticky-head">
-        <header className="row between">
-          <div className="row" style={{ gap: 12 }}>
-            <Link to="/" className="btn icon text" aria-label="Back to home"><Icon name="back" /></Link>
-            <div className="stack" style={{ gap: 2 }}>
-              <h1 style={{ fontSize: 22 }}>Bioreactor {REACTOR_LABEL[reactor] ?? reactor} · monitoring</h1>
-              <span className="small muted">Live values and commands on the controller. Nothing is recorded unless an experiment is recording.</span>
-            </div>
+      <div className="sticky-head mon-head">
+        <header className="mon-bar">
+          <Link to="/" className="btn icon text" aria-label="Back to home"><Icon name="back" /></Link>
+          <div className="stack mon-title" style={{ gap: 2 }}>
+            <h1>Bioreactor {REACTOR_LABEL[reactor] ?? reactor} · monitoring</h1>
+            <span className="small muted mon-sub">Live values and commands on controller</span>
           </div>
-          {exp ? (
-            <Link className="btn tonal" to={`/experiments/${exp.id}`}>
-              <span className="mono">{exp.code}</span>&nbsp;· {exp.strain || "—"} <StatusChip status={exp.status} />
+          {exp && (
+            <Link className="btn tonal mon-exp" to={`/experiments/${exp.id}`} title={`${exp.name} ${exp.code}`}>
+              <span className="mon-exp-name">{exp.name}</span> <StatusChip status={exp.status} />
             </Link>
-          ) : <Link className="btn tonal" to={`/experiments/new?reactor=${reactor}`}>Plan on {REACTOR_LABEL[reactor] ?? reactor}</Link>}
-        </header>
-        <div className="card" style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 16 }}>
-          <div className="row" style={{ gap: 24 }}>
-            {exp && exp.status === "fermenting"
-              ? <span className="row" style={{ gap: 8, color: "#1f7a63", fontWeight: 600 }}><span className="dot ok" style={{ width: 10, height: 10 }} />Recording {exp.code} · t = {fmtDuration(exp.t_h)}</span>
-              : <span className="row" style={{ gap: 8, fontWeight: 600 }}><span className="dot idle" style={{ width: 10, height: 10 }} />Not recording</span>}
-            <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
-              {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
-          </div>
-          <div className="row" style={{ gap: 8 }}>
+          )}
+          <div className="row mon-actions-wide" style={{ gap: 8 }}>
             <LoopsButton reactor={reactor} channels={exp?.channels} />
             <ResetCountersButton reactor={reactor} recording={exp?.status === "fermenting"} onDone={refresh} />
           </div>
+        </header>
+        <div className="mon-status small">
+          {exp && exp.status === "fermenting"
+            ? <span className="row" style={{ gap: 6, color: "var(--data-green-dark)", fontWeight: 600, flexWrap: "nowrap" }}><span className="dot ok" />Recording · t = <span className="mono">{fmtDuration(exp.t_h)}</span></span>
+            : <span className="row" style={{ gap: 6, fontWeight: 600, flexWrap: "nowrap" }}><span className="dot idle" />Not recording</span>}
+          <span className="muted row" style={{ gap: 4, flexWrap: "nowrap" }} title="Time since the last reading from the controller">
+            <Icon name="refresh" size={16} /><span className="mono">{fmtAge(r?.last_reading_age_s)}</span> ago</span>
+          {r && !r.online && <b style={{ color: "var(--alert-text)" }}>controller not responding</b>}
         </div>
+      </div>
+      <div className="row mon-actions-narrow" style={{ gap: 8 }}>
+        <LoopsButton reactor={reactor} channels={exp?.channels} />
+        <ResetCountersButton reactor={reactor} recording={exp?.status === "fermenting"} onDone={refresh} />
       </div>
 
       <div className="split">

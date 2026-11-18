@@ -265,12 +265,15 @@ html[data-theme="dim"] .signin-card, html[data-theme="dim"] .note {
   --surface: #ffffff; --surface-dim: #f6f7f9; --surface-container: #eef0f4;
   --primary: #003366; --on-primary: #ffffff; --primary-container: #d6e0ee; --on-primary-container: #003366;
 }
-/* Grey: softer light-grey page from the palette (#DADFE1), white cards; text stays dark */
-html[data-theme="grey"] { --surface-dim: #dadfe1; --surface-container: #ccd3d6; --divider: #e3e7e9; }
-html[data-theme="grey"] .signin { background: var(--surface-dim); }
+/* Cream: warm cream page, white cards; Sky: pale blue page (from the data slate), white cards */
+html[data-theme="cream"] { --surface-dim: #fbf6ea; --surface-container: #f3ebd8; --outline-variant: #dcd2b9; --dot: #d6cdb4; }
+html[data-theme="sky"] { --surface-dim: #ebf3f5; --surface-container: #dbe9ed; --outline-variant: #bfd5dc; --dot: #b9d3da; }
+html[data-theme="cream"] .signin, html[data-theme="sky"] .signin { background: var(--surface-dim); }
+html[data-theme="cream"] .pill, html[data-theme="sky"] .pill { background: var(--surface); }
 
 /* Dim: dark teal-slate page (from the palette's data slate #455e6f), content cards stay white */
 html[data-theme="dim"] {
+  --dot: #3a5563; --pill-bg: #bcd6f2; --pill-fg: #0d2b47; --accent-text: #6fd3b5;
   --surface-dim: #2b4350; --surface-container: #22363f; --divider: #3b5562;
   --ink: #eef3f5; --ink-soft: #bccbd3; --outline: #9db0ba; --outline-variant: #5b7482;
   --primary: #bcd6f2; --on-primary: #0d2b47; --primary-container: #3d5a6b; --on-primary-container: #eef3f5;
@@ -281,6 +284,7 @@ html[data-theme="dim"] .signin { background: var(--surface-dim); }
 
 /* Dark: dark page and dark cards; charts keep a light panel so they read like the exports */
 html[data-theme="dark"] {
+  --dot: #222d34; --pill-bg: #a9c8ff; --pill-fg: #0b2d55; --accent-text: #6fd3b5;
   --surface: #1c252c; --surface-dim: #12191e; --surface-container: #182026; --divider: #2a353d;
   --ink: #e6ebef; --ink-soft: #a7b3bb; --outline: #8b979f; --outline-variant: #3e4a52;
   --primary: #a9c8ff; --on-primary: #0b2d55; --primary-container: #2b4568; --on-primary-container: #d8e5ff;
@@ -299,7 +303,8 @@ html[data-theme="dark"] img.logo-img, html[data-theme="dim"] img.logo-img { filt
 .theme-swatch { width: 44px; height: 32px; border-radius: 6px; flex: none; display: flex; align-items: center; justify-content: center; border: 1px solid var(--outline-variant); }
 .theme-swatch span { width: 24px; height: 14px; border-radius: 3px; }
 .theme-swatch.light { background: #f6f7f9; } .theme-swatch.light span { background: #fff; box-shadow: 0 0 0 1px #dadfe1; }
-.theme-swatch.grey { background: #dadfe1; } .theme-swatch.grey span { background: #fff; }
+.theme-swatch.cream { background: #fbf6ea radial-gradient(#d6cdb4 1px, transparent 1.2px) 0 0 / 6px 6px; } .theme-swatch.cream span { background: #fff; }
+.theme-swatch.sky { background: #ebf3f5 radial-gradient(#b9d3da 1px, transparent 1.2px) 0 0 / 6px 6px; } .theme-swatch.sky span { background: #fff; }
 .theme-swatch.dim { background: #2b4350; } .theme-swatch.dim span { background: #fff; }
 .theme-swatch.dark { background: #12191e; } .theme-swatch.dark span { background: #1c252c; box-shadow: 0 0 0 1px #3e4a52; }
 .status.preparing { background: var(--warn-container); color: var(--ink); border: 1px dashed var(--data-orange-text, #8a5a00); }
@@ -322,3 +327,55 @@ html[data-theme="dark"] img.logo-img, html[data-theme="dim"] img.logo-img { filt
 .ctrl-value .u { font-size: 13px; font-weight: 400; margin-left: 3px; color: var(--ink-soft); }
 .ctrl-info { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; color: var(--ink-soft); }
 .ctrl-act { display: flex; justify-content: flex-end; }
+
+/* --- 2.2.1 --------------------------------------------------------------------------------- */
+/* Experiment code next to its name: small, not bold (the name is what people read) */
+.code-chip { font-size: 0.62em; font-weight: 400; color: var(--ink-soft); letter-spacing: 0; vertical-align: 0.12em; white-space: nowrap; }
+.profile-changed { color: var(--data-orange-text); font-weight: 600; }
+.exp-title { display: inline; }
+.exp-name { font-weight: 600; color: var(--ink); }
+a.exp-name-link { text-decoration: none; } a.exp-name-link:hover .exp-name { text-decoration: underline; }
+/* Experiment list: rows on phones, the full table from tablets up */
+.exp-list { display: none; list-style: none; margin: 0; padding: 4px 0; }
+.exp-list li + li { border-top: 1px solid var(--divider); }
+.exp-list a { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; color: inherit; text-decoration: none; min-height: 56px; }
+.exp-list-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+@media (max-width: 640px) { .exp-list { display: block; } .exp-table { display: none; } }
+/* Monitoring page header: one compact bar (back, title, experiment, commands) and one status line.
+   On phones only the title and the status stay at the top; Loops / Reset counters scroll with the page. */
+.mon-head { gap: 6px; padding-bottom: 10px; }
+.mon-bar { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mon-title { flex: 1 1 auto; min-width: 0; }
+.mon-title h1 { font-size: 22px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mon-exp { flex: 0 1 auto; min-width: 0; height: 40px; }
+.mon-exp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.mon-status { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-left: 52px; }
+.mon-actions-narrow { display: none; }
+@media (max-width: 760px) {
+  .mon-head { gap: 2px; padding-top: 8px; padding-bottom: 8px; }
+  .mon-bar { gap: 4px; margin-left: -8px; }
+  .mon-title h1 { font-size: 17px; }
+  .mon-sub { font-size: 12px; }
+  .mon-status { padding-left: 44px; gap: 10px; }
+  .mon-actions-wide, .mon-exp .status { display: none; }
+  .mon-exp { height: 36px; padding: 0 12px; } .mon-exp-name { max-width: 110px; }
+  .mon-actions-narrow { display: flex; }
+}
+.box-chart { height: 340px; width: 100%; max-width: 640px; }
+
+/* Dotted page (every theme): the dots sit on the page, never behind cards, charts or tables.
+   Fixed attachment so the sticky headers, painted with the same pattern, line up with the page. */
+:root { --dot: #d9dde3; --pill-bg: #22294d; --pill-fg: #ffffff; --accent-text: #1f7a63; }
+body, .sticky-head {
+  background-color: var(--surface-dim);
+  background-image: radial-gradient(var(--dot) 1.3px, transparent 1.5px);
+  background-size: 24px 24px; background-attachment: fixed;
+}
+/* Main titles: heavy, tight; one highlighted word in the palette green. Other titles stay as they are. */
+.display { font-size: 34px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.05;
+  -webkit-text-stroke: 0.8px currentColor; }
+.display .hl { color: var(--accent-text); }
+@media (max-width: 760px) { .display { font-size: 28px; -webkit-text-stroke-width: 0.7px; } }
+/* Status pill ("Live") */
+.live-pill { display: inline-flex; align-items: center; align-self: flex-start; height: 26px; padding: 0 12px; border-radius: 13px;
+  background: var(--pill-bg); color: var(--pill-fg); font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }

@@ -308,3 +308,25 @@ commit (`fm2/build_info.py`, reads .git without the git executable) and warns wh
   Appearance, Credits. QR code to open the app on a phone (`AppQr.tsx`, npm `qrcode`; address from Tailscale
   name/IPs or saved in `remote.app_url`). Short changelog in Credits (`frontend/src/changelog.ts`).
 - Deferred to 2.2.1 (13 Nov decision): license review, "cite as"/CITATION.cff/DOI, manual.
+
+## 2.2.1 (19 Nov 2026)
+- **Profiles editable** (`PUT /api/profiles/{id}`, Edit in Library › Controller profiles). Experiments store
+  `profile_ref` = the profile's values when the plan was saved (create, or a patch that changes profile or plan).
+  Before an edit, every experiment using the profile gets `plan_params` (if missing) and `profile_ref` (if missing)
+  = the old values, so they keep their values. `ExperimentOut.profile_changed` = ref differs from the profile now
+  (name not compared: a rename shows only the new name, `profile_name`). "Custom" (`profile_modified`) compares the
+  plan with `profile_ref`. Warning in planning (with "Use the new values of …") and in the experiment header;
+  export metadata gets the profile name and the flag. Profiles list shows "used by N experiments"; names unique (409).
+- **Names first**: experiment and session titles show the name bold and the code small (`ExpName`, `.code-chip`);
+  the experiment list is a row list on phones (≤ 640 px). Live payload includes the experiment name.
+- **Monitoring page**: one compact bar (back, title, subtitle, experiment link, Loops / Reset counters) and one
+  status line (recording state, refresh icon + age of the last reading, `fmtAge`: s / min / h). On phones only these
+  stay at the top; Loops / Reset counters scroll with the page. "Plan on Rx" removed there and from idle Home cards.
+- **Box-and-whisker** of any per-experiment parameter by condition in analysis sessions (only parameters with values;
+  every experiment as a point; quartiles as numpy) and `GET /api/analysis-sessions/{id}/boxplot.{fmt}?param=`.
+- **Black & white figures**: `mono=true` on the experiment, session and box-plot figures (black, line types,
+  filled/open markers, hatching); file names end in `-bw`.
+- **Style** (all themes): dotted page (`--dot`), sticky headers painted with the same fixed pattern; main titles
+  `.display` (Plex 700 + 0.8 px stroke, one highlighted word in `--accent-text`); "Live" pill (`.live-pill`). Themes
+  Light, Cream, Sky, Dim, Dark; stored "grey" migrates to "sky" (`theme.ts`). Plex Sans 700 bundled.
+- Still open for 2.2.1: license review, "cite as"/CITATION.cff/DOI, online manual (draft in Michele's Claude Docs).

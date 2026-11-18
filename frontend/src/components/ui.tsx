@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useEffect, useRef, type ReactNode } from "react";
 import * as echarts from "echarts/core";
 import { LineChart, BarChart } from "echarts/charts";
@@ -15,6 +16,7 @@ const PATHS: Record<string, string> = {
   list: "M4 6h16M4 12h16M4 18h10",
   gear: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1",
   plus: "M12 5v14M5 12h14",
+  refresh: "M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5",
   back: "M19 12H5M12 19l-7-7 7-7",
   bell: "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0",
   warn: "M12 3 2 21h20L12 3zM12 10v5M12 18v.5",
@@ -104,3 +106,13 @@ export const axisBase = {
   nameTextStyle: { fontFamily: "IBM Plex Sans", fontSize: 12 },
   splitLine: { show: false },
 };
+
+/** An experiment as people read it: the name first and bold, the code small after it. */
+export function ExpName({ name, code, to }: { name: string; code: string; to?: string }) {
+  const n = <span className="exp-name">{name || "—"}</span>;
+  return (
+    <span className="exp-title">
+      {to ? <Link to={to} className="exp-name-link">{n}</Link> : n} <span className="mono code-chip">{code}</span>
+    </span>
+  );
+}

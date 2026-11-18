@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Experiment, type Status } from "../api";
 import { usePolling } from "../hooks";
-import { Icon, StatusChip } from "../components/ui";
+import { ExpName, Icon, StatusChip } from "../components/ui";
 
 const FILTERS: { key: Status | "all"; label: string }[] = [
   { key: "all", label: "All" }, { key: "planned", label: "Planned" }, { key: "fermenting", label: "Fermenting" },
@@ -23,14 +23,26 @@ export function ExperimentTable({ list, empty = "No experiments." }: { list: Exp
   const nav = useNavigate();
   return (
     <div className="card" style={{ padding: 0 }}>
-      <div className="table-wrap">
+      <ul className="exp-list" aria-label="Experiments">
+        {list.map((e) => (
+          <li key={e.id}>
+            <Link to={`/experiments/${e.id}`}>
+              <span className="exp-list-main"><ExpName name={e.name} code={e.code} />
+                <span className="xs muted">{e.started_at?.slice(0, 10) ?? e.planned_date ?? "—"} · {e.reactor_id}{e.strain ? ` · ${e.strain}` : ""}</span></span>
+              <StatusChip status={e.status} />
+            </Link>
+          </li>
+        ))}
+        {list.length === 0 && <li className="muted" style={{ padding: 16 }}>{empty}</li>}
+      </ul>
+      <div className="table-wrap exp-table">
         <table className="data" style={{ minWidth: 900 }}>
           <thead><tr><th>Date</th><th>Experiment</th><th>Strain</th><th>Reactor</th><th>Parallel run</th><th>Status</th><th>By</th><th>Last modified</th></tr></thead>
           <tbody>
             {list.map((e) => (
               <tr key={e.id} className="click" onClick={() => nav(`/experiments/${e.id}`)}>
                 <td className="mono">{e.started_at?.slice(0, 10) ?? e.planned_date ?? "—"}</td>
-                <td><span className="mono" style={{ fontWeight: 600 }}>{e.code}</span> · {e.name}</td>
+                <td><ExpName name={e.name} code={e.code} /></td>
                 <td className="mono">{e.strain || "—"}</td>
                 <td className="mono">{e.reactor_id}</td>
                 <td className="mono muted">{e.parallel_run_code ?? "—"}</td>
@@ -63,7 +75,7 @@ export function ExperimentsList() {
   return (
     <>
       <div className="row between">
-        <h1>Experiments</h1>
+        <h1 className="display">Experiments</h1>
         <Link className="btn filled" to="/experiments/new"><Icon name="plus" size={18} />Plan experiment</Link>
       </div>
       <div className="row between">

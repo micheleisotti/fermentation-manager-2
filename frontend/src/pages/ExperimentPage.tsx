@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type Experiment, type Readings } from "../api";
-import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling } from "../hooks";
+import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling, fmtAge } from "../hooks";
 import { baseOption, MANUAL_PREFIX, trendsOption, varsFor, type ManualPoints, type TrendVar } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
 import { DeleteExperiment } from "../components/DeleteExperiment";
@@ -47,9 +47,13 @@ function Header({ e, partner, onArchive }: { e: Experiment; partner?: Experiment
       <header className="row between">
         <div className="row" style={{ gap: 12 }}>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — {e.strain}</>}</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 600 }}>{e.name}{e.strain && <span style={{ fontWeight: 400 }}> — {e.strain}</span>}
+              {" "}<span className="mono code-chip">{e.code}</span></h1>
             <span className="small muted">Bioreactor {e.reactor_id.slice(1)}{e.started_at && ` · started ${new Date(e.started_at).toLocaleString()}`}
-              {e.parallel_run_code && ` · parallel run ${e.parallel_run_code}`}</span>
+              {e.parallel_run_code && ` · parallel run ${e.parallel_run_code}`}
+              {e.profile_name && <> · profile “{e.profile_name}”</>}
+              {e.profile_changed && <span className="profile-changed" title="The profile was edited after this experiment's plan was saved; the experiment keeps the values it was saved with.">
+                {" "}· changed after the plan was saved</span>}</span>
           </div>
           <StatusChip status={e.status} />
           <ExpTags e={e} />
@@ -135,7 +139,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           <div className="row" style={{ gap: 24 }}>
             <span className="row" style={{ gap: 8, color: "var(--data-orange-text)", fontWeight: 600 }}><span className="dot" style={{ width: 10, height: 10, background: "#f9b112" }} />Not recording</span>
             <span>t = <span className="mono" style={{ fontSize: 20, fontWeight: 600 }}>—</span></span>
-            <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
+            <span className="small muted">Last controller reading <span className="mono">{fmtAge(r?.last_reading_age_s)}</span> ago
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
           <div className="row" style={{ gap: 8 }}>
@@ -150,7 +154,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           <div className="row" style={{ gap: 24 }}>
             <span className="row" style={{ gap: 8, color: "#1f7a63", fontWeight: 600 }}><span className="dot ok" style={{ width: 10, height: 10 }} />Recording</span>
             <span>t = <span className="mono" style={{ fontSize: 20, fontWeight: 600 }}>{fmtDuration(r?.experiment?.t_h)}</span></span>
-            <span className="small muted">Last controller reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago
+            <span className="small muted">Last controller reading <span className="mono">{fmtAge(r?.last_reading_age_s)}</span> ago
               {r && !r.online && <b style={{ color: "#b30020" }}> · controller not responding</b>}</span>
           </div>
           <div className="row" style={{ gap: 8 }}>

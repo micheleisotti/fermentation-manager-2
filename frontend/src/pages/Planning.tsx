@@ -211,7 +211,7 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
       <header className="row between">
         <div className="row" style={{ gap: 12 }}>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}>{existing ? <><span className="mono">{existing.code}</span> · {existing.name}</> : "New experiment"}</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 600 }}>{existing ? <>{existing.name} <span className="mono code-chip">{existing.code}</span></> : "New experiment"}</h1>
             <span className="small muted">{existing ? "Planning · not started" : "Fill in the plan, then save"}</span>
           </div>
           <StatusChip status="planned" />
@@ -325,7 +325,8 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                 </select>
               </label>
             </div>
-            <div className="row" style={{ gap: 8 }}><PlanSource d={d} profile={profile} /></div>
+            <div className="row" style={{ gap: 8 }}><PlanSource d={d} profile={profile}
+              changed={!!existing?.profile_changed && existing.profile_id === d.profile_id && !dirty} /></div>
             <PlanControllerTable value={d.plan_params ?? null} channels={d.channels ?? DEFAULT_CHANNELS} reactor={liveR}
               onChange={(v) => set({ plan_params: v })} />
             {existing && Object.entries(check.data?.assignment_differences ?? {}).map(([loop, m]) => (
@@ -354,7 +355,8 @@ export function Planning({ existing, onChange }: { existing?: Experiment; onChan
                   check.refresh(); live.refresh();
                 } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
               }}>Load profile to controller</button>
-              {modified && profile && <button className="btn text" onClick={() => set({ plan_params: fromProfile(profile) })}>Reset to “{profile.name}”</button>}
+              {modified && profile && <button className="btn text" onClick={() => set({ plan_params: fromProfile(profile) })}>
+                {existing?.profile_changed && !dirty ? `Use the new values of “${profile.name}”` : `Reset to “${profile.name}”`}</button>}
             </div>
             <span className="xs muted">{!existing ? "Create the experiment to load the plan. " : dirty ? "Save the plan to load it. " : ""}Limits left empty stay as they are on the controller; actuators, interlocks and calibration stay on the controller. Control mode and loop parameters (pH, temperature) can be loaded only before Start.</span>
           </section>
@@ -455,9 +457,13 @@ export const hasValues = (p: PlanParams | null | undefined) =>
   !!p && Object.entries(p).some(([k, v]) => k === "loop_assignments" ? false
     : k === "ph_pid" || k === "temperature_pid" ? Object.values(v ?? {}).some((x) => x != null) : v != null && v !== "");
 
-function PlanSource({ d, profile }: { d: ExperimentDraft; profile?: Profile }) {
+function PlanSource({ d, profile, changed }: { d: ExperimentDraft; profile?: Profile; changed?: boolean }) {
   if (!profile) return hasValues(d.plan_params)
     ? <span className="tag archived" style={{ height: 28 }}>Custom · not saved as a profile</span> : null;
+  if (changed) return (
+    <span className="tag" style={{ height: "auto", minHeight: 28, background: "var(--warn-container)", whiteSpace: "normal" }}
+      title="The plan keeps the values it was saved with. Use the button below to take the profile's new values.">
+      From profile “{profile.name}” · the profile was changed after this plan was saved</span>);
   const modified = !!d.plan_params && !sameParams(d.plan_params, fromProfile(profile));
   return modified
     ? <span className="tag" style={{ height: 28, background: "var(--warn-container)" }}>Custom · based on “{profile.name}”, not saved</span>
