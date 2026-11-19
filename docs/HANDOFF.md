@@ -26,7 +26,8 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   cycle time; Adaptive loads the same (P/I/D as starting values the controller then adapts) plus settling time.
   External control is never written. Profiles can be deleted (refused while a planned
   experiment uses them; started experiments keep their plan snapshot).
-- Reactor names: **R1-sx = 192.0.2.42, R2-dx = 192.0.2.41** (PC Ethernet 192.0.2.10/24, no gateway).
+- Reactor names: **R1-sx** and **R2-dx**; their IP addresses (and the PC's static address on the controllers'
+  switch, no gateway) are in `C:\ProgramData\FermentationManager\data\local.env`, never in the repository.
 - Home shows every reactor: running experiment card, or "Idle · not recording" card with live values.
 - **Phone layout** of a fermentation (mockups M3Phone/M3PhoneChart), used on narrow screens and on
   landscape phones: reactor tabs, 4 key values, chart presets, collapsible events / add measurement /
@@ -195,7 +196,7 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Settings › Appearance (per device, localStorage `fm2.theme`): Light; Grey (#DADFE1 page, white cards); Dim (dark teal-slate page derived
   from the palette's data slate #455e6f, white cards and charts); Dark (dark cards, charts on light
   panels so they read like the exports). Implemented with CSS variables (`html[data-theme]`).
-- Licence GPL-3.0-or-later: `LICENSE` (verbatim GPLv3), notice in README and Settings › Credits.
+- Licence: GPL-3.0-or-later until 19 Nov 2026, then AGPL-3.0-or-later (see "2.2.1 rest" below): `LICENSE`, notice in README and Settings › Credits.
   Credits order: DeFENS, University of Milan · DiSAFA, University of Turin.
 - Telegram: clearer labels (bot token vs your own chat id) and "Find it" (getUpdates via
   POST /settings/notifications/telegram-chats, bots skipped).
@@ -330,3 +331,17 @@ commit (`fm2/build_info.py`, reads .git without the git executable) and warns wh
   `.display` (Plex 700 + 0.8 px stroke, one highlighted word in `--accent-text`); "Live" pill (`.live-pill`). Themes
   Light, Cream, Sky, Dim, Dark; stored "grey" migrates to "sky" (`theme.ts`). Plex Sans 700 bundled.
 - Still open for 2.2.1: license review, "cite as"/CITATION.cff/DOI, online manual (draft in Michele's Claude Docs).
+
+## 2.2.1, rest (19 Nov 2026, branch v2.2.1-rest)
+- Licence: `LICENSE` is now the verbatim AGPLv3 (from GitHub's choosealicense text, 661 lines), "or later" kept.
+  Michele is checking with the university/PhD office that he can license the software (rights); the repository is
+  still private. Do not make it public before that confirmation and before the git history check (see below).
+- Citation: `backend/fm2/citation.py` is the single source (title, author, year, URL, DOI = None until the first
+  Zenodo release). Used by `/system` (Settings › How to cite: reference + BibTeX). Exports (Metadata / Session sheet) and
+  PNG/PDF/SVG figures carry only "Fermentation Manager 2 (FM2) vX" as provenance: no invitation to cite in
+  exported files (Michele, 19 Nov 2026).
+  `CITATION.cff` (ORCID still to fill in), README "How to cite", `THIRD_PARTY.md` = `frontend/src/thirdParty.ts`.
+- Settings: sections Manual (placeholder, manual not reviewed yet), How to cite, Credits and license (+ Third-party software).
+- UI: New button dark blue (primary) in Light/Cream/Sky, unchanged in Dim/Dark; chips, segmented controls, phone
+  tabs, select and channel boxes have a solid surface (white) instead of transparent.
+- Not done on purpose: corrections after the 19 Nov test, manual text, "Methods" section, example dataset.

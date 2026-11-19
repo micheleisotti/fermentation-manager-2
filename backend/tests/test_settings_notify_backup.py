@@ -163,9 +163,9 @@ def test_system_status_parsing(env):
     ss._CACHE.update(at=0.0, value=None)
     no_ts = lambda *a, **k: [(2, 1, 6, "", ("192.0.2.10", 0))]
     assert ss.remote_access(runner=lambda *a, **k: R(), ttl=0, resolver=no_ts)["state"] == "unknown"
-    with_ts = lambda *a, **k: [(2, 1, 6, "", ("192.0.2.10", 0)), (2, 1, 6, "", ("100.101.7.9", 0))]
+    with_ts = lambda *a, **k: [(2, 1, 6, "", ("192.0.2.10", 0)), (2, 1, 6, "", ("100.100.0.9", 0))]
     r = ss.remote_access(runner=lambda *a, **k: R(), ttl=0, resolver=with_ts)
-    assert r["state"] == "available" and r["ips"] == ["100.101.7.9"]
+    assert r["state"] == "available" and r["ips"] == ["100.100.0.9"]
     c, *_ = env
     st = c.get("/api/system/status").json()
     assert st["server"]["uptime_s"] >= 0 and st["remote"]["state"] in ("available", "not_available", "unknown")

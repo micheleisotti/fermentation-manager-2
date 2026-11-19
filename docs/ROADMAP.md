@@ -75,4 +75,4 @@ Three levels, increasing complexity:
 ## 8. Other open items
 - Loop on/off from the software (pH, T, stirrer), never manual actuator outputs — see HANDOFF.
 - Dark / dimmed theme; consultation mode on the laptop; chart zoom with full-resolution data.
-- Licence: GPL-3.0-or-later (chosen 10 Nov 2026; LICENSE file in the repository).
+- Licence: AGPL-3.0-or-later (chosen 19 Nov 2026, replacing GPL-3.0-or-later; LICENSE file in the repository; rights confirmation from the university pending before the repository goes public).

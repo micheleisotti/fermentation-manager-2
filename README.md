@@ -115,22 +115,40 @@ docs/                notes, including the controller inspection checklist
 
 ## Credits
 
-Developed by Michele Isotti — DeFENS, University of Milan · DiSAFA, University of Turin.
+Developed by Michele Isotti ([ORCID 0009-0002-7727-4942](https://orcid.org/0009-0002-7727-4942)) —
+DeFENS, University of Milan · DiSAFA, University of Turin.
 Kinetic analysis ported from Fermentation Manager v1.
+
+## How to cite
+
+If FM2 was used to record or analyse data that appear in a publication, please cite it
+(the same text, with BibTeX, is in the app: Settings › How to cite; GitHub's "Cite this
+repository" reads `CITATION.cff`):
+
+> Isotti, M. (2026). *Fermentation Manager 2 (FM2)* (Version 2.2.1) [Computer software].
+> https://github.com/micheleisotti/fermentation-manager-2
+
+A DOI will be added when the first release is archived on Zenodo. Cite the version you used.
+The growth-curve and statistics methods are described in the manual (in preparation); they
+rely on published models and open-source libraries, listed with their references in
+[`THIRD_PARTY.md`](THIRD_PARTY.md) and in Settings › Credits and license.
 
 ## License
 
 Copyright (C) 2026 Michele Isotti
 
 This program is free software: you can redistribute it and/or modify it under the terms of
-the GNU General Public License as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version.
+the GNU Affero General Public License as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-See the GNU General Public License for more details.
+See the GNU Affero General Public License for more details.
 
-You should have received a copy of the GNU General Public License along with this program
-(file `LICENSE`). If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU Affero General Public License along with this
+program (file `LICENSE`). If not, see <https://www.gnu.org/licenses/>.
 
-SPDX-License-Identifier: GPL-3.0-or-later
+FM2 is research software that can control laboratory equipment. It is not validated for
+regulated use (e.g. GMP): check every setpoint and every alarm before relying on it.
+
+SPDX-License-Identifier: AGPL-3.0-or-later

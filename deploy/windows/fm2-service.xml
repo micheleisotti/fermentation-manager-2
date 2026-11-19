@@ -15,12 +15,12 @@
   <!-- Controller polling interval. The base volume is integrated by the controller, so
        short additions are never lost; 5 s only improves time resolution (pH dynamics, pulses). -->
   <env name="FM2_SAMPLING_INTERVAL_S" value="5"/>
-  <!-- Real controllers (read-only driver). R1-sx = 192.0.2.42, R2-dx = 192.0.2.41.
+  <!-- Real controllers (read-only driver). Their addresses are site-specific and are NOT in the
+       repository: they are read from C:\ProgramData\FermentationManager\data\local.env
+       (lines FM2_R1_ADDRESS=... and FM2_R2_ADDRESS=...; see deploy/windows/local.env.example).
        To go back to the simulator: set both drivers to "simulator" and restart the service. -->
   <env name="FM2_R1_DRIVER" value="ez2control"/>
-  <env name="FM2_R1_ADDRESS" value="192.0.2.42"/>
   <env name="FM2_R2_DRIVER" value="ez2control"/>
-  <env name="FM2_R2_ADDRESS" value="192.0.2.41"/>
   <env name="PYTHONUNBUFFERED" value="1"/>
 
   <startmode>Automatic</startmode>

@@ -23,7 +23,7 @@ from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.orm import Session, object_session
 
 from ..build_info import build_info
-from .. import __version__
+from .. import __version__, citation
 from ..acquisition import Acquisition, _as_utc
 from ..alerts import AlertParams
 from ..analysis import base_dosing, control, kinetics, report, stats
@@ -1852,7 +1852,8 @@ def session_export(sid: int, fmt: str, request: Request, step_h: float = 2.0, db
         "model": res["models"][res["model"]], "curve interval (h)": step_h,
         "parallel runs": "; ".join(f"{f['parallel_run']}: " + ", ".join(f"{x['code']} ({x['condition']})"
                                                                          for x in f["experiments"])
-                                   for f in res["parallel_run_flags"]) or None}.items()])
+                                   for f in res["parallel_run_flags"]) or None,
+        "software": f"{citation.TITLE} v{__version__}"}.items()])
     buf = io.BytesIO()
     if fmt == "xlsx":
         with pd.ExcelWriter(buf, engine="openpyxl") as xw:
@@ -2011,6 +2012,7 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
                 "working_volume_ml": e.working_volume_ml, "author": e.author, "notes": e.notes}
         rows = [{"field": k, "value": v} for k, v in meta.items()]
         rows += [{"field": f"plan.{k}", "value": v} for k, v in _flatten(e.plan_snapshot)]
+        rows.append({"field": "software", "value": f"{citation.TITLE} v{__version__}"})
         md = pd.DataFrame(rows)
         md["value"] = md["value"].map(lambda v: v.replace(tzinfo=None) if isinstance(v, datetime) else v)
         out["Metadata"] = md
@@ -2197,7 +2199,7 @@ def system_info(request: Request, db: Session = Depends(get_db)):
     st: Settings = request.app.state.settings
     acq: Acquisition = request.app.state.acq
     return {
-        "version": __version__, **build_info(), "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
+        "version": __version__, "citation": citation.info(), **build_info(), "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
         "experiments": db.scalar(select(func.count()).select_from(Experiment)),
         "reactors": [{"reactor_id": r.reactor_id, "driver": r.driver, "address": r.address,
                       "online": acq.live[r.reactor_id].last_error is None and acq.live[r.reactor_id].last_ok is not None,

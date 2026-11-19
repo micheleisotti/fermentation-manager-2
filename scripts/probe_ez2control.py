@@ -3,7 +3,7 @@ Read-only probe of the ez2-Control controllers, using the same driver as the ser
 Nothing is written to the controllers or to the database.
 
     .\\.venv\\Scripts\\python scripts\\probe_ez2control.py                 # R1-sx and R2-dx, 5 reads
-    .\\.venv\\Scripts\\python scripts\\probe_ez2control.py 192.0.2.41 --n 20 --every 2
+    .\\.venv\\Scripts\\python scripts\\probe_ez2control.py <controller-ip> --n 20 --every 2
 """
 import argparse
 import logging
@@ -12,10 +12,11 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from fm2.config import settings  # noqa: E402  (reads local.env: controller addresses)
 from fm2.drivers import DriverError  # noqa: E402
 from fm2.drivers.ez2control import Ez2ControlDriver  # noqa: E402
 
-DEFAULT = {"R1-sx": "192.0.2.42", "R2-dx": "192.0.2.41"}
+DEFAULT = {name: r.address for name, r in zip(("R1-sx", "R2-dx"), settings.reactors) if r.address}
 
 
 def fmt(v, nd=2):

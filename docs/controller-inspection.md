@@ -6,11 +6,11 @@ Inspected read-only from the bioreactor PC through the controllers' own web UI
 
 | Name in FM2 | Controller name | IP |
 |---|---|---|
-| R1-sx | Bioreactor 1 sx | 192.0.2.42 |
-| R2-dx | Bioreactor 2 dx | 192.0.2.41 |
+| R1-sx | Bioreactor 1 sx | see `local.env` |
+| R2-dx | Bioreactor 2 dx | see `local.env` |
 
-Network: the controllers sit on a separate switch, subnet 192.0.2.0/24. The PC's
-Ethernet adapter has the static address 192.0.2.10/24 **without a gateway**; Wi-Fi
+Network: the controllers sit on a separate switch, private subnet (addresses in `local.env`, not in the repository). The PC's
+Ethernet adapter has the static address on that subnet **without a gateway**; Wi-Fi
 (eduroam) carries Internet and Tailscale. Never move the controllers onto eduroam.
 
 ## Interface

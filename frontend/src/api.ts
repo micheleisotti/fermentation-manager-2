@@ -302,7 +302,8 @@ export interface ReactorActivity { events: EventItem[]; changes: ChangeItem[] }
 export interface LoopsState { reachable: boolean; message?: string; allowed: string[]; loops: SwitchLoop[] }
 export interface BackupStatus { enabled: boolean; destination: string; last_ok: string | null; last_file: string | null;
   last_error: string | null; last_attempt: string | null; db_bytes: number | null; backups_present: number; newest_backup: string | null }
-export interface SystemInfo { version: string; branch?: string | null; commit?: string | null; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;
+export interface Citation { title: string; version: string; year: number; url: string; doi: string | null; license: string; please_cite: string; reference: string; bibtex: string }
+export interface SystemInfo { version: string; citation: Citation; branch?: string | null; commit?: string | null; client_local: boolean; data_dir: string; sampling_interval_s: number; experiments: number;
   reactors: { reactor_id: string; driver: string; address: string; online: boolean; capabilities: Record<string, boolean> }[] }
 export interface SystemStatus {
   server: { host: string; started_at: string; uptime_s: number; version: string };

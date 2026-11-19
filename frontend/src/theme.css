@@ -67,7 +67,7 @@ h3 { margin: 0; font-size: 16px; font-weight: 500; }
 .rail a.active { color: var(--ink); font-weight: 600; }
 .rail a.active .ind { background: var(--primary-container); }
 .fab-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-bottom: 20px; }
-.fab { width: 56px; height: 56px; border: 0; border-radius: 16px; background: var(--primary-container); color: var(--on-primary-container); display: flex; align-items: center; justify-content: center; box-shadow: var(--elev-3); cursor: pointer; }
+.fab { width: 56px; height: 56px; border: 0; border-radius: 16px; background: var(--primary); color: var(--on-primary); display: flex; align-items: center; justify-content: center; box-shadow: var(--elev-3); cursor: pointer; }
 .menu { position: absolute; left: 84px; top: 20px; width: 260px; padding: 8px 0; border-radius: 4px; background: var(--surface); box-shadow: 0 2px 6px 2px rgba(34,41,77,.15), 0 1px 2px rgba(34,41,77,.3); display: flex; flex-direction: column; z-index: 20; }
 .menu button { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 16px; border: 0; background: transparent; text-align: left; cursor: pointer; font-size: 14px; }
 .menu button:hover { background: var(--surface-container); }
@@ -100,7 +100,7 @@ h3 { margin: 0; font-size: 16px; font-weight: 500; }
 .btn.outlined { background: transparent; border: 1px solid var(--outline); color: var(--primary); }
 .btn.text { background: transparent; color: var(--primary); padding: 0 12px; }
 .btn.icon { width: 44px; padding: 0; justify-content: center; }
-.chip { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--outline-variant); background: transparent; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.chip { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--outline-variant); background: var(--surface); font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
 .chip.on { background: var(--primary-container); color: var(--on-primary-container); border-color: transparent; font-weight: 500; }
 .status { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 8px; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .status.fermenting { background: var(--data-green-dark); color: #fff; }
@@ -110,8 +110,8 @@ h3 { margin: 0; font-size: 16px; font-weight: 500; }
 .pill { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--outline-variant); background: var(--surface); font-size: 13px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.ok { background: var(--data-green); } .dot.bad { background: var(--alert); } .dot.idle { background: #9a9ca0; }
-.segmented { display: inline-flex; height: 36px; border: 1px solid var(--outline); border-radius: 18px; overflow: hidden; }
-.segmented button { border: 0; border-right: 1px solid var(--outline); background: transparent; padding: 0 16px; font-size: 13px; cursor: pointer; }
+.segmented { display: inline-flex; height: 36px; border: 1px solid var(--outline); border-radius: 18px; overflow: hidden; background: var(--surface); }
+.segmented button { border: 0; border-right: 1px solid var(--outline); background: var(--surface); padding: 0 16px; font-size: 13px; cursor: pointer; }
 .segmented button:last-child { border-right: 0; }
 .segmented button.on { background: var(--primary-container); color: var(--on-primary-container); font-weight: 600; }
 
@@ -151,11 +151,11 @@ table.data tr.click { cursor: pointer; } table.data tr.click:hover { background:
 .p-top-title { flex-grow: 1; font-size: 16px; font-weight: 500; }
 .p-tabs { display: flex; gap: 8px; }
 .p-tabs button { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 44px; border-radius: 22px;
-  border: 1px solid var(--outline); background: transparent; color: var(--ink); font-size: 14px; font-weight: 500; cursor: pointer; min-width: 0; white-space: nowrap; overflow: hidden; }
+  border: 1px solid var(--outline); background: var(--surface); color: var(--ink); font-size: 14px; font-weight: 500; cursor: pointer; min-width: 0; white-space: nowrap; overflow: hidden; }
 .p-tabs button.on { background: var(--primary); color: var(--on-primary); border-color: transparent; font-weight: 600; }
 .p-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .p-values .card { padding: 12px 14px; }
-.p-select { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; border: 1px solid var(--outline); border-radius: 4px; min-width: 0; }
+.p-select { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; border: 1px solid var(--outline); border-radius: 4px; min-width: 0; background: var(--surface); }
 .p-select select { border: 0; background: transparent; font-size: 13px; color: var(--ink); max-width: 230px; }
 .chart.p-chart { height: 230px; }
 .p-panel { padding: 0; gap: 0; overflow: hidden; }
@@ -181,7 +181,7 @@ body.no-rail .main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 
 /* channels panel (planning) */
 .ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
-.ch { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--outline-variant); border-radius: 12px; cursor: pointer; }
+.ch { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--outline-variant); border-radius: 12px; cursor: pointer; background: var(--surface); }
 .ch.on { background: var(--primary-container); border-color: transparent; }
 .ch input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--primary); flex: 0 0 auto; }
 
@@ -255,12 +255,14 @@ fieldset.plain:disabled { opacity: .6; }
 
 /* ---- Themes: light (default), dim (dark teal background, white cards), dark ---------------- */
 button { color: inherit; font-family: inherit; }
-.main, .card, .dialog, .menu, .signin-card, .p-full, .pill, .user-tile, .note { color: var(--ink); }
+.main, .card, .dialog, .menu, .signin-card, .p-full, .pill, .user-tile, .note, .chip, .segmented, .p-select { color: var(--ink); }
 
 /* Light values, re-applied on surfaces that stay light in the dim theme */
 html[data-theme="dim"] .card, html[data-theme="dim"] .dialog, html[data-theme="dim"] .menu,
 html[data-theme="dim"] .pill, html[data-theme="dim"] .p-full, html[data-theme="dim"] .user-tile,
-html[data-theme="dim"] .signin-card, html[data-theme="dim"] .note {
+html[data-theme="dim"] .signin-card, html[data-theme="dim"] .note,
+html[data-theme="dim"] .chip, html[data-theme="dim"] .segmented, html[data-theme="dim"] .p-tabs button,
+html[data-theme="dim"] .p-select, html[data-theme="dim"] .ch {
   --ink: #22294d; --ink-soft: #54565a; --outline: #74777f; --outline-variant: #c4c7cc; --divider: #eef0f4;
   --surface: #ffffff; --surface-dim: #f6f7f9; --surface-container: #eef0f4;
   --primary: #003366; --on-primary: #ffffff; --primary-container: #d6e0ee; --on-primary-container: #003366;
@@ -280,6 +282,7 @@ html[data-theme="dim"] {
   --surface: #34505e; --neutral-chip: #3b5562;
 }
 html[data-theme="dim"] .rail { background: var(--surface-container); }
+html[data-theme="dim"] .fab, html[data-theme="dark"] .fab { background: var(--primary-container); color: var(--on-primary-container); }
 html[data-theme="dim"] .signin { background: var(--surface-dim); }
 
 /* Dark: dark page and dark cards; charts keep a light panel so they read like the exports */
