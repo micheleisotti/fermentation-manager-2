@@ -111,6 +111,8 @@ class ProfileOut(ORM):
     temperature_pid: Optional[dict] = None
     loop_assignments: Optional[dict] = None
     notes: str
+    updated_at: Optional[datetime] = None
+    n_experiments: int = 0
 
 
 class ExperimentIn(BaseModel):
@@ -169,6 +171,8 @@ class ExperimentOut(ORM):
     n_sessions: int = 0
     plan_params: Optional[dict] = None
     profile_modified: bool = False   # plan values differ from the selected profile ("custom")
+    profile_changed: bool = False    # the profile was edited after this plan was saved
+    profile_name: Optional[str] = None   # current name of the linked profile (follows renames)
     plan_snapshot: Optional[dict] = None
     prepared_at: Optional[datetime] = None
     copy: Optional[dict] = None   # result of the copy saved at End of experiment (path or error)

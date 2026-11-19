@@ -5,7 +5,7 @@ import { CustomChart, ScatterChart } from "echarts/charts";
 import { api, type AnalysisResult, type DoseEpisodes, type LoopPerformance, type Experiment } from "../api";
 import { fmt, usePolling } from "../hooks";
 import { addEndLine } from "../components/charts";
-import { C, DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
+import { C, DataValue, EChart, ExpName, Icon, Segmented, StatusChip } from "../components/ui";
 
 echarts.use([ScatterChart, CustomChart]);
 
@@ -75,7 +75,7 @@ export function ExperimentAnalysisPage() {
         <div className="row" style={{ gap: 12 }}>
           <Link to={`/experiments/${e.id}`} className="btn icon text" aria-label="Back to the experiment"><Icon name="back" /></Link>
           <div className="stack" style={{ gap: 2 }}>
-            <h1 style={{ fontSize: 22 }}><span className="mono">{e.code}</span> · {e.name}{e.strain && <> — {e.strain}</>}</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 600 }}>{e.name}{e.strain && <span style={{ fontWeight: 400 }}> — {e.strain}</span>} <span className="mono code-chip">{e.code}</span></h1>
             <span className="small muted">Bioreactor {e.reactor_id.slice(1)}
               {e.started_at && ` · ${new Date(e.started_at).toLocaleDateString()}`}
               {a?.summary.recorded_h != null && ` · recorded ${fmt(a.summary.recorded_h, 1)} h`}
@@ -397,13 +397,14 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
   const [width, setWidth] = useState("174");
   const [dpi, setDpi] = useState("300");
   const [theme, setTheme] = useState("grey");
+  const [mono, setMono] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<{ ok: boolean; text: string } | null>(null);
   const w = Number(width);
   const widthOk = Number.isFinite(w) && w >= 40 && w <= 500;
   const dataUrl = `/api/experiments/${e.id}/export.${format}?blocks=${blocks.join(",")}&model=${model}${resample ? `&resample_min=${resample}` : ""}`;
   const figUrl = `/api/experiments/${e.id}/figure.${fig}?vars=${encodeURIComponent(on.join(","))}&model=${model}&step_h=${step}` +
-    `&width_mm=${w}&dpi=${dpi}&theme=${theme}&fit=${showFit}`;
+    `&width_mm=${w}&dpi=${dpi}&theme=${theme}&fit=${showFit}&mono=${mono}`;
   return (
     <section className="card" aria-labelledby="ex">
       <h2 id="ex" style={{ fontSize: 18 }}>Export</h2>
@@ -465,6 +466,11 @@ function ExportCard({ e, on, model, step, showFit }: { e: Experiment; on: string
             <option value="classic">Classic (axes only)</option>
           </select>
         </label>
+        <label className="field">Series
+          <select value={mono ? "1" : "0"} onChange={(x) => setMono(x.target.value === "1")}>
+            <option value="0">Colour</option><option value="1">Black &amp; white</option>
+          </select>
+        </label>
         <span className="small muted">Common widths: 85 mm (one column), 174 mm (two columns).</span>
       </fieldset>
       <a className="btn outlined" href={widthOk && on.length ? figUrl : undefined} download aria-disabled={!widthOk || !on.length}
@@ -482,17 +488,17 @@ export function AnalysisHome() {
     .sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
   return (
     <>
-      <h1>Analysis</h1>
+      <h1 className="display">Analysis</h1>
       <section className="card" aria-labelledby="one">
         <h2 id="one" style={{ fontSize: 18 }}>Single experiment</h2>
         {done.length === 0 ? <span className="muted">No recorded experiments yet.</span> : (
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>Code</th><th>Name</th><th>Strain</th><th>Reactor</th><th>Started</th><th>Status</th></tr></thead>
+              <thead><tr><th>Experiment</th><th>Strain</th><th>Reactor</th><th>Started</th><th>Status</th></tr></thead>
               <tbody>{done.map((x) => (
                 <tr key={x.id} >
-                  <td className="mono"><Link to={`/analysis/experiments/${x.id}`}>{x.code}</Link></td>
-                  <td>{x.name}</td><td>{x.strain || "—"}</td><td className="mono">{x.reactor_id}</td>
+                  <td><ExpName name={x.name} code={x.code} to={`/analysis/experiments/${x.id}`} /></td>
+                  <td>{x.strain || "—"}</td><td className="mono">{x.reactor_id}</td>
                   <td>{x.started_at ? new Date(x.started_at).toLocaleDateString() : "—"}</td>
                   <td><StatusChip status={x.status} /></td>
                 </tr>

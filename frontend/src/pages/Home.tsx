@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactElement } from "react";
 import { Link } from "react-router-dom";
 import { api, type Channel, type EventItem, type LiveReactor, type Snapshot } from "../api";
 import { ExperimentTable } from "./ExperimentsList";
-import { usePolling, fmt, fmtDuration } from "../hooks";
+import { usePolling, fmt, fmtDuration, fmtAge } from "../hooks";
 import { phAndRateOption, trendsOption, varsFor } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import logo from "../assets/logo.png";
@@ -83,9 +83,8 @@ function IdleCard({ r }: { r: LiveReactor }) {
       )}
       <div className="row between small muted">
         <span>last reading{" "}
-          <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
+          <span className="mono">{fmtAge(r.last_reading_age_s)}</span> ago</span>
         <span className="row" style={{ gap: 8 }}>
-          <Link className="btn text" to={`/experiments/new?reactor=${r.reactor_id}`}>Plan</Link>
           <Link className="btn tonal" to={`/reactors/${r.reactor_id}`}>Open</Link>
         </span>
       </div>
@@ -119,7 +118,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
       <div className="row between" style={{ alignItems: "flex-start" }}>
         <div className="stack" style={{ gap: 4 }}>
           <span className="kicker">Bioreactor {label(r.reactor_id)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
-          <span style={{ fontSize: 18, fontWeight: 500 }}><span className="mono">{exp.code}</span> · {exp.strain || "—"}</span>
+          <span style={{ fontSize: 18, fontWeight: 600 }}>{exp.name}{exp.strain && <span style={{ fontWeight: 400 }}> · {exp.strain}</span>} <span className="mono code-chip">{exp.code}</span></span>
         </div>
         <StatusChip status={exp.status ?? "fermenting"} />
       </div>
@@ -137,7 +136,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
       )}
       <div className="row between small muted">
         <span>{exp.status === "preparing" ? <>Not recording · t = —</> : <>t = <span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span></>} · last reading{" "}
-          <span className="mono">{r.last_reading_age_s === null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</span>
+          <span className="mono">{fmtAge(r.last_reading_age_s)}</span> ago</span>
         <span className="row" style={{ gap: 8 }}>
           <Link className="btn text" to={`/reactors/${r.reactor_id}`}>Controller</Link>
           <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
@@ -190,7 +189,11 @@ export function Home() {
       </header>
 
       <section className="stack" aria-labelledby="running">
-        <h2 id="running">Bioreactors</h2>
+        <div className="stack" style={{ gap: 10 }}>
+          <span className="live-pill">Live</span>
+          <h2 id="running" className="display">Bioreactors{running.length > 0
+            ? <> · <span className="hl">{running.length} running</span></> : <span className="muted" style={{ fontWeight: 500 }}> · idle</span>}</h2>
+        </div>
         {reactors.length === 0 ? (
           <div className="card"><span className="muted">Waiting for the server…</span></div>
         ) : (

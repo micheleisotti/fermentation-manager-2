@@ -46,7 +46,7 @@ from ..models import (
 )
 from ..services import commands
 from .. import users as users_mod
-from ..models import GUEST_NAME, User
+from ..models import GUEST_NAME, User, utcnow
 from . import schemas as S
 
 
@@ -292,7 +292,11 @@ def _exp_out(e: Experiment) -> S.ExperimentOut:
     out = S.ExperimentOut.model_validate(e)
     out.status = e.status.value
     out.plan_params = plan_of(e) or None
-    out.profile_modified = bool(e.plan_params and e.profile and not _same(e.plan_params, profile_params(e.profile)))
+    ref = e.profile_ref if e.profile else None
+    out.profile_changed = bool(ref is not None and not _same(ref, profile_params(e.profile)))
+    # "Custom": the plan's values differ from the profile as it was when the plan was saved
+    out.profile_modified = bool(e.plan_params and e.profile and not _same(e.plan_params, ref if ref is not None else profile_params(e.profile)))
+    out.profile_name = e.profile.name if e.profile else None
     out.channels = channels_of(e)
     out.archived = bool(e.archived)
     sess = object_session(e)
@@ -454,21 +458,66 @@ def list_profiles(db: Session = Depends(get_db)):
 def _profile_out(p: ControllerProfile) -> S.ProfileOut:
     out = S.ProfileOut.model_validate(p)
     out.ph_control_mode = p.ph_control_mode.value if p.ph_control_mode else None
+    sess = object_session(p)
+    if sess is not None:
+        out.n_experiments = sess.scalar(select(func.count(Experiment.id)).where(Experiment.profile_id == p.id)) or 0
     return out
 
 
-@router.post("/profiles", response_model=S.ProfileOut, status_code=201)
-def create_profile(body: S.ProfileIn, request: Request, db: Session = Depends(get_db)):
+def _profile_data(body: S.ProfileIn) -> dict:
     data = body.model_dump()
-    data["author"] = who(request, db)
-    if data["ph_control_mode"]:
-        data["ph_control_mode"] = PhControlMode(data["ph_control_mode"])
+    data["name"] = data["name"].strip()
+    if data["ph_control_mode"] not in (None, "", "pid", "adaptive"):
+        raise HTTPException(422, "pH control mode must be pid or adaptive")
+    data["ph_control_mode"] = PhControlMode(data["ph_control_mode"]) if data["ph_control_mode"] else None
     if data["temperature_control_mode"] not in (None, "", "pid", "adaptive"):
         raise HTTPException(422, "temperature control mode must be pid or adaptive")
     data["temperature_control_mode"] = data["temperature_control_mode"] or None
     data["loop_assignments"] = _clean_assignments(data["loop_assignments"])
+    for a, b in (("ph_low_limit", "ph_high_limit"), ("temperature_low_limit", "temperature_high_limit")):
+        if data[a] is not None and data[b] is not None and data[a] >= data[b]:
+            raise HTTPException(422, f"{a.replace('_', ' ')} must be lower than {b.replace('_', ' ')}")
+    return data
+
+
+def _name_free(db: Session, name: str, profile_id: Optional[int] = None) -> None:
+    other = db.scalar(select(ControllerProfile).where(ControllerProfile.name == name))
+    if other is not None and other.id != profile_id:
+        raise HTTPException(409, f"A profile named '{name}' already exists")
+
+
+@router.post("/profiles", response_model=S.ProfileOut, status_code=201)
+def create_profile(body: S.ProfileIn, request: Request, db: Session = Depends(get_db)):
+    data = _profile_data(body)
+    data["author"] = who(request, db)
+    _name_free(db, data["name"])
     p = ControllerProfile(**data)
     db.add(p)
+    db.flush()
+    return _profile_out(p)
+
+
+@router.put("/profiles/{profile_id}", response_model=S.ProfileOut)
+def update_profile(profile_id: int, body: S.ProfileIn, db: Session = Depends(get_db)):
+    """
+    Edit a saved profile. Experiments using it keep their own values: before the change each one
+    gets a copy of the plan (if it had none) and of the profile as it was, so they show
+    "profile changed after this plan was saved". A rename alone changes nothing else.
+    """
+    p = _404(db.get(ControllerProfile, profile_id), "Profile not found")
+    data = _profile_data(body)
+    data.pop("author", None)
+    _name_free(db, data["name"], p.id)
+    before = profile_params(p)
+    for e in db.scalars(select(Experiment).where(Experiment.profile_id == p.id)):
+        if e.plan_params is None:
+            e.plan_params = dict(before)
+        if e.profile_ref is None:
+            e.profile_ref = dict(before)
+    for k, v in data.items():
+        setattr(p, k, v)
+    if not _same(before, profile_params(p)):
+        p.updated_at = utcnow()
     db.flush()
     return _profile_out(p)
 
@@ -514,7 +563,11 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
     data["channels"] = _check_channels(data.get("channels"))
     data["author"] = who(request, db)
     data["plan_params"] = _clean_plan(data.get("plan_params"))
+    prof = db.get(ControllerProfile, data["profile_id"]) if data.get("profile_id") else None
+    if data.get("profile_id") and prof is None:
+        raise HTTPException(422, "Profile not found")
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
+    e.profile_ref = profile_params(prof) if prof else None
     db.add(e)
     db.flush()
     return _exp_out(e)
@@ -537,8 +590,15 @@ def patch_experiment(exp_id: int, body: S.ExperimentPatch, db: Session = Depends
         raise HTTPException(409, "The reactor can only be changed while planned")
     if e.status not in (ExperimentStatus.planned, ExperimentStatus.preparing) and {"profile_id", "plan_params"} & data.keys():
         raise HTTPException(409, "Profile and controller parameters can only be changed before Start")
+    new_profile = "profile_id" in data and data["profile_id"] != e.profile_id
+    new_plan = "plan_params" in data and not _same(data["plan_params"], e.plan_params)
     for k, v in data.items():
         setattr(e, k, v)
+    if new_profile or new_plan:
+        # The plan was (re)saved against the profile as it is now
+        db.flush()
+        db.refresh(e)
+        e.profile_ref = profile_params(e.profile) if e.profile else None
     return _exp_out(e)
 
 
@@ -1021,7 +1081,7 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
                                                    if k not in ("ts", "ph_control", "temperature_control")},
             "ph_control": None if snap is None else snap.ph_control.__dict__,
             "temperature_control": None if snap is None else snap.temperature_control.__dict__,
-            "experiment": None if exp is None else {"id": exp.id, "code": exp.code, "strain": exp.strain,
+            "experiment": None if exp is None else {"id": exp.id, "code": exp.code, "name": exp.name, "strain": exp.strain,
                                                     "status": exp.status.value,
                                                     "t_h": _t_h(exp, now), "channels": channels_of(exp),
                                                     "parallel_run": exp.parallel_run.code if exp.parallel_run else None},
@@ -1394,7 +1454,7 @@ MANUAL_COLORS = ["#8a5300", "#006a6a", "#5c4d00", "#7d2a52"]
 @router.get("/experiments/{exp_id}/figure.{fmt}")
 def experiment_figure(exp_id: int, fmt: str, vars: str = "OD600,AFU,ph,base_rate", model: str = "gompertz",
                       step_h: float = 1.0, width_mm: float = 174, dpi: int = 300, theme: str = "grey",
-                      fit: bool = True, request: Request = None, db: Session = Depends(get_db)):
+                      fit: bool = True, mono: bool = False, request: Request = None, db: Session = Depends(get_db)):
     """Time-course figure of the selected panels (manual variables by name, controller series by key)."""
     e = _404(db.get(Experiment, exp_id))
     if fmt not in report.FIG_FORMATS:
@@ -1420,11 +1480,11 @@ def experiment_figure(exp_id: int, fmt: str, vars: str = "OD600,AFU,ph,base_rate
         else:
             raise HTTPException(422, f"Unknown variable '{v}'")
     try:
-        data = report.render_figure(panels, fmt, width_mm, dpi, theme)
+        data = report.render_figure(panels, fmt, width_mm, dpi, theme, mono=mono)
     except ValueError as ex:
         raise HTTPException(422, str(ex))
     return StreamingResponse(io.BytesIO(data), media_type=report.FIG_FORMATS[fmt],
-                             headers={"Content-Disposition": f'attachment; filename="{e.code}-time-course.{fmt}"'})
+                             headers={"Content-Disposition": f'attachment; filename="{e.code}-time-course{"-bw" if mono else ""}.{fmt}"'})
 
 
 SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model fit on the session's variable
@@ -1696,7 +1756,7 @@ SESSION_MARKERS = ["o", "^", "s", "D", "v", "P"]
 
 @router.get("/analysis-sessions/{sid}/figure.{fmt}")
 def session_figure(sid: int, fmt: str, variable: Optional[str] = None, step_h: float = 2.0, width_mm: float = 174,
-                   dpi: int = 300, theme: str = "grey", fit: bool = True, request: Request = None,
+                   dpi: int = 300, theme: str = "grey", fit: bool = True, mono: bool = False, request: Request = None,
                    db: Session = Depends(get_db)):
     if fmt not in report.FIG_FORMATS:
         raise HTTPException(404, "Format not available")
@@ -1717,11 +1777,37 @@ def session_figure(sid: int, fmt: str, variable: Optional[str] = None, step_h: f
                                              (cv.get("fit") if fit else None)))
     ylabel = f"{opt['label']} ({opt['unit']})" if opt["unit"] else opt["label"]
     try:
-        data = report.render_conditions(series, ylabel, fmt, width_mm, dpi, theme)
+        data = report.render_conditions(series, ylabel, fmt, width_mm, dpi, theme, mono=mono)
     except ValueError as ex:
         raise HTTPException(422, str(ex))
     return StreamingResponse(io.BytesIO(data), media_type=report.FIG_FORMATS[fmt], headers={
-        "Content-Disposition": f'attachment; filename="{res["code"]}-{res["variable"]}.{fmt}"'})
+        "Content-Disposition": f'attachment; filename="{res["code"]}-{res["variable"]}{"-bw" if mono else ""}.{fmt}"'})
+
+
+@router.get("/analysis-sessions/{sid}/boxplot.{fmt}")
+def session_boxplot(sid: int, fmt: str, param: str, step_h: float = 2.0, width_mm: float = 85, dpi: int = 300,
+                    theme: str = "grey", mono: bool = False, variable: Optional[str] = None,
+                    request: Request = None, db: Session = Depends(get_db)):
+    """Box-and-whisker of one per-experiment parameter (kinetic or other) by condition, every experiment as a point."""
+    if fmt not in report.FIG_FORMATS:
+        raise HTTPException(404, "Format not available")
+    if not (40 <= width_mm <= 500) or not (72 <= dpi <= 1200):
+        raise HTTPException(422, "Width must be 40-500 mm and resolution 72-1200 dpi")
+    res = session_results_data(db, sid, step_h, variable, request)
+    comp = next((k for k in res["comparisons"] if k["key"] == param), None)
+    if comp is None:
+        raise HTTPException(422, f"Unknown parameter '{param}'")
+    letters = "ABCDEFGHIJ"
+    groups = [report.BoxGroup(f"{letters[i]} · {c}", SESSION_COLORS[i % 6], SESSION_MARKERS[i % 6],
+                              [x["values"].get(param) for x in res["experiments"] if x["condition"] == c])
+              for i, c in enumerate(res["conditions"])]
+    ylabel = f"{comp['label']} ({comp['unit']})" if comp["unit"] else comp["label"]
+    try:
+        data = report.render_box(groups, ylabel, fmt, width_mm, dpi, theme, mono=mono)
+    except ValueError as ex:
+        raise HTTPException(422, str(ex))
+    return StreamingResponse(io.BytesIO(data), media_type=report.FIG_FORMATS[fmt], headers={
+        "Content-Disposition": f'attachment; filename="{res["code"]}-box-{param}{"-bw" if mono else ""}.{fmt}"'})
 
 
 @router.get("/analysis-sessions/{sid}/export.{fmt}")
@@ -1916,6 +2002,8 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
         out["Parameters"] = pd.DataFrame(rows, columns=["block", "parameter", "value"])
     if "metadata" in blocks:
         meta = {"code": e.code, "name": e.name, "strain": e.strain, "reactor": e.reactor_id,
+                "profile": e.profile.name if e.profile else (e.plan_snapshot or {}).get("profile"),
+                "profile changed after the plan was saved": _exp_out(e).profile_changed or None,
                 "status": e.status.value, "channels": ", ".join(channels_of(e)),
                 "started_at (UTC)": e.started_at, "ended_at (UTC)": e.ended_at,
                 "parallel_run": e.parallel_run.code if e.parallel_run else None,

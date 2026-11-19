@@ -8,7 +8,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { EndExperimentButton, StartExperimentButton } from "./ExperimentsList";
 import { LoopsButton, ResetCountersButton } from "../components/ReactorControls";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
-import { fmt, fmtDuration, usePolling } from "../hooks";
+import { fmt, fmtDuration, usePolling, fmtAge } from "../hooks";
 import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import { SetpointDialog } from "../components/SetpointDialog";
@@ -127,11 +127,11 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
 
       <div className="row between" style={{ flexWrap: "nowrap", alignItems: "center" }}>
         <span className="stack" style={{ gap: 0, minWidth: 0 }}>
-          <span style={{ fontSize: 17, fontWeight: 500 }}><span className="mono">{e.code}</span> · {e.strain || e.name}</span>
+          <span style={{ fontSize: 17, fontWeight: 600 }}>{e.name}{e.strain && <span style={{ fontWeight: 400 }}> · {e.strain}</span>} <span className="mono code-chip">{e.code}</span></span>
           <span className="xs muted">
             {preparing ? <>Not recording · t = —</>
               : e.started_at ? <>t = <span className="mono">{fmtDuration(running ? r?.experiment?.t_h : null)}</span>{running ? " since start" : ""}</> : "Not started"}
-            {running && <> · reading <span className="mono">{r?.last_reading_age_s == null ? "—" : `${Math.round(r.last_reading_age_s)} s`}</span> ago</>}
+            {running && <> · reading <span className="mono">{fmtAge(r?.last_reading_age_s)}</span> ago</>}
           </span>
         </span>
         <span className="row" style={{ gap: 8, flexWrap: "nowrap" }}>

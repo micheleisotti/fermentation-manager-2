@@ -13,7 +13,7 @@ export interface Experiment {
   parallel_run_code: string | null; parallel_partner_codes: string[]; channels: Channel[];
   notes: string; started_at: string | null; ended_at: string | null; updated_at: string;
   archived: boolean; end_note: string | null; author: string; n_sessions: number; created_at: string;
-  plan_params: PlanParams | null; profile_modified: boolean; prepared_at: string | null; plan_snapshot: Record<string, unknown> | null;
+  plan_params: PlanParams | null; profile_modified: boolean; profile_changed: boolean; profile_name: string | null; prepared_at: string | null; plan_snapshot: Record<string, unknown> | null;
 }
 
 /** Controller parameters of a plan (copied from a profile, editable). */
@@ -52,7 +52,7 @@ export interface LiveReactor {
   reactor_id: string; online: boolean; last_reading_age_s: number | null; error: string | null;
   snapshot: Snapshot | null; ph_control: LoopControlState | null;
   temperature_control?: LoopControlState | null;
-  experiment: { id: number; code: string; strain: string; status: Status; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
+  experiment: { id: number; code: string; name: string; strain: string; status: Status; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 
 export interface Named { id: number; name: string; description: string; archived: boolean; n_used: number }
@@ -62,7 +62,9 @@ export interface Profile {
   ph_low_limit: number | null; ph_high_limit: number | null;
   temperature_low_limit: number | null; temperature_high_limit: number | null;
   temperature_control_mode: string | null; temperature_pid: Record<string, number> | null; loop_assignments: LoopAssignments | null;
+  updated_at?: string | null; n_experiments?: number;
 }
+export type ProfileBody = Omit<Profile, "id" | "updated_at" | "n_experiments">;
 export interface PlanCheckRow { parameter: string; plan: unknown; controller: unknown; match: boolean; read_only?: boolean }
 export interface PlanCheck { reachable: boolean; message?: string; reactor_free?: boolean; rows: PlanCheckRow[];
   assignment_differences?: Record<string, string> }
@@ -208,7 +210,8 @@ export const api = {
   createNamed: (kind: "media" | "buffers", name: string, description = "") =>
     req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name, description }) }),
   profiles: () => req<Profile[]>("/profiles"),
-  createProfile: (body: Omit<Profile, "id">) => req<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
+  createProfile: (body: ProfileBody) => req<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
+  updateProfile: (id: number, body: ProfileBody) => req<Profile>(`/profiles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteExperiment: (id: number, code: string) =>
     req<{ deleted: string }>(`/experiments/${id}?confirm=${encodeURIComponent(code)}`, { method: "DELETE" }),
   deleteProfile: (id: number) => req<{ deleted: number; unlinked_experiments: string[] }>(`/profiles/${id}`, { method: "DELETE" }),

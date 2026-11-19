@@ -22,7 +22,7 @@ export function Library() {
   const tab = (TABS.find((t) => t.k === q.get("tab"))?.k ?? "profiles") as Tab;
   return (
     <>
-      <h1>Library</h1>
+      <h1 className="display">Library</h1>
       <span className="muted small">Reusable items for planning and recording experiments. Items already used by an experiment can be archived (hidden from new plans) but not deleted.</span>
       <div className="segmented lib-tabs" role="tablist" aria-label="Library sections">
         {TABS.map((t) => (
