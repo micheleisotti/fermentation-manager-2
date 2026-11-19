@@ -1,5 +1,5 @@
 /** Settings (approved mockup "M3Settings"): bioreactors, remote access, notifications, data and backup, credits. */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { api, type AppSettings, type BackupStatus } from "../api";
 import { usePolling } from "../hooks";
@@ -8,6 +8,7 @@ import { REACTOR_LABEL } from "./Home";
 import { initials, useUser } from "../components/UserGate";
 import { AppQr } from "../components/AppQr";
 import { CHANGELOG } from "../changelog";
+import { THIRD_PARTY } from "../thirdParty";
 import { getTheme, setTheme, type Theme } from "../theme";
 
 // Order (13 Nov 2026): loop control right after the bioreactors; notifications and remote access together
@@ -20,6 +21,8 @@ const SECTIONS = [
   { id: "remote", label: "Remote access" },
   { id: "backup", label: "Data and backup" },
   { id: "appearance", label: "Appearance" },
+  { id: "manual", label: "Manual" },
+  { id: "cite", label: "How to cite" },
   { id: "credits", label: "Credits and license" },
 ];
 
@@ -188,6 +191,35 @@ function UsersSection() {
         <span className="mono"> .venv\Scripts\python -m fm2.users reset-pin "Name" --data-dir C:\ProgramData\FermentationManager\data</span></span>
       {msg && <div className={`banner ${msg.kind} small`} role="status">{msg.text}</div>}
     </Section>
+  );
+}
+
+/** Read-only text with a Copy button; falls back to selecting the text where the clipboard API is unavailable (plain http). */
+function CopyBlock({ text, label }: { text: string; label: string }) {
+  const [done, setDone] = useState<"copied" | "select" | null>(null);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone("copied");
+    } catch {
+      ref.current?.select();
+      setDone("select");
+    }
+    setTimeout(() => setDone(null), 2500);
+  }
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <div className="row between">
+        <span className="small muted">{label}</span>
+        <button className="btn outlined" style={{ height: 32, padding: "0 14px" }} onClick={copy}>
+          {done === "copied" ? "Copied" : done === "select" ? "Selected: press Ctrl+C" : "Copy"}
+        </button>
+      </div>
+      <textarea ref={ref} readOnly value={text} rows={Math.min(8, text.split("\n").length + 1)} className="mono small"
+        style={{ width: "100%", resize: "vertical", padding: 10, borderRadius: 8, border: "1px solid var(--outline-variant)", background: "var(--surface)", color: "var(--ink)" }}
+        onFocus={(e) => e.currentTarget.select()} aria-label={label} />
+    </div>
   );
 }
 
@@ -478,6 +510,26 @@ export function SettingsPage() {
             <AppearancePicker />
           </Section>
 
+          <Section id="manual" title="Manual" sub="User manual of Fermentation Manager 2.">
+            <div className="banner small" role="note" style={{ background: "var(--surface-container)" }}>The manual is being written and will appear here, searchable, in a later version.</div>
+          </Section>
+
+          <Section id="cite" title="How to cite"
+            sub="FM2 is free software developed for research. If you used it to record or analyse data that appear in a publication, please cite it.">
+            {sys.data?.citation ? (
+              <>
+                <CopyBlock label="Reference" text={sys.data.citation.reference} />
+                <CopyBlock label="BibTeX" text={sys.data.citation.bibtex} />
+                <span className="xs muted">
+                  {sys.data.citation.doi
+                    ? <>Cite the version you used: the DOI of each release is listed on its archive page.</>
+                    : <>A DOI will be added once the first release is archived; until then the reference points to the source code.</>}
+                  
+                </span>
+              </>
+            ) : <span className="muted small">Loading…</span>}
+          </Section>
+
           <Section id="credits" title="Credits and license">
             <div className="stack" style={{ gap: 0 }}>
               {[
@@ -487,7 +539,7 @@ export function SettingsPage() {
                     <span className="small" style={{ display: "block", color: "var(--data-orange-text)" }}>Not on main: a version under test. Run update.ps1 to return to main.</span>}
                 </span>],
                 ["Developed by", "Michele Isotti · DeFENS, University of Milan · DiSAFA, University of Turin"],
-                ["License", <span>GNU General Public License v3.0 or later <span className="muted">(GPL-3.0-or-later) · free software, provided without warranty</span></span>],
+                ["License", <span>GNU AGPL v3.0 or later <span className="muted">(AGPL-3.0-or-later) · free software, no warranty</span></span>],
                 ["Source code", <a className="mono" href="https://github.com/micheleisotti/fermentation-manager-2" target="_blank" rel="noreferrer">github.com/micheleisotti/fermentation-manager-2</a>],
               ].map(([k, v]) => (
                 <div key={String(k)} className="row between" style={{ minHeight: 52, borderBottom: "1px solid var(--divider)", gap: 16 }}>
@@ -495,6 +547,23 @@ export function SettingsPage() {
                 </div>
               ))}
             </div>
+            <details>
+              <summary className="small" style={{ cursor: "pointer", padding: "8px 0" }}>Third-party software</summary>
+              <div className="stack" style={{ gap: 14, paddingTop: 4 }}>
+                <span className="xs muted">FM2 is built on these open-source components, each under its own licence. If your results depend on a method below, cite it as well.</span>
+                {THIRD_PARTY.map((g) => (
+                  <div key={g.group} className="stack" style={{ gap: 6 }}>
+                    <b className="small">{g.group}</b>
+                    <ul className="small" style={{ margin: 0, paddingLeft: 20 }}>
+                      {g.items.map((i) => (
+                        <li key={i.name}><b>{i.name}</b> <span className="muted">· {i.licence} · {i.use}</span>
+                          {i.cite && <div className="xs muted">{i.cite}</div>}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </details>
             <details>
               <summary className="small" style={{ cursor: "pointer", padding: "8px 0" }}>What changed in each version</summary>
               <div className="stack" style={{ gap: 12, paddingTop: 4 }}>

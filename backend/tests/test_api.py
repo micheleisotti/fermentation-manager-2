@@ -148,6 +148,16 @@ def test_full_workflow(env):
     assert not any("manual" in n for n in names)
     assert c.get(f"/api/experiments/{a['id']}/export.zip?blocks=nope").status_code == 422
 
+    # provenance: export and figure files carry the software version, not the citation text (Settings only)
+    zf = zipfile.ZipFile(io.BytesIO(z.content))
+    meta_csv = zf.read(next(n for n in zf.namelist() if "metadata" in n)).decode()
+    assert "Fermentation Manager 2 (FM2) v" in meta_csv and "cite" not in meta_csv.lower()
+    for fmt in ("png", "svg", "pdf"):
+        f = c.get(f"/api/experiments/{a['id']}/figure.{fmt}?vars=OD600,ph&dpi=100")
+        assert b"Fermentation Manager 2" in f.content and b"please cite" not in f.content, fmt
+    cit = c.get("/api/system").json()["citation"]
+    assert cit["bibtex"].startswith("@software{") and cit["version"] in cit["reference"] and cit["license"] == "AGPL-3.0-or-later"
+
 
 def test_manual_edit_is_audited_and_time_from_start(env):
     c, clock, app, _ = env

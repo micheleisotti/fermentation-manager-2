@@ -1,0 +1,62 @@
+cff-version: 1.2.0
+message: "If you use this software to record or analyse data that appear in a publication, please cite it using these metadata (cite the version you used)."
+type: software
+title: "Fermentation Manager 2 (FM2)"
+abstract: >-
+  Monitoring, control and analysis of lab-scale batch fermentations run on Applikon
+  ez2-Control bioreactor controllers: automatic data recording, manual measurements,
+  alerts, remote setpoint changes with read-back, growth-curve fits, base-dosing
+  metrics and statistics for groups of replicates.
+authors:
+  - family-names: Isotti
+    given-names: Michele
+    # orcid: "https://orcid.org/0000-0000-0000-0000"   # TODO: fill in (not yet in the repository)
+    affiliation: "Department of Food, Environmental and Nutritional Sciences (DeFENS), University of Milan; Department of Agricultural, Forest and Food Sciences (DiSAFA), University of Turin"
+version: "2.2.1"
+# date-released: set at each release
+# doi: set after the first Zenodo archive (also in backend/fm2/citation.py)
+repository-code: "https://github.com/micheleisotti/fermentation-manager-2"
+license: AGPL-3.0-or-later
+keywords:
+  - bioreactor
+  - fermentation
+  - growth kinetics
+  - laboratory automation
+  - Applikon ez2-Control
+references:
+  - type: article
+    title: "Modeling of the bacterial growth curve"
+    authors:
+      - {family-names: Zwietering, given-names: "M. H."}
+      - {family-names: Jongenburger, given-names: "I."}
+      - {family-names: Rombouts, given-names: "F. M."}
+      - {family-names: "van 't Riet", given-names: "K."}
+    journal: "Applied and Environmental Microbiology"
+    volume: 56
+    issue: 6
+    start: 1875
+    end: 1881
+    year: 1990
+    doi: "10.1128/aem.56.6.1875-1881.1990"
+  - type: article
+    title: "A dynamic approach to predicting bacterial growth in food"
+    authors:
+      - {family-names: Baranyi, given-names: "J."}
+      - {family-names: Roberts, given-names: "T. A."}
+    journal: "International Journal of Food Microbiology"
+    volume: 23
+    issue: "3-4"
+    start: 277
+    end: 294
+    year: 1994
+    doi: "10.1016/0168-1605(94)90157-0"
+  - type: article
+    title: "SciPy 1.0: fundamental algorithms for scientific computing in Python"
+    authors:
+      - {name: "Virtanen, P. et al."}
+    journal: "Nature Methods"
+    volume: 17
+    start: 261
+    end: 272
+    year: 2020
+    doi: "10.1038/s41592-019-0686-2"

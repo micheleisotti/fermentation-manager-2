@@ -7,6 +7,10 @@ export const CHANGELOG: { version: string; date: string; items: string[] }[] = [
     "Experiment names first, codes smaller; experiment list as rows on phones",
     "Compact header on the monitoring page; Plan buttons removed from monitoring and Home",
     "Dotted page, bolder main titles; themes Light, Cream, Sky, Dim, Dark (Grey became Sky)",
+    "New button in dark blue; selection pills with a white background in every theme",
+    "License changed to AGPL-3.0-or-later; How to cite (reference and BibTeX) and third-party software in Settings",
+    "Exports and figure files record the software version",
+    "Manual placeholder in Settings",
   ] },
   { version: "2.2.0", date: "2026-11", items: [
     "Estimated end of fermentation: dashed line in the charts and value in the analysis",

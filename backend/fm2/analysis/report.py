@@ -14,6 +14,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from ..citation import figure_metadata
+
 from . import base_dosing
 
 
@@ -155,7 +157,7 @@ def render_figure(panels: list[Panel], fmt: str = "png", width_mm: float = 174, 
         fig.supxlabel(xlabel, fontsize=8)
         fig.tight_layout(pad=0.4, h_pad=0.6, w_pad=0.8)
         buf = io.BytesIO()
-        fig.savefig(buf, format=fmt, dpi=dpi)
+        fig.savefig(buf, format=fmt, dpi=dpi, metadata=figure_metadata(fmt))
         plt.close(fig)
     return buf.getvalue()
 
@@ -230,7 +232,7 @@ def render_conditions(series: list[ConditionSeries], ylabel: str, fmt: str = "pn
                   title_fontsize=8, alignment="left")
         fig.tight_layout(pad=0.4)
         buf = io.BytesIO()
-        fig.savefig(buf, format=fmt, dpi=dpi)
+        fig.savefig(buf, format=fmt, dpi=dpi, metadata=figure_metadata(fmt))
         plt.close(fig)
     return buf.getvalue()
 
@@ -293,6 +295,6 @@ def render_box(groups: list[BoxGroup], ylabel: str, fmt: str = "png", width_mm: 
         ax.grid(False, axis="x")
         fig.tight_layout(pad=0.4)
         buf = io.BytesIO()
-        fig.savefig(buf, format=fmt, dpi=dpi)
+        fig.savefig(buf, format=fmt, dpi=dpi, metadata=figure_metadata(fmt))
         plt.close(fig)
     return buf.getvalue()
