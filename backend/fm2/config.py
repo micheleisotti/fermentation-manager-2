@@ -12,6 +12,41 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+LOCAL_ENV = "local.env"
+
+
+def _local_env_candidates() -> list[Path]:
+    """Data folder of this run first, then the service's data folder on Windows."""
+    out = [Path(os.environ.get("FM2_DATA_DIR", str(Path.cwd() / "data"))) / LOCAL_ENV]
+    if os.environ.get("PROGRAMDATA"):
+        out.append(Path(os.environ["PROGRAMDATA"]) / "FermentationManager" / "data" / LOCAL_ENV)
+    return out
+
+
+def load_local_env(paths: list[Path] | None = None) -> Path | None:
+    """
+    Site-specific values that must not be in the repository (controller addresses, ...), one
+    FM2_NAME=value per line in <data dir>/local.env; '#' starts a comment. Real environment
+    variables win. Returns the file read, or None.
+    """
+    for p in paths if paths is not None else _local_env_candidates():
+        try:
+            lines = p.read_text(encoding="utf-8-sig").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            line = line.split("#", 1)[0].strip()
+            if "=" not in line:
+                continue
+            k, v = (x.strip() for x in line.split("=", 1))
+            if k.startswith("FM2_"):
+                os.environ.setdefault(k, v.strip('"').strip("'"))
+        return p
+    return None
+
+
+LOCAL_ENV_FILE = load_local_env()
+
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(f"FM2_{name}", default)
@@ -21,7 +56,7 @@ def _env(name: str, default: str) -> str:
 class ReactorConfig:
     reactor_id: str          # "R1", "R2"
     driver: str              # "simulator" | "ez2control"
-    address: str = ""        # controller IP / URL for real drivers
+    address: str = ""        # controller IP / URL for real drivers (from local.env, never in the repository)
 
 
 @dataclass(frozen=True)

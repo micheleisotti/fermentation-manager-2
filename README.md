@@ -115,7 +115,8 @@ docs/                notes, including the controller inspection checklist
 
 ## Credits
 
-Developed by Michele Isotti — DeFENS, University of Milan · DiSAFA, University of Turin.
+Developed by Michele Isotti ([ORCID 0009-0002-7727-4942](https://orcid.org/0009-0002-7727-4942)) —
+DeFENS, University of Milan · DiSAFA, University of Turin.
 Kinetic analysis ported from Fermentation Manager v1.
 
 ## How to cite

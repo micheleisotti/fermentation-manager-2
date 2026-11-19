@@ -22,7 +22,7 @@ see docs/controller-inspection.md):
   immediately; if the login is refused (wrong password, or someone logged in on the
   display/web UI), nothing is written.
 
-Addresses used here are identical on R1-sx (192.0.2.42) and R2-dx (192.0.2.41).
+Addresses used here are identical on R1-sx and R2-dx (controller IPs: local.env, not in the repository).
 The base pump is actuator 29 ("Alkali"), assigned to the pH loop on the "below setpoint"
 side. Its dose-monitoring counter 2.13.29 is the cumulative volume in mL (verified:
 20 s at 4.80 mL/min -> 1.61 mL).

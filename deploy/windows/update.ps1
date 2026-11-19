@@ -30,6 +30,21 @@ if ($rec.Count -gt 0) {
   }
 }
 
+# Controller addresses live in local.env (data folder), not in the repository (2.2.1).
+# If it is missing, it is created once from the addresses in the current service file.
+$localEnv = "C:\ProgramData\FermentationManager\data\local.env"
+if (-not (Test-Path $localEnv)) {
+  $xml = Join-Path $PSScriptRoot "fm2-service.xml"
+  $found = @(Select-String -Path $xml -Pattern '<env name="(FM2_R\d_ADDRESS)" value="([^"]+)"' -AllMatches |
+             ForEach-Object { $_.Matches } | ForEach-Object { "$($_.Groups[1].Value)=$($_.Groups[2].Value)" })
+  if ($found.Count -gt 0) {
+    Set-Content -Path $localEnv -Value (@("# Site-specific settings (not in the repository)") + $found) -Encoding UTF8
+    Write-Host "Controller addresses moved to $localEnv" -ForegroundColor Yellow
+  } else {
+    Write-Host "WARNING: $localEnv not found: the controllers have no address (see deploy\windows\local.env.example)." -ForegroundColor Yellow
+  }
+}
+
 Step "Git pull (main)"
 $old = (git rev-parse HEAD).Trim()
 git checkout main

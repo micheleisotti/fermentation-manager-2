@@ -10,8 +10,8 @@ abstract: >-
 authors:
   - family-names: Isotti
     given-names: Michele
-    # orcid: "https://orcid.org/0000-0000-0000-0000"   # TODO: fill in (not yet in the repository)
-    affiliation: "Department of Food, Environmental and Nutritional Sciences (DeFENS), University of Milan; Department of Agricultural, Forest and Food Sciences (DiSAFA), University of Turin"
+    orcid: "https://orcid.org/0009-0002-7727-4942"
+    affiliation: "University of Milan, Department of Food, Environmental and Nutritional Sciences (DeFENS), Via Celoria 2, Milan, Italy; University of Turin, Department of Agricultural, Forest and Food Sciences (DiSAFA), Largo Braccini 2, Grugliasco (Turin), Italy"
 version: "2.2.1"
 # date-released: set at each release
 # doi: set after the first Zenodo archive (also in backend/fm2/citation.py)

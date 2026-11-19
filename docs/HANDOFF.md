@@ -26,7 +26,8 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
   cycle time; Adaptive loads the same (P/I/D as starting values the controller then adapts) plus settling time.
   External control is never written. Profiles can be deleted (refused while a planned
   experiment uses them; started experiments keep their plan snapshot).
-- Reactor names: **R1-sx = 192.0.2.42, R2-dx = 192.0.2.41** (PC Ethernet 192.0.2.10/24, no gateway).
+- Reactor names: **R1-sx** and **R2-dx**; their IP addresses (and the PC's static address on the controllers'
+  switch, no gateway) are in `C:\ProgramData\FermentationManager\data\local.env`, never in the repository.
 - Home shows every reactor: running experiment card, or "Idle · not recording" card with live values.
 - **Phone layout** of a fermentation (mockups M3Phone/M3PhoneChart), used on narrow screens and on
   landscape phones: reactor tabs, 4 key values, chart presets, collapsible events / add measurement /

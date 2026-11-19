@@ -538,7 +538,7 @@ export function SettingsPage() {
                   {sys.data && sys.data.branch !== "main" && (sys.data.branch || sys.data.commit) &&
                     <span className="small" style={{ display: "block", color: "var(--data-orange-text)" }}>Not on main: a version under test. Run update.ps1 to return to main.</span>}
                 </span>],
-                ["Developed by", "Michele Isotti · DeFENS, University of Milan · DiSAFA, University of Turin"],
+                ["Developed by", <span>Michele Isotti <a className="mono small" href="https://orcid.org/0009-0002-7727-4942" target="_blank" rel="noreferrer">ORCID 0009-0002-7727-4942</a><br />DeFENS, University of Milan · DiSAFA, University of Turin</span>],
                 ["License", <span>GNU AGPL v3.0 or later <span className="muted">(AGPL-3.0-or-later) · free software, no warranty</span></span>],
                 ["Source code", <a className="mono" href="https://github.com/micheleisotti/fermentation-manager-2" target="_blank" rel="noreferrer">github.com/micheleisotti/fermentation-manager-2</a>],
               ].map(([k, v]) => (

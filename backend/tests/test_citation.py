@@ -40,3 +40,15 @@ def test_figure_metadata_accepted_and_written(fmt, magic):
 
 def test_figure_metadata_unknown_format_is_none():
     assert citation.figure_metadata("tiff") is None
+
+
+def test_local_env_sets_missing_variables_only(tmp_path, monkeypatch):
+    from fm2 import config
+    f = tmp_path / "local.env"
+    f.write_text("# site\nFM2_R1_ADDRESS = 10.0.0.1  # R1\nFM2_R2_ADDRESS='10.0.0.2'\nOTHER=x\n", encoding="utf-8")
+    monkeypatch.delenv("FM2_R1_ADDRESS", raising=False)
+    monkeypatch.setenv("FM2_R2_ADDRESS", "from-env")
+    monkeypatch.delenv("OTHER", raising=False)
+    assert config.load_local_env([tmp_path / "missing.env", f]) == f
+    import os
+    assert os.environ["FM2_R1_ADDRESS"] == "10.0.0.1" and os.environ["FM2_R2_ADDRESS"] == "from-env" and "OTHER" not in os.environ

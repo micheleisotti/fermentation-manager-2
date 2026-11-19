@@ -4,8 +4,8 @@ ez2-Control READ-ONLY inspection tool for Fermentation Manager 2.
 It never logs in and never writes: every request it sends is a read ("J<address>S").
 
 Usage (PowerShell, from C:\\FermentationManager):
-  .venv\\Scripts\\python.exe scripts\\ez2_inspect.py dump  192.0.2.41
-  .venv\\Scripts\\python.exe scripts\\ez2_inspect.py watch 192.0.2.41 1.14 1.19 2.12 2.13
+  .venv\\Scripts\\python.exe scripts\\ez2_inspect.py dump  <controller-ip>
+  .venv\\Scripts\\python.exe scripts\\ez2_inspect.py watch <controller-ip> 1.14 1.19 2.12 2.13
 
 dump : saves the controller's web-UI scripts and the values of every address that answers
        into data\\inspect\\<ip>-<date-time>\\  (values.tsv + web\\...)

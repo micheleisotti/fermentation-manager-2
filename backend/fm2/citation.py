@@ -17,6 +17,7 @@ AUTHOR_FAMILY = "Isotti"
 AUTHOR_GIVEN = "Michele"
 YEAR = 2026
 URL = "https://github.com/micheleisotti/fermentation-manager-2"
+ORCID = "https://orcid.org/0009-0002-7727-4942"
 DOI: Optional[str] = None
 LICENSE_ID = "AGPL-3.0-or-later"
 PLEASE_CITE = "If FM2 was used to record or analyse data in a publication, please cite it."
@@ -42,7 +43,7 @@ def bibtex(version: str = __version__) -> str:
 
 
 def info(version: str = __version__) -> dict:
-    return {"title": TITLE, "version": version, "year": YEAR, "url": URL, "doi": DOI, "license": LICENSE_ID,
+    return {"title": TITLE, "orcid": ORCID, "version": version, "year": YEAR, "url": URL, "doi": DOI, "license": LICENSE_ID,
             "please_cite": PLEASE_CITE, "reference": reference(version), "bibtex": bibtex(version)}
 
 
