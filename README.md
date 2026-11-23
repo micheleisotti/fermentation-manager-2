@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/fm2-banner.png" alt="Fermentation Manager 2" width="420"></p>
+
 # Fermentation Manager 2
 
 Monitoring, control and analysis of lab-scale batch fermentations run on two
@@ -8,10 +10,12 @@ AFU, riboflavin, …) from the PC or a phone, sends alerts, lets you change
 setpoints remotely with confirmation and read-back, and analyses single
 experiments and groups of replicates/conditions.
 
-> Status: **backend under development**. The controller driver currently runs on a
-> **simulator**; the real ez2-Control driver will be written on the bioreactor PC
-> once we have inspected what the controllers expose. The web interface (React)
-> follows the approved mockups and comes next.
+> Status: **version 2.3.1, in use in the lab.** The ez2-Control driver reads the
+> controllers and writes setpoints, limits, loop on/off, profiles (control type, PID),
+> loop actuator assignment, prime and manual pump control, always with read-back.
+> A simulator driver is included for development and demos. The communication
+> protocol was reverse-engineered from the controller's web interface: see
+> [`docs/controller-inspection.md`](docs/controller-inspection.md). Use at your own risk.
 
 ## Architecture
 
@@ -26,8 +30,8 @@ experiments and groups of replicates/conditions.
 │  └── analysis: Gompertz, base dosing, statistics     │
 │            │                       │                 │
 │      SQLite (WAL)          ControllerDriver          │
-│   data/fermentation.db     ├── simulator (now)       │
-│                            └── ez2-Control (to do)   │
+│   data/fermentation.db     ├── ez2-Control           │
+│                            └── simulator             │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -93,25 +97,27 @@ the API docs are at `/docs`.
 backend/fm2/
   config.py          settings (env vars), allowed setpoint ranges, alert parameters
   models.py          database schema
-  drivers/           controller interface, simulator, ez2-Control (stub)
+  drivers/           controller interface, ez2-Control (WebSocket), simulator
   acquisition.py     polling loop, readings, alert dispatch
   alerts.py          alert rules (pure logic, unit-tested)
   services/commands.py  safe setpoint writes with read-back
   analysis/          kinetics (from v1), base dosing, statistics
   api/               FastAPI app and schemas
 backend/tests/       pytest suite (simulator-driven end-to-end test included)
-frontend/            React + TypeScript interface (next step)
+frontend/            React + TypeScript interface (installable PWA)
+deploy/windows/      Windows service, update script, HTTPS for Tailscale
 docs/                notes, including the controller inspection checklist
 ```
 
 ## Roadmap
 
-1. ✅ Backend core: data model, simulator, acquisition, alerts, setpoint commands, analysis, XLSX export
-2. Web interface (React + TypeScript, Material 3 styling with the project palette), installable on phones
-   — in progress: Home, Fermentation, Planning and Profiles done; Analysis, Settings and phone layout next
-3. Push notifications (app push / ntfy / Telegram)
-4. ez2-Control driver on the bioreactor PC (read first, then writes)
-5. Deployment: Windows service at boot, Tailscale remote access, automatic backups
+- ✅ 2.0–2.3: backend, web interface and phone layout, ez2-Control driver, notifications,
+  remote access, planning with control profiles and templates, loop and actuator
+  configuration, manual pumps, analysis of single experiments and sessions
+- 2.3.2: rules executed by FM2 (e.g. Addition 2 as a feed), growth-phase detection with
+  notifications, analysis code viewable from Settings
+- 2.3.3: gas management (N₂ and air valves)
+- 2.4: export package for the Open Science Framework
 
 ## Credits
 
@@ -125,7 +131,7 @@ If FM2 was used to record or analyse data that appear in a publication, please c
 (the same text, with BibTeX, is in the app: Settings › How to cite; GitHub's "Cite this
 repository" reads `CITATION.cff`):
 
-> Isotti, M. (2026). *Fermentation Manager 2 (FM2)* (Version 2.2.1) [Computer software].
+> Isotti, M. (2026). *Fermentation Manager 2 (FM2)* (Version 2.3.1) [Computer software].
 > https://github.com/micheleisotti/fermentation-manager-2
 
 A DOI will be added when the first release is archived on Zenodo. Cite the version you used.
