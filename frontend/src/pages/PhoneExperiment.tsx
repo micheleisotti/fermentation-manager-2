@@ -6,13 +6,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { EndExperimentButton, StartExperimentButton } from "./ExperimentsList";
-import { LoopsButton, ResetCountersButton } from "../components/ReactorControls";
+import { CountersTile, LoopsTile, PumpsTile, SetpointSheet } from "../components/Mobile";
+import { LatestEvents } from "./ExperimentPage";
 import { api, type Channel, type EventItem, type Experiment, type Readings } from "../api";
 import { fmt, fmtDuration, usePolling, fmtAge } from "../hooks";
-import { BASE_RATE_VAR, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
+import { BASE_RATE_VAR, baseOption, phAndRateOption, trendsOption, TREND_VARS, varsFor, type TrendVar } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
-import { SetpointDialog } from "../components/SetpointDialog";
-import { LimitsDialog } from "../components/LimitsDialog";
 
 const V = (k: string) => TREND_VARS.find((v) => v.key === k)!;
 const PRESETS: { key: string; label: string; left: TrendVar; right: TrendVar | null; needs: Channel[] }[] = [
@@ -56,101 +55,108 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
   const partnerReadings = usePolling<Readings | undefined>(() => (partner ? api.readings(partner.id) : Promise.resolve(undefined)), 60000, [partner?.id]);
   const analysis = usePolling(() => api.analysis(e.id, 0.25), running ? 60000 : 600000, [e.id]);
   const live = usePolling(api.live, running ? 10000 : 600000);
-  const events = usePolling(() => api.events(e.id), 20000, [e.id]);
+  const timeline = usePolling(() => api.timeline(e.id), 20000, [e.id]);
   const partnerEvents = usePolling(() => (partner ? api.events(partner.id) : Promise.resolve([] as EventItem[])), 30000, [partner?.id]);
 
   const ch = e.channels;
   const presets = PRESETS.filter((x) => x.needs.every((n) => ch.includes(n)));
   const [preset, setPreset] = useState(presets[0]?.key ?? "");
   const [full, setFull] = useState(false);
-  const [evOpen, setEvOpen] = useState(false);
-  const [amOpen, setAmOpen] = useState(running);
-  const [spOpen, setSpOpen] = useState(false);
-  const [dialog, setDialog] = useState<string | null>(null);
-  const [limitsDialog, setLimitsDialog] = useState<string | null>(null);
+  const [tab, setTab] = useState<"trends" | "buffering" | "events" | "sampling">("trends");
+  const [sp, setSp] = useState<string | null>(null);
 
   const r = live.data?.find((x) => x.reactor_id === e.reactor_id);
+  const name = r?.name || e.reactor_id;
   const s = running ? r?.snapshot : null;
-  const tOutOf = () => !!s && s.temperature != null && s.temperature_low_limit != null && s.temperature_high_limit != null &&
-    (s.temperature < s.temperature_low_limit || s.temperature > s.temperature_high_limit);
-  const phOutOf = () => !!s && s.ph != null && s.ph_low_limit != null && s.ph_high_limit != null &&
-    (s.ph < s.ph_low_limit || s.ph > s.ph_high_limit);
+  const x = (s?.extra ?? {}) as Record<string, number | undefined>;
+  const bd = analysis.data?.base_dosing;
   const lastBin = analysis.data?.rate_bins.filter((b) => b.complete).at(-1);
-  const p = presets.find((x) => x.key === preset) ?? presets[0];
+  const p = presets.find((q) => q.key === preset) ?? presets[0];
   const option = useMemo(() => (!p ? {} : p.key === "ph_rate"
     ? phAndRateOption(readings.data, analysis.data?.rate_bins, undefined, analysis.data?.estimated_end?.t_end_h)
     : trendsOption(readings.data, p.left, p.right, { setpoints: true, limits: true, bins: analysis.data?.rate_bins, compact: true, endH: analysis.data?.estimated_end?.t_end_h })),
   [readings.data, analysis.data, p]);
-  const values = [
-    ch.includes("ph") && <DataValue key="ph" value={fmt(s?.ph)} label={`pH · set ${fmt(s?.ph_setpoint)}`} color={phOutOf() ? "#b30020" : "#1d3786"} />,
-    ch.includes("temperature") && <DataValue key="t" value={fmt(s?.temperature, 1)} unit="°C" label={`T · set ${fmt(s?.temperature_setpoint, 1)}`} color={tOutOf() ? "#b30020" : undefined} />,
-    ch.includes("ph") && <DataValue key="cum" value={fmt(s?.base_cumulative_ml ?? (analysis.data?.base_dosing?.total_ml as number), 1)} unit="mL" label="Base, cumulative" color="#1f7a63" />,
-    ch.includes("ph") && <DataValue key="rate" value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label="Base rate, 15 min" color="#1f7a63" />,
-    ch.includes("do2") && <DataValue key="do2" value={fmt(s?.extra?.do2, 1)} unit="%" label={`dO2 · set ${fmt(s?.extra?.do2_setpoint, 1)}`} />,
-    ch.includes("stirrer") && <DataValue key="stir" value={fmt(s?.stirrer, 0)} unit="rpm" label={`Stirrer · set ${fmt(s?.stirrer_setpoint, 0)}`} />,
-  ].filter(Boolean).slice(0, 4);
+  const baseOpt = useMemo(() => baseOption(readings.data, analysis.data?.rate_bins, undefined, analysis.data?.estimated_end?.t_end_h, analysis.data?.acid_rate_bins),
+    [readings.data, analysis.data]);
+  const out = (v?: number | null, lo?: number | null, hi?: number | null) => v != null && lo != null && hi != null && (v < lo || v > hi);
+  const tiles: { k: string; ch?: string; label: string; v: string; unit?: string; sub?: string; bad?: boolean }[] = [];
+  if (ch.includes("ph")) tiles.push({ k: "ph", ch: "ph", label: "pH", v: fmt(s?.ph), sub: `set ${fmt(s?.ph_setpoint)}`, bad: out(s?.ph, s?.ph_low_limit, s?.ph_high_limit) });
+  if (ch.includes("temperature")) tiles.push({ k: "t", ch: "temperature", label: "T", v: fmt(s?.temperature, 1), unit: "°C", sub: `set ${fmt(s?.temperature_setpoint, 1)}`,
+    bad: out(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) });
+  if (ch.includes("stirrer")) tiles.push({ k: "st", ch: "stirrer", label: "Stirrer", v: fmt(s?.stirrer, 0), unit: "rpm", sub: `set ${fmt(s?.stirrer_setpoint, 0)}` });
+  if (ch.includes("do2")) tiles.push({ k: "do2", ch: "do2", label: "dO2", v: fmt(x.do2, 1), unit: "%", sub: `set ${fmt(x.do2_setpoint, 1)}` });
+  if (ch.includes("ph")) {
+    tiles.push({ k: "base", label: "Base", v: fmt(s?.base_cumulative_ml ?? (bd?.total_ml as number), 1), sub: "mL" });
+  }
+  if (ch.includes("redox")) tiles.push({ k: "rdx", label: "Redox", v: fmt(x.redox_mv, 0), unit: "mV" });
+  if (ch.includes("level")) tiles.push({ k: "lvl", label: "Level", v: x.level_contact == null ? "—" : x.level_contact ? "contact" : "no cont." });
 
-  const evs = events.data ?? [];
-  const recentAlert = (list: EventItem[], id?: number) => list.find((x) => x.experiment_id === id && x.severity === "alert" &&
-    Date.now() - new Date(x.at).getTime() < 30 * 60 * 1000);
-  const alert = recentAlert(evs, e.id);
-  const partnerAlert = partner ? recentAlert(partnerEvents.data ?? [], partner.id) : undefined;
+  const items = timeline.data ?? [];
+  const alert = items.find((i) => i.category === "alert" && Date.now() - new Date(i.at).getTime() < 30 * 60 * 1000);
+  const partnerAlert = partner ? (partnerEvents.data ?? []).find((i) => i.severity === "alert" && Date.now() - new Date(i.at).getTime() < 30 * 60 * 1000) : undefined;
+  // every bioreactor in the same parallel run (2 or more), by bioreactor name
+  const group = e.parallel_run_code
+    ? (live.data ?? []).filter((q) => q.experiment && (q.experiment.id === e.id || (q.experiment.parallel_run && q.experiment.parallel_run === e.parallel_run_code)))
+        .map((q) => ({ id: q.experiment!.id, name: q.name || q.reactor_id, rid: q.reactor_id })).sort((a, b) => a.rid.localeCompare(b.rid))
+    : [];
+  const spChannels = ch.filter((c) => ["ph", "temperature", "stirrer", "do2"].includes(c));
+  const tabs = [["trends", "Trends"], ...(ch.includes("ph") ? [["buffering", "Buffering"]] : []), ["events", "Events"], ["sampling", "Sampling"]] as [typeof tab, string][];
 
-  const tabs = partner ? [e, partner].sort((a, b) => a.reactor_id.localeCompare(b.reactor_id)) : [];
-
-  useEffect(() => {   // as in the mockup: no bottom navigation on this screen (back arrow instead)
+  useEffect(() => {   // no bottom navigation on this screen (back arrow instead)
     document.body.classList.add("no-rail");
     return () => document.body.classList.remove("no-rail");
   }, []);
 
   return (
     <div className="phone">
-      <header className="row p-top">
-        <Link to="/" className="btn icon text" aria-label="Back to home"><Icon name="back" /></Link>
-        <span className="p-top-title">
-          {e.parallel_run_code ? <>Parallel run <span className="mono">{e.parallel_run_code}</span></> : <span className="mono">{e.code}</span>}
+      <header className="p-head">
+        <Link to="/" className="p-back" aria-label="Back to home"><Icon name="back" size={20} /></Link>
+        <span className="stack" style={{ gap: 0, minWidth: 0, flex: "1 1 auto" }}>
+          <span className="p-sub mono">{e.parallel_run_code ? `Parallel run ${e.parallel_run_code}` : name}</span>
+          <span className="p-title">{e.name}{e.strain && <> · {e.strain}</>} <span className="p-code mono">{e.code}</span></span>
         </span>
-        {running && <span className="row xs muted" style={{ gap: 6 }}><span className={`dot ${r?.online ? "ok" : "bad"}`} />{r?.online ? "Live" : "Offline"}</span>}
       </header>
-
-      {tabs.length > 0 && (
-        <div role="tablist" aria-label="Reactor" className="p-tabs">
-          {tabs.map((x) => (
-            <button key={x.id} role="tab" aria-selected={x.id === e.id} className={x.id === e.id ? "on" : ""}
-              onClick={() => x.id !== e.id && nav(`/experiments/${x.id}`, { replace: true })}>
-              <span className="mono">{x.reactor_id}</span> · {x.strain || x.code}
-              {x.id !== e.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="row between" style={{ flexWrap: "nowrap", alignItems: "center" }}>
-        <span className="stack" style={{ gap: 0, minWidth: 0 }}>
-          <span style={{ fontSize: 17, fontWeight: 600 }}>{e.name}{e.strain && <span style={{ fontWeight: 400 }}> · {e.strain}</span>} <span className="mono code-chip">{e.code}</span></span>
-          <span className="xs muted">
-            {preparing ? <>Not recording · t = —</>
-              : e.started_at ? <>t = <span className="mono">{fmtDuration(running ? r?.experiment?.t_h : null)}</span>{running ? " since start" : ""}</> : "Not started"}
-            {running && <> · reading <span className="mono">{fmtAge(r?.last_reading_age_s)}</span> ago</>}
-          </span>
-        </span>
-        <span className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
-          {e.status !== "planned" && <Link className="btn tonal" style={{ height: 32, padding: "0 12px", fontSize: 13 }}
-            to={`/analysis/experiments/${e.id}`}><Icon name="chart" size={16} />Analysis</Link>}
-          <StatusChip status={e.status} />
-        </span>
+      <div className="p-row2">
+        {running && !preparing && <span className="run-chip ok sm" title="Recording"><span className="dot ok" />{fmtDuration(r?.experiment?.t_h)}</span>}
+        {preparing && <span className="run-chip prep sm"><span className="dot prep" />Preparing</span>}
+        {!running && <StatusChip status={e.status} />}
+        {group.length > 1 && (
+          <div role="tablist" aria-label="Parallel run" className="p-pair">
+            {group.map((q) => (
+              <button key={q.id} role="tab" aria-selected={q.id === e.id} className={q.id === e.id ? "on" : ""}
+                onClick={() => q.id !== e.id && nav(`/experiments/${q.id}`, { replace: true })}>
+                {q.name}{q.id !== e.id && q.id === partner?.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {alert && <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>{alert.message}</span></div>}
-      {running && r && !r.online && <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>Controller not responding{r.error ? `: ${r.error}` : ""}</span></div>}
+      {alert && <div className="banner alert small" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>{alert.title}</span></div>}
+      {running && r && !r.online && <div className="banner alert small" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>Controller not responding{r.error ? `: ${r.error}` : ""} · last reading {fmtAge(r.last_reading_age_s)} ago</span></div>}
 
-      {values.length > 0 && <div className="p-values">{values.map((v, i) => <div key={i} className="card tight">{v}</div>)}</div>}
+      <div className="p-tiles">
+        {tiles.map((t) => {
+          const body = <>
+            <span className="p-tile-top"><span className="p-tile-l">{t.label}</span>
+              <span className="p-tile-v mono" style={t.bad ? { color: "var(--alert-text)" } : undefined}>{running || t.k === "base" ? t.v : "—"}</span></span>
+            <span className="p-tile-s mono">{t.sub}{t.unit && t.sub?.startsWith("set") ? ` ${t.unit}` : ""}{!t.sub && t.unit ? t.unit : ""}</span>
+          </>;
+          return t.ch && running && s
+            ? <button key={t.k} className="p-tile" onClick={() => setSp(t.ch!)} aria-label={`${t.label}: setpoint and limits`}>{body}</button>
+            : <div key={t.k} className="p-tile">{body}</div>;
+        })}
+      </div>
 
-      {p && <section className="card tight" aria-label="Chart">
+      <div className="row" role="tablist" aria-label="Sections" style={{ gap: 6, flexWrap: "nowrap", overflowX: "auto" }}>
+        {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={`chip tab-chip ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
+      </div>
+
+      {tab === "trends" && p && <section className="card tight" aria-label="Chart">
         <div className="row between" style={{ flexWrap: "nowrap" }}>
           <label className="p-select"><span className="sr-only">Variables shown</span>
-            <select value={preset} onChange={(x) => setPreset(x.target.value)}>
-              {presets.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+            <select value={preset} onChange={(q) => setPreset(q.target.value)}>
+              {presets.map((q) => <option key={q.key} value={q.key}>{q.label}</option>)}
             </select>
           </label>
           <button className="btn icon tonal" aria-label="Open chart full screen" onClick={() => setFull(true)}><Icon name="expand" size={20} width={2} /></button>
@@ -162,76 +168,29 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
           {p.right && <span className="row" style={{ gap: 4 }}><span style={{ width: 8, height: 8, background: p.right.key === "base_rate" ? "#38b292" : "#1f7a63" }} />{p.right.label}</span>}
         </div>
       </section>}
+      {tab === "buffering" && <section className="card tight" aria-label="Buffering">
+        <span className="small">Base {fmt(bd?.total_ml as number, 1)} mL{bd?.total_mmol != null ? ` · ${fmt(bd.total_mmol as number, 1)} mmol` : ""}
+          {e.buffer_volume_ml != null && bd?.total_ml != null ? ` · bottle ${fmt(Math.max(0, e.buffer_volume_ml - (bd.total_ml as number)), 0)} of ${fmt(e.buffer_volume_ml, 0)} mL left` : ""}</span>
+        <EChart option={baseOpt} className="chart p-chart" ariaLabel="Base rate and cumulative base" />
+      </section>}
+      {tab === "events" && <LatestEvents items={items} />}
+      {tab === "sampling" && <section className="card tight">{running ? <PhoneMeasurement e={e} startedAt={e.started_at} />
+        : <span className="small muted">The experiment has ended: add samplings from the desktop page.</span>}</section>}
 
-      <Collapsible label="Recent events" open={evOpen} onToggle={() => setEvOpen(!evOpen)}
-        icon={<span className={`dot ${evs[0] ? dotColor(evs[0].severity) : "idle"}`} style={{ width: 10, height: 10, flex: "0 0 auto" }} />}
-        sub={`Recent events · ${evs.length}`} title={evs[0]?.message ?? "No events yet"}
-        aside={evs[0] && <span className="xs muted mono">{clock(evs[0].at)}</span>}>
-        {evs.slice(0, 12).map((x) => (
-          <div key={x.id} className="p-row">
-            <span className={`dot ${dotColor(x.severity)}`} style={{ width: 10, height: 10, marginTop: 5, flex: "0 0 auto" }} />
-            <span className="stack" style={{ gap: 0, flexGrow: 1 }}>
-              <span className="small">{x.message}</span>
-              {x.t_h != null && <span className="xs muted">t = {x.t_h.toFixed(1)} h</span>}
-            </span>
-            <span className="xs muted mono">{clock(x.at)}</span>
-          </div>
-        ))}
-      </Collapsible>
-
-      {running && (
-        <Collapsible label="Add measurement" open={amOpen} onToggle={() => setAmOpen(!amOpen)}
-          icon={<Icon name="plus" size={22} color="#003366" width={2} />} title="Add measurement"
-          aside={<span className="xs muted">to {e.code}</span>}>
-          <PhoneMeasurement e={e} startedAt={e.started_at} />
-        </Collapsible>
-      )}
-
-      {running && s && ch.some((c) => c !== "do2") && (
-        <Collapsible label="Setpoints" open={spOpen} onToggle={() => setSpOpen(!spOpen)}
-          icon={<Icon name="sliders" size={22} color="#003366" />} title={<>Setpoints & limits · <span className="mono">{e.reactor_id}</span></>}
-          sub={<span className="mono">{[ch.includes("ph") && `pH ${fmt(s.ph_setpoint)}`, ch.includes("temperature") && `${fmt(s.temperature_setpoint, 1)} °C`,
-            ch.includes("stirrer") && `${fmt(s.stirrer_setpoint, 0)} rpm`].filter(Boolean).join(" · ")}</span>}>
-          {[
-            { p: "ph", name: "pH", v: fmt(s.ph_setpoint), lim: `limits ${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}` },
-            { p: "temperature", name: "Temperature", v: `${fmt(s.temperature_setpoint, 1)} °C`, lim: `limits ${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} °C` },
-            { p: "stirrer", name: "Stirrer", v: `${fmt(s.stirrer_setpoint, 0)} rpm`, lim: "" },
-          ].filter((row) => ch.includes(row.p as Channel)).map((row) => (
-            <div key={row.p} className="p-row" style={{ alignItems: "center" }}>
-              <span className="stack" style={{ gap: 0, flexGrow: 1 }}>{row.name}{row.lim && <span className="xs muted">{row.lim}</span>}</span>
-              <span className="mono">{row.v}</span>
-              <button className="btn text" onClick={() => setDialog(row.p)}>Edit</button>
-            </div>
-          ))}
-          {[
-            { p: "ph", name: "pH process limits", v: `${fmt(s.ph_low_limit)}–${fmt(s.ph_high_limit)}` },
-            { p: "temperature", name: "T process limits", v: `${fmt(s.temperature_low_limit, 1)}–${fmt(s.temperature_high_limit, 1)} °C` },
-          ].filter((row) => ch.includes(row.p as Channel)).map((row) => (
-            <div key={`lim-${row.p}`} className="p-row" style={{ alignItems: "center" }}>
-              <span className="stack" style={{ gap: 0, flexGrow: 1 }}>{row.name}<span className="xs muted">alarm only · no effect on pumps</span></span>
-              <span className="mono small">{row.v}</span>
-              <button className="btn text" onClick={() => setLimitsDialog(row.p)}>Edit</button>
-            </div>
-          ))}
-        </Collapsible>
-      )}
-
-      {running && <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
-        <LoopsButton reactor={e.reactor_id} channels={ch} compact />
-        <ResetCountersButton reactor={e.reactor_id} recording={!preparing} compact onDone={() => readings.refresh()} />
+      {running && <div className="p-three">
+        <LoopsTile reactor={e.reactor_id} s={r?.snapshot} ch={ch} square />
+        <CountersTile reactor={e.reactor_id} s={r?.snapshot} recording={!preparing} onDone={() => readings.refresh()} square />
+        <PumpsTile reactor={e.reactor_id} name={name} square />
       </div>}
-      {preparing && <StartExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
-      {running && !preparing && <EndExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
+      <div className="p-big">
+        <Link className="big-tile" to={`/analysis/experiments/${e.id}`}><Icon name="chart" size={22} />Analysis</Link>
+        {preparing && <StartExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}
+        {running && !preparing && <EndExperimentButton e={e} onDone={onChange ?? (() => undefined)} tile />}
+      </div>
 
       {full && <FullscreenChart e={e} partner={partner} partnerReadings={partnerReadings.data} onClose={() => setFull(false)} />}
-      {limitsDialog && s && (
-        <LimitsDialog reactor={e.reactor_id} parameter={limitsDialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
-          onClose={(changed) => { setLimitsDialog(null); if (changed) live.refresh(); }} />
-      )}
-      {dialog && s && (
-        <SetpointDialog reactor={e.reactor_id} parameter={dialog} snapshot={s} remote={!["localhost", "127.0.0.1"].includes(location.hostname)}
-          onClose={(changed) => { setDialog(null); if (changed) live.refresh(); }} />
-      )}
+      {sp && r?.snapshot && <SetpointSheet reactor={e.reactor_id} name={name} s={r.snapshot} channels={spChannels as Channel[]} initial={sp}
+        onClose={(changed) => { setSp(null); if (changed) { live.refresh(); timeline.refresh(); } }} />}
     </div>
   );
 }

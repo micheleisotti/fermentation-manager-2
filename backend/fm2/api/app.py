@@ -1514,6 +1514,30 @@ def reactor_history(reactor_id: str, request: Request):
     return {"interval_s": acq.interval_of(reactor_id), "window_h": 3, "points": acq.history_of(reactor_id)}
 
 
+def _channel_write(request: Request, db: Session, reactor_id: str, driver, exp, channel: str,
+                   setpoint: Optional[float], low: Optional[float], high: Optional[float]) -> list[dict]:
+    """dO2 setpoint/limits and stirrer limits (2.3), read back and logged like the other changes."""
+    try:
+        before = {}
+        rb = driver.write_channel_values(channel, setpoint, low, high)
+    except DriverError as ex:
+        raise HTTPException(422, str(ex))
+    out = []
+    for key, want in (("setpoint", setpoint), ("low", low), ("high", high)):
+        if want is None:
+            continue
+        got = rb.get(key)
+        status = "confirmed" if got is not None and abs(got - want) < 1e-6 else "mismatch"
+        name = f"{channel}_setpoint" if key == "setpoint" else f"{channel}_{key}_limit"
+        db.add(SetpointCommand(experiment_id=exp.id if exp else None, reactor_id=reactor_id, parameter=name,
+                               old_value=before.get(key), requested_value=want, readback_value=got, status=status,
+                               message="" if status == "confirmed" else "read-back differs", origin=origin_of(request),
+                               author=who(request, db)))
+        out.append({"parameter": name, "old_value": None, "requested_value": want, "readback_value": got,
+                    "status": status, "message": ""})
+    return out
+
+
 @router.post("/reactors/{reactor_id}/setpoints")
 def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: Session = Depends(get_db)):
     acq: Acquisition = request.app.state.acq
@@ -1521,6 +1545,8 @@ def change_setpoint(reactor_id: str, body: S.SetpointIn, request: Request, db: S
     exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
     alert_state = acq.alert_state_for(exp.id, reactor_id, exp.status == ExperimentStatus.preparing) if exp else None
     _check_remote(request)
+    if body.parameter == "do2":
+        return _channel_write(request, db, reactor_id, driver, exp, "do2", body.value, None, None)[0]
     try:
         res = commands.write_setpoint(driver, body.parameter, body.value,
                                       request.app.state.app_settings.setpoint_ranges(), alert_state)
@@ -1794,6 +1820,8 @@ def change_limits(reactor_id: str, body: S.LimitsIn, request: Request, db: Sessi
     driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
     exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status.in_(ACTIVE)))
     _check_remote(request)
+    if body.parameter in ("do2", "stirrer"):
+        return _channel_write(request, db, reactor_id, driver, exp, body.parameter, None, body.low, body.high)
     try:
         results = commands.write_limits(driver, body.parameter, body.low, body.high)
     except commands.CommandRejected as ex:

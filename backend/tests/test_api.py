@@ -275,7 +275,7 @@ def test_change_limits_and_profile_limits(env):
     snap = drivers["R1"].read()
     assert (snap.ph_low_limit, snap.ph_high_limit) == (5.7, 6.4)
     assert c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 6.5, "high": 6.0}).status_code == 422
-    assert c.post("/api/reactors/R1/limits", json={"parameter": "stirrer", "low": 1, "high": 2}).status_code == 422
+    assert c.post("/api/reactors/R1/limits", json={"parameter": "level", "low": 1, "high": 2}).status_code == 422
     # setpoint 6.0 outside new limits -> warning
     r = c.post("/api/reactors/R1/limits", json={"parameter": "ph", "low": 6.1})
     assert r.json()[0]["warnings"] and "outside the new limits" in r.json()[0]["warnings"][0]

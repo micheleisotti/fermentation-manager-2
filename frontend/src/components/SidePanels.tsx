@@ -59,11 +59,12 @@ function ControllerDrawer({ reactor, name, s, onChanged, onClose }: { reactor: s
  * FM2 stops the pump when the button is released, when that signal stops for 1.5 s, after 60 s, and when
  * it restarts. The controller itself never stops a manual pump (verified 23 Nov 2026).
  */
-export function ManualPumpsButton({ reactor, name, compact = false }: { reactor: string; name: string; compact?: boolean }) {
+export function ManualPumpsButton({ reactor, name, compact = false, trigger }:
+  { reactor: string; name: string; compact?: boolean; trigger?: (open: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={() => setOpen(true)}>Manual pumps</button>
+      {trigger ? trigger(() => setOpen(true)) : <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={() => setOpen(true)}>Manual pumps</button>}
       {open && <PumpsPanel reactor={reactor} name={name} onClose={() => setOpen(false)} />}
     </>
   );

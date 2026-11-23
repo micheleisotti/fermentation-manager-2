@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api, type Channel, type CountersState, type LiveReactor, type LoopsState, type Snapshot, type SwitchLoop } from "../api";
 import { fmt } from "../hooks";
 import { Icon, THEMED } from "./ui";
@@ -86,7 +86,8 @@ function Dialog({ title, onClose, busy, children, width = 560 }:
  * One "Loops" button: the loops of the experiment's channels (or all, on the monitoring page) with
  * their state and Start / Stop next to each. Only loops enabled in Settings › Loop control can be switched.
  */
-export function LoopsButton({ reactor, channels, compact = false, dots }: { reactor: string; channels?: Channel[]; compact?: boolean; dots?: boolean[] }) {
+export function LoopsButton({ reactor, channels, compact = false, dots, trigger }:
+  { reactor: string; channels?: Channel[]; compact?: boolean; dots?: boolean[]; trigger?: (open: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const [st, setSt] = useState<LoopsState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -107,8 +108,8 @@ export function LoopsButton({ reactor, channels, compact = false, dots }: { reac
   };
   return (
     <>
-      <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Loops{dots && dots.length > 0 && <span className="loop-dots" aria-label={`${dots.filter(Boolean).length} of ${dots.length} loops on`}>
-        {dots.map((on, i) => <i key={i} className={on ? "on" : ""} />)}</span>}</button>
+      {trigger ? trigger(show) : <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Loops{dots && dots.length > 0 && <span className="loop-dots" aria-label={`${dots.filter(Boolean).length} of ${dots.length} loops on`}>
+        {dots.map((on, i) => <i key={i} className={on ? "on" : ""} />)}</span>}</button>}
       {open && (
         <Dialog title={`Control loops on ${reactor}`} busy={!!busy} onClose={() => setOpen(false)}>
           {!st && !msg && <span className="muted small">Reading the controller…</span>}
@@ -154,8 +155,8 @@ export function LoopsButton({ reactor, channels, compact = false, dots }: { reac
  * Monitor"). During an experiment the cumulative curve restarts from 0 there and the reset is an event;
  * the totals in the analysis keep the whole volume dosed since Start.
  */
-export function ResetCountersButton({ reactor, recording, compact = false, onDone }:
-  { reactor: string; recording: boolean; compact?: boolean; onDone?: () => void }) {
+export function ResetCountersButton({ reactor, recording, compact = false, onDone, trigger }:
+  { reactor: string; recording: boolean; compact?: boolean; onDone?: () => void; trigger?: (open: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
   const [st, setSt] = useState<CountersState | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
@@ -184,7 +185,7 @@ export function ResetCountersButton({ reactor, recording, compact = false, onDon
   const list = (st?.counters ?? []).filter((c) => c.value != null);
   return (
     <>
-      <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Reset counters</button>
+      {trigger ? trigger(show) : <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Reset counters</button>}
       {open && (
         <Dialog title={`Dose counters · ${reactor}`} busy={!!busy} onClose={() => setOpen(false)} width={480}>
           {!st && !msg && <span className="muted small">Reading the controller…</span>}

@@ -109,7 +109,7 @@ export function ExperimentsList() {
 }
 
 /** One "End of experiment" button: the dialog asks Completed or Aborted, with an optional note. */
-export function EndExperimentButton({ e, onDone, compact = false, danger = false }: { e: Experiment; onDone: () => void; compact?: boolean; danger?: boolean }) {
+export function EndExperimentButton({ e, onDone, compact = false, danger = false, tile = false }: { e: Experiment; onDone: () => void; compact?: boolean; danger?: boolean; tile?: boolean }) {
   const [open, setOpen] = useState(false);
   const [outcome, setOutcome] = useState<"completed" | "aborted">("completed");
   const [note, setNote] = useState("");
@@ -139,8 +139,9 @@ export function EndExperimentButton({ e, onDone, compact = false, danger = false
   };
   return (
     <>
+      {tile ? <button className="big-tile end" onClick={openDialog}><Icon name="stop" size={22} />End of experiment</button> :
       <button className={`btn outlined ${danger ? "danger-outline" : ""}`} style={{ ...(danger ? {} : { color: "var(--ink)" }), ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={openDialog}>
-        {!danger && <Icon name="stop" size={16} />}{danger ? "End experiment" : "End of experiment"}</button>
+        {!danger && <Icon name="stop" size={16} />}{danger ? "End experiment" : "End of experiment"}</button>}
       {open && (
         <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) setOpen(false); }}>
           <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="end-title" style={{ width: "min(520px, 100vw)" }}>

@@ -94,3 +94,11 @@ def test_api_pumps_assignment_and_outputs(env):
     assert any(o["name"] == "Addition 2" for o in r["free_outputs"])
     r = c.post("/api/reactors/R1/loop-assignment", json={"loop": "ph", "actuator_id": 28, "side": -1}).json()
     assert r["confirmed"] is True
+
+
+def test_do2_and_stirrer_values(env):
+    c, clock, app = env
+    r = c.post("/api/reactors/R1/setpoints", json={"parameter": "do2", "value": 30}).json()
+    assert r["status"] == "confirmed" and r["readback_value"] == 30
+    r = c.post("/api/reactors/R1/limits", json={"parameter": "stirrer", "low": 50, "high": 400}).json()
+    assert [x["status"] for x in r] == ["confirmed", "confirmed"]
