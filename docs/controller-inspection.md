@@ -259,3 +259,16 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
 - Login refused while someone is logged in on the display: the login write answers `0.11` =
   `-5|0|`. Reading `0.11` before trying shows only this connection's state (`0|-1|`), not the
   display's: the refusal code is the only signal.
+
+### Loop configuration, both controllers (23 Nov 2026, `docs/inspect-2026-11-23/R*-values.tsv`)
+| Loop (sensor) | type `1.19` | P / I / D | deadband | cycle s | settling s | SP `1.13` R1 / R2 | alarm lo–hi |
+|---|---|---|---|---|---|---|---|
+| pH (0) | 0 PID | 100 / 2 / 10 | 0.02 | 10 | 300 | 6.20 / 6.20 | 6.00–6.40 |
+| dO2 (1) | R1 0, **R2 3** | 7 / 1500 / 0 | 0 | 5 | 150 | 200 / 70 % | R1 40–200, R2 20–120 |
+| Temperature (2) | 1 Adaptive | 30 / R1 3279.8, R2 3059.8 / R1 100, R2 14.7 | 0 | 5 | 1500 | 12 / 12 °C | 10–38 |
+| Level (3) | 3 | 10 / 0 / 0 | 0 | 5 | 600 | 0 | — |
+| Stirrer (13) | 2 | 10 / 0 / 0 | 0 | 5 | 600 | 80 / 80 rpm | 20–500 |
+- R2 dO2 also has pulse time `3.22` = 30 and dead time `3.25` = 30 (R1: 0).
+- Assigned actuators (both): Stirrer 18 → stirrer loop, Heating 19 → temperature, Alkali 29 → pH
+  (below SP), Addition 2 28 → pH (above SP). **Antifoam 30, N2 0 and Air 1 are in no loop**
+  (`1.16.3` = 0: the Level loop has no actuator); dO2 drives the stirrer in cascade.
