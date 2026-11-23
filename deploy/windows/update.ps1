@@ -62,7 +62,7 @@ $frontChanged = [bool]($changed | Where-Object { $_ -like "frontend/*" }) -or -n
 # also rebuild when the build is older than the last frontend commit (e.g. branch checked out by hand before running this)
 if (-not $frontChanged) {
   $lastFront = [int](git log -1 --format=%ct -- frontend)
-  $built = [int][double]::Parse((Get-Date (Get-Item "frontend\dist\index.html").LastWriteTimeUtc -UFormat %s))
+  $built = [DateTimeOffset]::new((Get-Item "frontend\dist\index.html").LastWriteTimeUtc).ToUnixTimeSeconds()
   if ($built -lt $lastFront) { $frontChanged = $true }
 }
 
