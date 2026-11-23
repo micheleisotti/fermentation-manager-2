@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type Experiment, type Readings } from "../api";
+import { api, type Experiment, type Readings, type TimelineItem } from "../api";
 import { fmt, fmtDuration, PHONE_QUERY, useMediaQuery, usePolling, fmtAge } from "../hooks";
 import { baseOption, MANUAL_PREFIX, trendsOption, varsFor, type ManualPoints, type TrendVar } from "../components/charts";
 import { DataValue, EChart, Icon, Segmented, StatusChip } from "../components/ui";
@@ -79,8 +79,9 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const [binH, setBinH] = useState<"0.25" | "1">("0.25");
   const analysis = usePolling(() => api.analysis(e.id, Number(binH)), running ? 60000 : 600000, [e.id, binH]);
   const live = usePolling(api.live, running ? 10000 : 600000);
-  const events = usePolling(() => api.events(e.id), 20000, [e.id]);
-  const log = usePolling(() => api.setpointLog(e.id), 30000, [e.id]);
+  const timeline = usePolling(() => api.timeline(e.id), 20000, [e.id]);
+  const events = { refresh: timeline.refresh };
+  const log = { refresh: timeline.refresh };
   const meas = usePolling(() => api.measurements(e.id), 60000, [e.id]);
 
   const ch = e.channels;
@@ -108,8 +109,8 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   const setShowLim = (b: boolean) => { setShowLimRaw(b); saveTrendPrefs({ limits: b }); };
   const [showPartner, setShowPartner] = useState(true);
   const [showPartnerBase, setShowPartnerBase] = useState(false);
-  const [allEvents, setAllEvents] = useState(false);
-  const [allLog, setAllLog] = useState(false);
+  const [showDetected, setShowDetected] = useState(true);
+  const detected = (timeline.data ?? []).filter((x) => x.category === "detected" && x.t_h != null);
 
   const lv = vars.find((v) => v.key === left) ?? main[0] ?? vars[0];
   const rv = vars.find((v) => v.key === right && v.key !== lv?.key) ?? null;
@@ -119,6 +120,15 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
     partner: showPartner && partner && !lv.key.startsWith(MANUAL_PREFIX) ? partnerReadings.data : undefined,
     partnerLabel: partner ? `${lv.label} ${partner.reactor_id} (paired)` : undefined,
   }), [readings.data, partnerReadings.data, lv, rv, showSp, showLim, showPartner, partner, endH, manual]);
+  // "Detected events" (phases, feed…): vertical lines on the trend chart
+  const trendWithEvents = useMemo(() => {
+    if (!showDetected || detected.length === 0) return trend;
+    const t = trend as { series?: object[] };
+    return { ...trend, series: [...(t.series ?? []), { type: "line", name: "Detected events", data: [], silent: true,
+      markLine: { symbol: "none", lineStyle: { type: "dashed", color: "#455e6f" },
+        label: { formatter: "{b}", fontSize: 10, color: "#455e6f" },
+        data: detected.map((d) => ({ xAxis: d.t_h, name: d.title })) } }] };
+  }, [trend, showDetected, timeline.data]);
   const base = useMemo(() => baseOption(readings.data, analysis.data?.rate_bins, showPartnerBase ? partnerReadings.data : undefined,
     endH, analysis.data?.acid_rate_bins, partner?.reactor_id),
     [readings.data, analysis.data, partnerReadings.data, showPartnerBase, endH, partner]);
@@ -198,8 +208,11 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
               <button className={`chip ${showLim ? "on" : ""}`} aria-pressed={showLim} onClick={() => setShowLim(!showLim)}>Process limits</button>
               {partner && <button className={`chip ${showPartner ? "on" : ""}`} aria-pressed={showPartner} onClick={() => setShowPartner(!showPartner)}>
                 Paired: {partner.reactor_id} · {partner.code}</button>}
+              <button className={`chip ${showDetected ? "on" : ""}`} aria-pressed={showDetected} onClick={() => setShowDetected(!showDetected)}
+                title={detected.length ? "" : "No detected events yet (phase detection comes after calibration)"}>
+                Detected events{detected.length ? ` (${detected.length})` : ""}</button>
             </div>
-            <EChart option={trend} ariaLabel="Trends over time since start" />
+            <EChart option={trendWithEvents} ariaLabel="Trends over time since start" />
           </section>
 
           {ch.includes("ph") && <section className="card" aria-labelledby="base">
@@ -216,6 +229,12 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             </div>
             <div className="dv-grid">
               <DataValue value={fmt(bd?.total_ml as number, 1)} unit="mL" label="Base buffer, total since Start" color="#1f7a63" />
+              {bd?.total_mmol != null && <DataValue value={fmt(bd.total_mmol as number, 1)} unit="mmol" label={`Base, total · ${fmt(e.buffer_molarity, 2)} M`} color="#1f7a63" />}
+              {e.buffer_volume_ml != null && bd?.total_ml != null && (() => {
+                const left = (e.buffer_volume_ml ?? 0) - (bd.total_ml as number);
+                const low = left < 0.1 * (e.buffer_volume_ml ?? 0);
+                return <DataValue value={fmt(Math.max(0, left), 0)} unit="mL" label={`Buffer left of ${fmt(e.buffer_volume_ml, 0)} mL${low ? " · below 10 %" : ""}`} color={low ? "#b30020" : undefined} />;
+              })()}
               <DataValue value={fmt(lastBin?.rate_ml_min, 3)} unit="mL/min" label={`Last complete ${binH === "1" ? "hour" : "15 min"}`} color="#1f7a63" />
               <DataValue value={fmt(bd?.peak_rate_ml_min as number, 3)} unit="mL/min" label={`Peak rate · t = ${fmt(bd?.t_peak_h as number, 1)} h`} />
               <DataValue value={fmt(s?.base_pump_pct, 0)} unit="%" label="Pump activation · now" />
@@ -239,30 +258,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
             </section>
           )}
 
-          <section className="card tight" aria-labelledby="ev">
-            <div className="row between"><h3 id="ev">Events</h3>
-              <MoreToggle n={(events.data ?? []).length} shown={EVENTS_SHOWN} open={allEvents} onToggle={() => setAllEvents(!allEvents)} /></div>
-            {(events.data ?? []).slice(0, allEvents ? undefined : EVENTS_SHOWN).map((x) => (
-              <div key={x.id} className="row" style={{ gap: 10, alignItems: "flex-start", flexWrap: "nowrap" }}>
-                <span className={`dot ${x.severity === "alert" ? "bad" : x.severity === "good" ? "ok" : "idle"}`} style={{ marginTop: 6, flex: "0 0 auto" }} />
-                <span className="small" style={{ flexGrow: 1 }}>{x.message}</span>
-                <span className="xs muted mono">{x.t_h == null ? "" : `${x.t_h.toFixed(1)} h`}</span>
-              </div>
-            ))}
-            {(events.data ?? []).length === 0 && <span className="small muted">No events yet.</span>}
-          </section>
-
-          <section className="card tight" aria-labelledby="log">
-            <div className="row between"><h3 id="log">Change log</h3>
-              <MoreToggle n={(log.data ?? []).length} shown={LOG_SHOWN} open={allLog} onToggle={() => setAllLog(!allLog)} /></div>
-            {[...(log.data ?? [])].reverse().slice(0, allLog ? undefined : LOG_SHOWN).map((c, i) => (
-              <div key={i} className="small row" style={{ gap: 10, flexWrap: "nowrap" }}>
-                <span className="mono muted" title={new Date(c.at).toLocaleString()}>{new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                <span>{c.parameter} {c.old ?? "—"} → {c.new} · {c.origin} · {c.status}</span>
-              </div>
-            ))}
-            {(log.data ?? []).length === 0 && <span className="small muted">No setpoint changes from this software.</span>}
-          </section>
+          <LatestEvents items={timeline.data ?? []} />
         </aside>
       </div>
 
@@ -270,12 +266,45 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
   );
 }
 
-const EVENTS_SHOWN = 8, LOG_SHOWN = 5;
+const EVENTS_SHOWN = 10;
+const EVENT_FILTERS: { key: string; label: string; cats: TimelineItem["category"][] }[] = [
+  { key: "all", label: "All", cats: [] },
+  { key: "alerts", label: "Alerts", cats: ["alert"] },
+  { key: "changes", label: "Changes", cats: ["change", "loops"] },
+  { key: "sampling", label: "Sampling", cats: ["sampling"] },
+  { key: "detected", label: "Detected", cats: ["detected"] },
+];
+const CAT_DOT: Record<string, string> = { alert: "bad", detected: "prep", change: "ok", loops: "ok", sampling: "idle", info: "idle" };
 
-/** "Show all (n)" / "Show fewer" for the event and change lists (newest first). */
-function MoreToggle({ n, shown, open, onToggle }: { n: number; shown: number; open: boolean; onToggle: () => void }) {
-  if (n <= shown) return null;
-  return <button className="btn text" onClick={onToggle} aria-expanded={open}>{open ? "Show fewer" : `Show all (${n})`}</button>;
+/** One list (2.3): alerts, detected events, setpoint/limit changes, loops and counters, samplings. Newest first. */
+export function LatestEvents({ items }: { items: TimelineItem[] }) {
+  const [filter, setFilter] = useState("all");
+  const [all, setAll] = useState(false);
+  const f = EVENT_FILTERS.find((x) => x.key === filter)!;
+  const list = f.cats.length ? items.filter((x) => f.cats.includes(x.category)) : items;
+  return (
+    <section className="card tight" aria-labelledby="ev">
+      <div className="row between"><h3 id="ev">Latest events</h3>
+        {list.length > EVENTS_SHOWN && <button className="btn text" onClick={() => setAll(!all)} aria-expanded={all}>
+          {all ? "Show fewer" : `Show all (${list.length})`}</button>}</div>
+      <div className="row" style={{ gap: 6 }}>
+        {EVENT_FILTERS.map((x) => <button key={x.key} className={`chip ${filter === x.key ? "on" : ""}`} aria-pressed={filter === x.key}
+          onClick={() => setFilter(x.key)}>{x.label}</button>)}
+      </div>
+      {list.slice(0, all ? undefined : EVENTS_SHOWN).map((x, i) => (
+        <div key={i} className="row" style={{ gap: 10, alignItems: "flex-start", flexWrap: "nowrap" }}>
+          <span className={`dot ${x.severity === "alert" ? "bad" : CAT_DOT[x.category] ?? "idle"}`} style={{ marginTop: 6, flex: "0 0 auto" }} />
+          <span className="stack" style={{ gap: 1, flexGrow: 1, minWidth: 0 }}>
+            <span className="small">{x.title}</span>
+            <span className="xs muted">{x.category === "change" ? "change" : x.category}{x.detail && x.category !== "alert" ? ` · ${x.detail}` : ""}{x.author ? ` · ${x.author}` : ""}</span>
+          </span>
+          <span className="xs muted mono" title={new Date(x.at).toLocaleString()}>{x.t_h == null
+            ? new Date(x.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : `${x.t_h.toFixed(1)} h`}</span>
+        </div>
+      ))}
+      {list.length === 0 && <span className="small muted">Nothing yet.</span>}
+    </section>
+  );
 }
 
 /** Trend axes and toggles: the last choice is remembered in this browser (all experiments). */
@@ -296,6 +325,7 @@ function ManualVariables({ e }: { e: Experiment }) {
   const [time, setTime] = useState("");
   const [tH, setTH] = useState("");
   const [note, setNote] = useState("");
+  const [vol, setVol] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const live = e.status === "fermenting";
   const started = e.started_at != null;
@@ -321,15 +351,20 @@ function ManualVariables({ e }: { e: Experiment }) {
     } else if (!live) {
       setErr("Give when the sample was taken: t (h) since start, or date and time"); return;
     }
+    let volume_taken_ml: number | null = null;
+    if (vol.trim() !== "") {
+      volume_taken_ml = Number(vol.replace(",", "."));
+      if (!Number.isFinite(volume_taken_ml) || volume_taken_ml < 0) { setErr("Volume taken must be a number ≥ 0 (mL)"); return; }
+    }
     try {
-      await api.addMeasurement(e.id, { variable_id: varId, value: v, sampled_at, t_h, note });
-      setValue(""); setNote(""); setTime(""); setTH(""); meas.refresh();
+      await api.addMeasurement(e.id, { variable_id: varId, value: v, sampled_at, t_h, note, volume_taken_ml });
+      setValue(""); setNote(""); setTime(""); setTH(""); setVol(""); meas.refresh();
     } catch (x) { setErr((x as Error).message); }
   }
 
   return (
     <section className="card" aria-labelledby="man">
-      <h2 id="man" style={{ fontSize: 18 }}>Manual variables</h2>
+      <h2 id="man" style={{ fontSize: 18 }}>Sampling</h2>
       {!started && <span className="small muted">Manual variables can be added once the experiment has started (time is counted from Start).</span>}
       {started && !live && <span className="small muted">
         The run has ended: values measured later (e.g. on frozen aliquots) are entered at the time the sample was taken.</span>}
@@ -353,6 +388,9 @@ function ManualVariables({ e }: { e: Experiment }) {
           <label className="field" style={{ flex: "0 1 120px" }}>Value{unit ? ` (${unit})` : ""}
             <input inputMode="decimal" value={value} onChange={(x) => setValue(x.target.value)} placeholder="0.000" style={{ fontFamily: "var(--font-mono)" }} />
           </label>
+          <label className="field" style={{ flex: "0 1 120px" }}>Volume taken (mL)
+            <input inputMode="decimal" value={vol} onChange={(x) => setVol(x.target.value)} placeholder="optional" style={{ fontFamily: "var(--font-mono)" }} />
+          </label>
           <label className="field" style={{ flex: "3 1 220px" }}>Notes
             <input value={note} onChange={(x) => setNote(x.target.value)} placeholder="e.g. dilution 1:10" />
           </label>
@@ -362,7 +400,7 @@ function ManualVariables({ e }: { e: Experiment }) {
       {err && <div className="banner alert">{err}</div>}
       <div className="table-wrap">
         <table className="data" style={{ minWidth: 640 }}>
-          <thead><tr><th>t (h)</th><th>Time</th><th>Variable</th><th style={{ textAlign: "right" }}>Value</th><th>Unit</th><th>Notes</th></tr></thead>
+          <thead><tr><th>t (h)</th><th>Time</th><th>Variable</th><th style={{ textAlign: "right" }}>Value</th><th>Unit</th><th style={{ textAlign: "right" }}>Taken (mL)</th><th>Notes</th></tr></thead>
           <tbody>
             {(meas.data ?? []).map((m) => (
               <tr key={m.id}>
@@ -371,10 +409,11 @@ function ManualVariables({ e }: { e: Experiment }) {
                 <td>{m.variable_name}</td>
                 <td className="mono" style={{ textAlign: "right" }}>{m.value}</td>
                 <td className="mono muted">{m.unit}</td>
+                <td className="mono muted" style={{ textAlign: "right" }}>{m.volume_taken_ml ?? ""}</td>
                 <td className="muted">{m.note}</td>
               </tr>
             ))}
-            {(meas.data ?? []).length === 0 && <tr><td colSpan={6} className="muted">No manual entries yet.</td></tr>}
+            {(meas.data ?? []).length === 0 && <tr><td colSpan={7} className="muted">No manual entries yet.</td></tr>}
           </tbody>
         </table>
       </div>

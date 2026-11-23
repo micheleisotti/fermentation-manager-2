@@ -287,3 +287,11 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
   sensitivity (`5.3.1`); no control settings are shown while no actuator is assigned to it.
 - Stirrer: the display shows **no Control Settings** (the stirrer's `1.19.13` = 2 is its own speed
   control, not selectable): FM2 treats the stirrer as setpoint + alarm limits only.
+- "Limits" page of a loop (photo, R2 pH): **Process Limits** high/low (`1.4`/`1.5`, alarm only;
+  Alarm State "Loop") and **Interlock Limits** high/low (`1.20`/`1.21`: pH 14.00 / 0.00, i.e.
+  never reached), Dead Band 0.50, Interlock State Off, "Affected Actuators High/Low" (`1.25`/`1.26`,
+  bit masks). An interlock switches off the affected actuators while the value is beyond the limit
+  and releases them after the dead band. Not writable by FM2. **To verify**: whether an interlock
+  also stops a prime/manual output (`manualcontrol.js` disables the UI when `2.47` = 1): if so, a pH
+  interlock high on the alkali pump would be a controller-side safety net for a stuck manual command.
+- Actuators are assigned to loops on another page of the display (actuator settings), not here.
