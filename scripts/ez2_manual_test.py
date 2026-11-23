@@ -67,7 +67,7 @@ class Box:
         return got
 
     def write(self, addr, value):
-        assert addr.startswith(("2.20.", "0.11")), addr
+        assert addr.startswith(("2.20.", "2.46.", "0.11")), addr
         self.say(f"WRITE J{addr}s{value if not addr.startswith('0.11') else '<login>'}")
         self.ws.send(f"J{addr}s{value}\r".encode("ascii"))
         try:                                          # log any immediate answer (error text included)
@@ -91,7 +91,7 @@ class Box:
 
 
 def watch(box, a, s, seconds):
-    keys = [f"2.20.{a}", f"2.49.{a}", f"2.12.{a}", f"2.13.{a}", f"2.47.{a}", f"1.14.{s}"]
+    keys = [f"2.20.{a}", f"2.46.{a}", f"2.49.{a}", f"2.12.{a}", f"2.13.{a}", f"2.47.{a}", f"1.14.{s}"]
     end = time.time() + seconds
     while time.time() < end:
         v = box.read(keys, wait=0.9)
@@ -105,6 +105,9 @@ def main():
     p.add_argument("what", help="base|acid|antifoam, or 'off', or 'login'")
     p.add_argument("arg", nargs="?", default="2")
     p.add_argument("--on-value", default="1")
+    p.add_argument("--prime", action="store_true", help="use 2.46 (Click & Hold To Prime) instead of 2.20")
+    p.add_argument("--hold", type=float, default=None,
+                   help="with --leave-on: keep watching this many seconds (does the controller stop by itself?)")
     p.add_argument("--leave-on", action="store_true")
     p.add_argument("--level", default="2", choices=["1", "2"], help="1 Operator, 2 Engineer (FM2 default)")
     o = p.parse_args()
@@ -112,6 +115,7 @@ def main():
     log = open(OUT / f"manual-{o.ip}-{datetime.now():%Y%m%d-%H%M%S}.log", "w", encoding="utf-8")
     box = Box(o.ip, log)
     on_written = None
+    kind = "2.20"
     try:
         if o.what == "login":
             ok = box.login(o.level)
@@ -121,29 +125,36 @@ def main():
             a = PUMPS[o.arg]
             if box.login(o.level):
                 box.write(f"2.20.{a}", "0")
+                box.write(f"2.46.{a}", "0")
                 watch(box, a, LOOP_SENSOR_OF[a], 3)
             return
         a, s = PUMPS[o.what], LOOP_SENSOR_OF[PUMPS[o.what]]
         secs = min(float(o.arg), 10.0)
-        box.say(f"pump {o.what} = actuator {a}; loop sensor {s}; ON for {secs:g} s, value {o.on_value!r}")
+        kind = "2.46" if o.prime else "2.20"
+        info = box.read([f"2.{k}.{a}" for k in (1, 4, 5, 6, 7, 19, 35, 44)])
+        box.say("actuator info: " + "  ".join(f"{k}={v}" for k, v in sorted(info.items())))
+        box.say(f"pump {o.what} = actuator {a}; loop sensor {s}; ON for {secs:g} s, value {o.on_value!r}, address {kind}")
         watch(box, a, s, 2)
         if not box.login(o.level):
             box.say("LOGIN REFUSED: nothing written (is someone logged in on the display?)")
             return
-        box.write(f"2.20.{a}", o.on_value)
+        box.write(f"{kind}.{a}", o.on_value)
         on_written = a
         watch(box, a, s, secs)
         if o.leave_on:
+            if o.hold:
+                box.say(f"watching {o.hold:g} s more without switching off")
+                watch(box, a, s, min(o.hold, 120))
             on_written = None
             box.say("LEFT ON on purpose (--leave-on). Switch off with:  ... off " + o.what)
             return
-        box.write(f"2.20.{a}", "0")
+        box.write(f"{kind}.{a}", "0")
         on_written = None
         watch(box, a, s, 4)
     finally:
         if on_written is not None:                   # error or Ctrl+C while ON: switch off first
             try:
-                box.write(f"2.20.{on_written}", "0")
+                box.write(f"{kind}.{on_written}", "0")
             except Exception as e:
                 print("COULD NOT SWITCH OFF - use the display!", e)
         try:
