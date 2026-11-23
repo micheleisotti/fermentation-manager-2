@@ -1,24 +1,71 @@
 /**
  * Who is using the app: a sign-in screen (user list, optional PIN) before anything else.
  * The chosen user is remembered on this browser/device until "Switch user".
- * Identity only — it signs experiments, measurements and commands; there are no permission levels.
+ * It signs experiments, measurements and commands. From 2.3 users also have a level (admin, operator,
+ * observer): the server enforces it once an administrator exists; the UI only hides what is not allowed.
+ * When the lab PC cannot be reached the cached interface shows "Lab PC not reachable" and retries.
  */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, setToken, type UserInfo } from "../api";
 import { Icon } from "./ui";
+import wordmark from "../assets/wordmark.svg";
 
-interface Ctx { user: UserInfo; switchUser: () => void; setUser: (u: UserInfo, token?: string | null) => void }
+export type Role = "observer" | "operator" | "admin";
+const RANK: Record<Role, number> = { observer: 0, operator: 1, admin: 2 };
+interface Ctx { user: UserInfo; switchUser: () => void; setUser: (u: UserInfo, token?: string | null) => void;
+  role: Role; adminsExist: boolean; clientLocal: boolean; can: (r: Role) => boolean; refresh: () => void }
 const UserCtx = createContext<Ctx | null>(null);
 export const useUser = () => useContext(UserCtx);
 
+const OFFLINE_RE = /No connection to the lab PC|not answering/;
+
 export function UserGate({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<UserInfo | null | undefined>(undefined);
-  useEffect(() => { api.me().then((r) => setUserState(r.user)).catch(() => setUserState(null)); }, []);
-  const setUser = (u: UserInfo, token?: string | null) => { if (token) setToken(token); setUserState(u); };
+  const [info, setInfo] = useState({ role: "operator" as Role, adminsExist: false, clientLocal: false });
+  const [offline, setOffline] = useState(false);
+  const load = () => api.me().then((r) => {
+    setOffline(false);
+    setUserState(r.user);
+    setInfo({ role: (r.role ?? "operator") as Role, adminsExist: !!r.admins_exist, clientLocal: !!r.client_local });
+  }).catch((e) => { if (OFFLINE_RE.test((e as Error).message)) setOffline(true); else setUserState(null); });
+  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (!offline) return;
+    const t = window.setInterval(() => void load(), 10000);
+    return () => window.clearInterval(t);
+  }, [offline]);
+  const setUser = (u: UserInfo, token?: string | null) => { if (token) setToken(token); setUserState(u); void load(); };
   const switchUser = () => { setToken(null); setUserState(null); };
+  if (offline) return <Offline onRetry={() => void load()} />;
   if (user === undefined) return <div className="muted" style={{ padding: 24 }}>Loading…</div>;
   if (user === null) return <SignIn onDone={(u, t) => setUser(u, t)} />;
-  return <UserCtx.Provider value={{ user, switchUser, setUser }}>{children}</UserCtx.Provider>;
+  // Levels apply only once an administrator exists (as on the server)
+  const role: Role = info.adminsExist ? info.role : "admin";
+  const can = (r: Role) => RANK[role] >= RANK[r];
+  return <UserCtx.Provider value={{ user, switchUser, setUser, role, adminsExist: info.adminsExist, clientLocal: info.clientLocal,
+    can, refresh: () => void load() }}>{children}</UserCtx.Provider>;
+}
+
+/** Hook for components: can(level) is true when no context (tests) or the user has that level. */
+export function useCan() {
+  const ctx = useUser();
+  return (r: Role) => (ctx ? ctx.can(r) : true);
+}
+
+function Offline({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="signin">
+      <div className="card signin-card" style={{ textAlign: "center", alignItems: "center" }}>
+        <img src={wordmark} alt="Fermentation Manager 2" className="logo-wordmark" style={{ maxWidth: 280 }} />
+        <Icon name="warn" color="#b30020" size={32} />
+        <h2>Lab PC not reachable</h2>
+        <span className="muted small">The app opened from this device, but it cannot reach the lab PC.
+          Check that Tailscale is on (away from the lab) and that the PC is on. Recording on the PC is not affected.
+          Retrying every 10 s.</span>
+        <button className="btn filled" onClick={onRetry}>Retry now</button>
+      </div>
+    </div>
+  );
 }
 
 export function initials(name: string) {
@@ -50,7 +97,7 @@ function SignIn({ onDone }: { onDone: (u: UserInfo, token: string) => void }) {
     <div className="signin">
       <div className="card signin-card">
         <div className="stack" style={{ gap: 4, alignItems: "center", textAlign: "center" }}>
-          <h1 style={{ fontSize: 24 }}>Fermentation Manager</h1>
+          <img src={wordmark} alt="Fermentation Manager 2" className="logo-wordmark" style={{ maxWidth: 300 }} />
           <span className="muted">{pick ? `Enter the PIN for ${pick.name}` : adding ? "New user" : "Who is using the software?"}</span>
         </div>
 

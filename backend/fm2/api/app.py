@@ -594,9 +594,10 @@ def update_template(tid: int, body: S.TemplatePatch, db: Session = Depends(get_d
     return _template_out(t, db)
 
 
-@router.delete("/templates/{tid}", status_code=204)
+@router.delete("/templates/{tid}")
 def delete_template(tid: int, db: Session = Depends(get_db)):
     db.delete(_404(db.get(ExperimentTemplate, tid)))
+    return {"deleted": tid}
 
 
 VARIABLE_ROLES = ("biomass", "product", "substrate", "other")

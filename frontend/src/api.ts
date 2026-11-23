@@ -13,6 +13,7 @@ export interface Experiment {
   parallel_run_code: string | null; parallel_partner_codes: string[]; channels: Channel[];
   notes: string; started_at: string | null; ended_at: string | null; updated_at: string;
   archived: boolean; end_note: string | null; author: string; n_sessions: number; created_at: string;
+  buffer_volume_ml?: number | null; buffer_molarity?: number | null; buffer_equivalents?: number | null;
   plan_params: PlanParams | null; profile_modified: boolean; profile_changed: boolean; profile_name: string | null; prepared_at: string | null; plan_snapshot: Record<string, unknown> | null;
 }
 
@@ -23,7 +24,12 @@ export interface PlanParams {
   ph_low_limit: number | null; ph_high_limit: number | null; temperature_low_limit: number | null; temperature_high_limit: number | null;
   temperature_control_mode?: string | null; temperature_pid?: Record<string, number | null> | null;
   loop_assignments?: LoopAssignments | null;
+  channel_params?: ChannelParams | null;
 }
+
+/** Other channels of a plan/profile (2.3): saved with the plan, loaded on the controller only after verification. */
+export type ChannelParams = Partial<Record<Channel, { setpoint: number | null; low: number | null; high: number | null;
+  mode?: string | null; params?: Record<string, number | null> | null }>>;
 
 /** Per loop: actuators (and cascade loops) a profile was made for, as read from a controller. */
 export type LoopAssignments = Record<string, { id: number; name: string; side: number; kind: string }[]>;
@@ -49,19 +55,21 @@ export interface Snapshot {
 }
 
 export interface LiveReactor {
-  reactor_id: string; online: boolean; last_reading_age_s: number | null; error: string | null;
+  reactor_id: string; name?: string; interval_s?: number; online: boolean; last_reading_age_s: number | null; error: string | null;
   snapshot: Snapshot | null; ph_control: LoopControlState | null;
   temperature_control?: LoopControlState | null;
   experiment: { id: number; code: string; name: string; strain: string; status: Status; t_h: number; parallel_run: string | null; channels: Channel[] } | null;
 }
 
-export interface Named { id: number; name: string; description: string; archived: boolean; n_used: number }
+export interface Named { id: number; name: string; description: string; archived: boolean; n_used: number;
+  molarity?: number | null; equivalents?: number | null }
 export interface Profile {
   id: number; name: string; ph_setpoint: number | null; temperature_setpoint: number | null; stirrer_setpoint: number | null;
   ph_control_mode: string | null; ph_pid: Record<string, number> | null; notes: string;
   ph_low_limit: number | null; ph_high_limit: number | null;
   temperature_low_limit: number | null; temperature_high_limit: number | null;
   temperature_control_mode: string | null; temperature_pid: Record<string, number> | null; loop_assignments: LoopAssignments | null;
+  channel_params?: ChannelParams | null;
   updated_at?: string | null; n_experiments?: number;
 }
 export type ProfileBody = Omit<Profile, "id" | "updated_at" | "n_experiments">;
@@ -70,10 +78,20 @@ export interface PlanCheck { reachable: boolean; message?: string; reactor_free?
   assignment_differences?: Record<string, string> }
 export type ExperimentDraft = { name: string; reactor_id: string; planned_date?: string | null; strain?: string;
   medium_id?: number | null; buffer_id?: number | null; working_volume_ml?: number | null; profile_id?: number | null; notes?: string;
-  channels?: Channel[]; plan_params?: PlanParams | null };
+  channels?: Channel[]; plan_params?: PlanParams | null; buffer_volume_ml?: number | null };
 
 export interface Readings { columns: string[]; rows: (number | null)[][] }
-export interface Measurement { id: number; variable_id: number; variable_name: string; sampled_at: string; t_h: number; value: number; unit: string; note: string; author: string }
+export interface Measurement { id: number; variable_id: number; variable_name: string; sampled_at: string; t_h: number; value: number; unit: string; note: string; author: string; volume_taken_ml?: number | null }
+export interface TimelineItem { at: string; t_h: number | null; category: "detected" | "alert" | "loops" | "info" | "change" | "sampling";
+  title: string; detail: string; severity: string; author: string | null }
+export interface Bioreactor { id: string; name: string; driver: string; driver_label: string; address: string; interval_s: number;
+  enabled: boolean; position: number; status: "connected" | "simulated" | "not_reachable" | "disabled" | "starting"; error: string | null;
+  last_reading_age_s: number | null; active_experiment: string | null; experiments: number; interval_warning: boolean }
+export interface ReactorHistory { interval_s: number; window_h: number; points: ({ ts: string } & Record<string, number | null | string>)[] }
+export interface TemplateData { strain?: string; medium_id?: number | null; buffer_id?: number | null; buffer_volume_ml?: number | null;
+  working_volume_ml?: number | null; profile_id?: number | null; plan_params?: PlanParams | null; channels?: Channel[] | null; notes?: string; rules?: unknown[] }
+export interface Template { id: number; name: string; description: string; data: TemplateData; archived: boolean; author: string;
+  updated_at: string; profile_name: string | null; medium_name: string | null; buffer_name: string | null }
 export interface Variable { id: number; name: string; unit: string; category: string; archived: boolean; n_measurements: number }
 export interface EventItem { id: number; experiment_id: number | null; reactor_id: string; kind: string; severity: "alert" | "info" | "good"; message: string; t_h: number | null; at: string }
 export interface RateBin { t_start_h: number; t_end_h: number; rate_ml_min: number | null; complete: boolean }
@@ -136,7 +154,8 @@ export interface SessionResults extends SessionInfo {
     condition: string; values: Record<string, number | null>; fit_error: string | null; fit_warnings: string[] }[];
 }
 
-export interface UserInfo { id: number; name: string; has_pin: boolean; archived: boolean; guest: boolean }
+export interface UserInfo { id: number; name: string; has_pin: boolean; archived: boolean; guest: boolean;
+  role?: "observer" | "operator" | "admin"; effective_role?: "observer" | "operator" | "admin" }
 const TOKEN_KEY = "fm2.token";
 export function getToken(): string {
   try { return localStorage.getItem(TOKEN_KEY) ?? ""; } catch { return ""; }
@@ -207,8 +226,8 @@ export const api = {
   loadProfile: (id: number) => req<{ results: { parameter: string; status: string; message?: string }[] }>(`/experiments/${id}/load-profile`, { method: "POST" }),
   media: () => req<Named[]>("/media"),
   buffers: () => req<Named[]>("/buffers"),
-  createNamed: (kind: "media" | "buffers", name: string, description = "") =>
-    req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name, description }) }),
+  createNamed: (kind: "media" | "buffers", name: string, description = "", extra: { molarity?: number | null; equivalents?: number | null } = {}) =>
+    req<Named>(`/${kind}`, { method: "POST", body: JSON.stringify({ name, description, ...extra }) }),
   profiles: () => req<Profile[]>("/profiles"),
   createProfile: (body: ProfileBody) => req<Profile>("/profiles", { method: "POST", body: JSON.stringify(body) }),
   updateProfile: (id: number, body: ProfileBody) => req<Profile>(`/profiles/${id}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -227,7 +246,7 @@ export const api = {
   setArchived: (id: number, archived: boolean) =>
     req<Experiment>(`/experiments/${id}`, { method: "PATCH", body: JSON.stringify({ archived }) }),
   namedAll: (kind: "media" | "buffers") => req<Named[]>(`/${kind}?include_archived=true`),
-  updateNamed: (kind: "media" | "buffers", id: number, body: { name?: string; description?: string; archived?: boolean }) =>
+  updateNamed: (kind: "media" | "buffers", id: number, body: { name?: string; description?: string; archived?: boolean; molarity?: number | null; equivalents?: number | null }) =>
     req<Named>(`/${kind}/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteNamed: (kind: "media" | "buffers", id: number) => req<{ deleted: number }>(`/${kind}/${id}`, { method: "DELETE" }),
   variablesAll: () => req<Variable[]>("/variables?include_archived=true"),
@@ -238,13 +257,31 @@ export const api = {
   deleteVariable: (id: number) => req<{ deleted: number }>(`/variables/${id}`, { method: "DELETE" }),
   readings: (id: number, sinceH = 0) => req<Readings>(`/experiments/${id}/readings?since_h=${sinceH}`),
   measurements: (id: number) => req<Measurement[]>(`/experiments/${id}/measurements`),
-  addMeasurement: (id: number, body: { variable_id: number; value: number; sampled_at?: string; t_h?: number; unit?: string; note?: string }) =>
+  addMeasurement: (id: number, body: { variable_id: number; value: number; sampled_at?: string; t_h?: number; unit?: string; note?: string; volume_taken_ml?: number | null }) =>
     req<Measurement>(`/experiments/${id}/measurements`, { method: "POST", body: JSON.stringify(body) }),
   variables: () => req<Variable[]>("/variables"),
   events: (id: number) => req<EventItem[]>(`/experiments/${id}/events`),
+  timeline: (id: number) => req<TimelineItem[]>(`/experiments/${id}/timeline`),
+  bioreactors: () => req<Bioreactor[]>("/bioreactors"),
+  createBioreactor: (body: { name?: string; driver?: string; address?: string; interval_s?: number; enabled?: boolean }) =>
+    req<Bioreactor>("/bioreactors", { method: "POST", body: JSON.stringify(body) }),
+  patchBioreactor: (id: string, body: { name?: string; driver?: string; address?: string; interval_s?: number; enabled?: boolean; position?: number; confirm?: boolean }) =>
+    req<Bioreactor>(`/bioreactors/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteBioreactor: (id: string) => req<{ deleted: string }>(`/bioreactors/${id}`, { method: "DELETE" }),
+  testBioreactor: (id: string, body: { driver?: string; address?: string }) =>
+    req<{ ok: boolean; error?: string; values?: Record<string, unknown> }>(`/bioreactors/${id}/test`, { method: "POST", body: JSON.stringify(body) }),
+  reactorHistory: (id: string) => req<ReactorHistory>(`/reactors/${id}/history`),
+  templates: () => req<Template[]>("/templates"),
+  createTemplate: (body: { name: string; description?: string; data?: TemplateData; from_experiment_id?: number }) =>
+    req<Template>("/templates", { method: "POST", body: JSON.stringify(body) }),
+  updateTemplate: (id: number, body: { name?: string; description?: string; data?: TemplateData; archived?: boolean }) =>
+    req<Template>(`/templates/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteTemplate: (id: number) => req<{ deleted: number }>(`/templates/${id}`, { method: "DELETE" }),
   recentEvents: () => req<EventItem[]>("/events/recent"),
   users: (archived = false) => req<UserInfo[]>(`/users${archived ? "?include_archived=true" : ""}`),
-  me: () => req<{ user: UserInfo | null }>("/auth/me"),
+  me: () => req<{ user: UserInfo | null; role?: string; admins_exist?: boolean; client_local?: boolean }>("/auth/me"),
+  firstAdmin: (id: number) => req<UserInfo>(`/users/${id}/first-admin`, { method: "POST" }),
+  setRole: (id: number, role: string) => req<UserInfo>(`/users/${id}/role`, { method: "PUT", body: JSON.stringify({ role }) }),
   login: (user_id: number, pin?: string) => req<{ user: UserInfo; token: string }>("/auth/login", { method: "POST", body: JSON.stringify({ user_id, pin }) }),
   createUser: (name: string, pin?: string) => req<{ user: UserInfo; token: string }>("/users", { method: "POST", body: JSON.stringify({ name, pin: pin || null }) }),
   updateUser: (id: number, body: { name?: string; pin?: string; archived?: boolean }) =>

@@ -272,3 +272,11 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
 - Assigned actuators (both): Stirrer 18 → stirrer loop, Heating 19 → temperature, Alkali 29 → pH
   (below SP), Addition 2 28 → pH (above SP). **Antifoam 30, N2 0 and Air 1 are in no loop**
   (`1.16.3` = 0: the Level loop has no actuator); dO2 drives the stirrer in cascade.
+- Display "Control Settings" (photos, R2 pH, 23 Nov): the four controller types and their fields.
+  **PID** (`1.19` = 0): P, I, D, Dead Band, Cycle Time. **Adaptive** (1): the same plus Settling
+  Time. **External** (2): asks for confirmation because it turns the positive actuators into
+  "Setpoint Out" and the negative ones into "Process Value Out" (the loop no longer doses):
+  **FM2 must never select it** (already excluded: only PID/Adaptive are writable). **Level** (3):
+  Pulse Time, Dead Time, First Action (Pulse Time / Dead Time). Hence R2 dO2 (`1.19.1` = 3) is in
+  Level mode with 30 s pulse/dead time; the stirrer's `1.19.13` = 2 needs checking on the
+  display (the type list may differ for the stirrer).

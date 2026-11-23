@@ -89,4 +89,4 @@ def test_templates_and_channel_params(env):
     t2 = c.put(f"/api/templates/{t['id']}", json={"description": "standard run"}).json()
     assert t2["description"] == "standard run"
     assert [x["name"] for x in c.get("/api/templates").json()] == ["Biomass B2"]
-    assert c.delete(f"/api/templates/{t['id']}").status_code == 204
+    assert c.delete(f"/api/templates/{t['id']}").status_code == 200
