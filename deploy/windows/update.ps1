@@ -59,6 +59,12 @@ Write-Host ("{0} -> {1}, {2} files changed" -f $old.Substring(0, 7), $new.Substr
 $depsChanged = [bool]($changed | Where-Object { $_ -eq "pyproject.toml" })
 $npmChanged = [bool]($changed | Where-Object { $_ -in @("frontend/package.json", "frontend/package-lock.json") })
 $frontChanged = [bool]($changed | Where-Object { $_ -like "frontend/*" }) -or -not (Test-Path "frontend\dist\index.html")
+# also rebuild when the build is older than the last frontend commit (e.g. branch checked out by hand before running this)
+if (-not $frontChanged) {
+  $lastFront = [int](git log -1 --format=%ct -- frontend)
+  $built = [int][double]::Parse((Get-Date (Get-Item "frontend\dist\index.html").LastWriteTimeUtc -UFormat %s))
+  if ($built -lt $lastFront) { $frontChanged = $true }
+}
 
 if ($depsChanged) {
   Step "Python dependencies changed: stopping the service and installing"
