@@ -49,7 +49,7 @@ export function loopList(s: Snapshot | null | undefined, ch?: Channel[] | null) 
 function Tile({ title, sub, aside, onClick }: { title: ReactNode; sub?: ReactNode; aside?: ReactNode; onClick: () => void }) {
   return (
     <button className="m-tile" onClick={onClick}>
-      <span className="stack" style={{ gap: 2, alignItems: "flex-start", minWidth: 0 }}><b>{title}</b>{sub && <span className="xs muted">{sub}</span>}</span>
+      <span className="m-tile-t"><b>{title}</b>{sub && <span className="xs muted">{sub}</span>}</span>
       <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}>{aside}<span className="m-chev">›</span></span>
     </button>
   );
@@ -71,7 +71,7 @@ export function CountersTile({ reactor, s, recording, onDone }: { reactor: strin
     x.antifoam_cumulative_ml != null && `Antifoam ${fmt(x.antifoam_cumulative_ml, 1)}`].filter(Boolean).join(" · ");
   return (
     <ResetCountersButton reactor={reactor} recording={recording} onDone={onDone} trigger={(open) => (
-      <Tile title="Dose counters" sub={parts ? `${parts} mL` : "reset one by one"} onClick={open} />
+      <Tile title="Dose counters" sub={parts ? `${parts} mL` : ""} onClick={open} />
     )} />
   );
 }
@@ -79,7 +79,7 @@ export function CountersTile({ reactor, s, recording, onDone }: { reactor: strin
 export function PumpsTile({ reactor, name }: { reactor: string; name: string }) {
   return (
     <ManualPumpsButton reactor={reactor} name={name} trigger={(open) => (
-      <Tile title="Manual dose" sub="hold to run · Alkali, Addition 2, Antifoam" onClick={open} />
+      <Tile title="Manual dose" sub="hold to run" onClick={open} />
     )} />
   );
 }

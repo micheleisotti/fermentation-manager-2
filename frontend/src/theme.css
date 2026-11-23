@@ -647,3 +647,40 @@ html, body { overscroll-behavior-y: none; overflow-x: clip; }
 }
 .run-chip { white-space: nowrap; flex: 0 0 auto; }
 .p-top .xs.muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- 2.3.1 round 2: white sheets, grey round close, compact phone fermentation ---- */
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  .scrim > .dialog, .scrim.side > .dialog { background: var(--surface); gap: 12px; padding-left: 18px; padding-right: 18px; }
+  .scrim > .dialog h2 { font-size: 18px !important; }
+  .scrim > .dialog .small { font-size: 12.5px; }
+  .phone { gap: 10px; }
+  .phone .chart.p-chart { height: 260px; }
+  .tab-chip { height: 32px; padding: 0 14px; font-size: 13px; }
+  .home-card .hc-title { font-size: 15px; }
+  .vstrip b { font-size: 15px; }
+  .display { font-size: 24px !important; }
+}
+.dialog .btn.icon.text[aria-label="Close"] { width: 36px; height: 36px; min-width: 36px; border-radius: 50%; background: var(--surface-container); padding: 0; }
+.dialog .sp-field, .dialog .row.between { border-bottom: 1px solid var(--divider); }
+.dialog > .row.between:first-child, .dialog .row.between:has(> .btn.icon.text[aria-label="Close"]) { border-bottom: 0; }
+.p-head { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.p-back { width: 44px; height: 44px; border-radius: 50%; background: var(--surface); box-shadow: var(--elev-1); display: flex; align-items: center;
+  justify-content: center; color: var(--ink); flex: 0 0 auto; }
+.p-title { font-size: 16px; font-weight: 600; line-height: 1.25; }
+.p-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-row2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.run-chip.sm { height: 26px; font-size: 12px; padding: 0 10px; }
+.p-pair { display: inline-flex; background: var(--surface-container); border-radius: 14px; padding: 2px; }
+.p-pair button { height: 24px; padding: 0 12px; border: 0; border-radius: 12px; background: none; color: var(--ink-soft); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.p-pair button.on { background: var(--ink); color: #fff; }
+.p-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; gap: 6px; }
+.p-tile { padding: 6px 8px; border-radius: 12px; gap: 0; }
+.p-tile-l { font-size: 10.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-tile-v { font-size: 16px; line-height: 1.3; }
+.p-tile .xs { font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-tile { padding: 8px 14px; border-radius: 14px; min-height: 0; }
+.m-tile-t { display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.m-tile-t .xs { overflow: hidden; text-overflow: ellipsis; }
+.m-tile b { font-size: 14px; }
+.m-chev { font-size: 18px; line-height: 1; }
+.p-big .big-tile, .p-big .btn { min-height: 64px; }

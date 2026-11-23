@@ -83,12 +83,11 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
   if (ch.includes("ph")) tiles.push({ k: "ph", ch: "ph", label: "pH", v: fmt(s?.ph), sub: `set ${fmt(s?.ph_setpoint)}`, bad: out(s?.ph, s?.ph_low_limit, s?.ph_high_limit) });
   if (ch.includes("temperature")) tiles.push({ k: "t", ch: "temperature", label: "T", v: fmt(s?.temperature, 1), unit: "°C", sub: `set ${fmt(s?.temperature_setpoint, 1)}`,
     bad: out(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) });
-  if (ch.includes("stirrer")) tiles.push({ k: "st", ch: "stirrer", label: "Stirrer", v: fmt(s?.stirrer, 0), unit: "rpm", sub: `set ${fmt(s?.stirrer_setpoint, 0)}` });
+  if (ch.includes("stirrer")) tiles.push({ k: "st", ch: "stirrer", label: "Stir", v: fmt(s?.stirrer, 0), unit: "rpm", sub: `set ${fmt(s?.stirrer_setpoint, 0)}` });
   if (ch.includes("do2")) tiles.push({ k: "do2", ch: "do2", label: "dO2", v: fmt(x.do2, 1), unit: "%", sub: `set ${fmt(x.do2_setpoint, 1)}` });
   if (ch.includes("ph")) {
     tiles.push({ k: "base", label: "Base", v: fmt(s?.base_cumulative_ml ?? (bd?.total_ml as number), 1), unit: "mL",
-      sub: bd?.total_mmol != null ? `${fmt(bd.total_mmol as number, 1)} mmol` : "cumulative" });
-    tiles.push({ k: "rate", label: "Base rate", v: fmt(lastBin?.rate_ml_min, 3), sub: "mL/min · 15 min" });
+      sub: `${fmt(lastBin?.rate_ml_min, 3)} mL/min` });
   }
   if (ch.includes("level")) tiles.push({ k: "lvl", label: "Level", v: x.level_contact == null ? "—" : x.level_contact ? "contact" : "no cont." });
 
@@ -106,28 +105,28 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
 
   return (
     <div className="phone">
-      <header className="row p-top" style={{ flexWrap: "nowrap" }}>
-        <Link to="/" className="btn icon text" aria-label="Back to home"><Icon name="back" /></Link>
+      <header className="p-head">
+        <Link to="/" className="p-back" aria-label="Back to home"><Icon name="back" size={20} /></Link>
         <span className="stack" style={{ gap: 0, minWidth: 0, flex: "1 1 auto" }}>
-          <span className="xs muted">{name}{e.parallel_run_code ? ` · Parallel run ${e.parallel_run_code}` : ""} · <span className="mono">{e.code}</span></span>
           <span className="p-title">{e.name}{e.strain && <> · {e.strain}</>}</span>
+          <span className="xs muted p-sub">{name}{e.parallel_run_code ? ` · Parallel run ${e.parallel_run_code}` : ""} · <span className="mono">{e.code}</span></span>
         </span>
-        {running && !preparing && <span className="run-chip ok"><span className="dot ok" />{fmtDuration(r?.experiment?.t_h)}</span>}
-        {preparing && <span className="run-chip prep"><span className="dot prep" />Preparing</span>}
-        {!running && <StatusChip status={e.status} />}
       </header>
-
-      {pair.length > 0 && (
-        <div role="tablist" aria-label="Reactor" className="p-tabs">
-          {pair.map((q) => (
-            <button key={q.id} role="tab" aria-selected={q.id === e.id} className={q.id === e.id ? "on" : ""}
-              onClick={() => q.id !== e.id && nav(`/experiments/${q.id}`, { replace: true })}>
-              <span className="mono">{q.reactor_id}</span> · {q.strain || q.code}
-              {q.id !== e.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="p-row2">
+        {running && !preparing && <span className="run-chip ok sm"><span className="dot ok" />Running · {fmtDuration(r?.experiment?.t_h)}</span>}
+        {preparing && <span className="run-chip prep sm"><span className="dot prep" />Preparing</span>}
+        {!running && <StatusChip status={e.status} />}
+        {pair.length > 0 && (
+          <div role="tablist" aria-label="Parallel run" className="p-pair">
+            {pair.map((q) => (
+              <button key={q.id} role="tab" aria-selected={q.id === e.id} className={q.id === e.id ? "on" : ""}
+                onClick={() => q.id !== e.id && nav(`/experiments/${q.id}`, { replace: true })}>
+                {q.reactor_id}{q.id !== e.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {alert && <div className="banner alert small" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>{alert.title}</span></div>}
       {running && r && !r.online && <div className="banner alert small" role="alert"><Icon name="bell" color="#b30020" size={18} /><span>Controller not responding{r.error ? `: ${r.error}` : ""} · last reading {fmtAge(r.last_reading_age_s)} ago</span></div>}
@@ -135,8 +134,8 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
       <div className="p-tiles">
         {tiles.map((t) => {
           const body = <>
-            <span className="row between xs muted" style={{ flexWrap: "nowrap" }}><span>{t.label}</span>{t.ch && running && <Icon name="sliders" size={12} />}</span>
-            <span className="p-tile-v mono" style={t.bad ? { color: "var(--alert-text)" } : undefined}>{running || t.k === "base" ? t.v : "—"}{t.unit && <small>{t.unit}</small>}</span>
+            <span className="p-tile-l">{t.label}{t.unit ? ` ${t.unit}` : ""}</span>
+            <span className="p-tile-v mono" style={t.bad ? { color: "var(--alert-text)" } : undefined}>{running || t.k === "base" ? t.v : "—"}</span>
             {t.sub && <span className="xs muted">{t.sub}</span>}
           </>;
           return t.ch && running && s
