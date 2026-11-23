@@ -1,7 +1,7 @@
 /** Settings (approved mockup "M3Settings"): bioreactors, remote access, notifications, data and backup, credits. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
-import { api, type AppSettings, type BackupStatus } from "../api";
+import { api, type AppSettings, type BackupStatus, type Bioreactor } from "../api";
 import { usePolling } from "../hooks";
 import { DataValue, Icon } from "../components/ui";
 import { initials, useUser } from "../components/UserGate";
@@ -14,7 +14,7 @@ import { getTheme, setTheme, type Theme } from "../theme";
 // (both are about reaching the lab from outside); appearance last before the credits.
 const SECTIONS = [
   { id: "users", label: "Users" },
-  { id: "bioreactors", label: "Bioreactors" },
+  { id: "bioreactors", label: "Bioreactors & probes" },
   { id: "loops", label: "Loop control" },
   { id: "alerts", label: "Notifications" },
   { id: "remote", label: "Remote access" },
@@ -144,7 +144,14 @@ function UsersSection() {
   };
   return (
     <Section id="users" title="Users"
-      sub="Who is using the software. The signed-in user signs experiments, measurements and setpoint changes. No permission levels: a PIN only stops others from signing with your name.">
+      sub={<>Who is using the software: the signed-in user signs experiments, measurements and commands. Levels: <b>Administrator</b> (everything,
+        including bioreactors, loops, notifications, remote access and users' levels), <b>Operator</b> (plans, runs and commands experiments),
+        <b>Observer</b> (monitoring only). Administrators and operators need a PIN; Guest and users without a PIN are observers.</>}>
+      {!ctx.adminsExist && (
+        <div className="banner warn small" role="note"><Icon name="warn" size={18} color="#8a5a00" />
+          <span><b>No administrator yet: levels are not active</b> and everyone can do everything, as before.
+            {ctx.clientLocal ? " Make yourself the first administrator below (you need a PIN)." : " The first administrator is set on the lab PC."}</span></div>
+      )}
       <div className="row" style={{ gap: 12, alignItems: "center" }}>
         <span className="avatar">{initials(me.name)}</span>
         <span>Signed in as <b>{me.name}</b> on this device{me.has_pin ? " (with PIN)" : ""}.</span>
@@ -166,11 +173,23 @@ function UsersSection() {
       )}
       <div className="table-wrap">
         <table className="data">
-          <thead><tr><th>User</th><th>PIN</th><th>Status</th><th /></tr></thead>
+          <thead><tr><th>User</th><th>PIN</th><th>Level</th><th>Status</th><th /></tr></thead>
           <tbody>{(list.data ?? []).map((u) => (
             <tr key={u.id}>
               <td>{u.name}{u.id === me.id && <span className="muted"> (you)</span>}</td>
               <td>{u.guest ? "—" : u.has_pin ? "yes" : "no"}</td>
+              <td>{u.guest ? "Observer" : ctx.adminsExist && ctx.role === "admin" && u.id !== me.id ? (
+                <select value={u.role ?? "operator"} style={{ height: 32, width: "auto" }} aria-label={`Level of ${u.name}`}
+                  onChange={(e) => run(async () => { await api.setRole(u.id, e.target.value); return `${u.name}: level changed.`; })}>
+                  <option value="admin">Administrator</option><option value="operator">Operator</option><option value="observer">Observer</option>
+                </select>
+              ) : <>{({ admin: "Administrator", operator: "Operator", observer: "Observer" } as Record<string, string>)[u.role ?? "operator"]}
+                  {u.effective_role && u.effective_role !== u.role && ctx.adminsExist && <span className="xs muted"> · acts as {u.effective_role} (no PIN)</span>}</>}
+                {!ctx.adminsExist && ctx.clientLocal && u.id === me.id && !u.guest && (
+                  <button className="btn text small" disabled={!u.has_pin} title={u.has_pin ? "" : "Set a PIN first"}
+                    onClick={() => run(async () => { await api.firstAdmin(u.id); ctx.refresh(); return "You are the first administrator: levels are now active."; })}>
+                    Make me administrator</button>)}
+              </td>
               <td>{u.archived ? "archived" : "active"}</td>
               <td className="num">{!u.guest && (!u.has_pin || u.id === me.id) && u.id !== me.id && (
                 <button className="btn text" onClick={() => run(async () => { await api.updateUser(u.id, { archived: !u.archived }); })}>
@@ -281,32 +300,7 @@ export function SettingsPage() {
 
           <UsersSection />
 
-          <Section id="bioreactors" title="Bioreactors"
-            sub={<>Read from the service configuration (address and driver change with a service restart). Sampling every <span className="mono">{sys.data?.sampling_interval_s ?? "—"} s</span>.</>}>
-            <div className="grid-cards">
-              {(sys.data?.reactors ?? []).map((x) => (
-                <div key={x.reactor_id} className="stack" style={{ border: "1px solid var(--outline-variant)", borderRadius: 12, padding: 16, gap: 10 }}>
-                  <div className="row between">
-                    <span className="row" style={{ gap: 10, fontSize: 16, fontWeight: 500 }}>
-                      <span className="pill mono" style={{ background: "#003366", color: "#fff", borderColor: "transparent", height: 28 }}>{x.reactor_id}</span>
-                      Bioreactor {x.reactor_id}
-                    </span>
-                    <span className="row small" style={{ gap: 6 }}><span className={`dot ${x.online ? "ok" : "bad"}`} />{x.online ? "Online" : "Offline"}</span>
-                  </div>
-                  <span className="small">Driver <b className="mono">{x.driver}</b>{x.address && <> · address <b className="mono">{x.address}</b></>}</span>
-                  <div className="stack" style={{ gap: 4 }}>
-                    {CAPS.map(([k, label]) => (
-                      <span key={k} className="row small" style={{ gap: 8 }}>
-                        <Icon name={x.capabilities[k] ? "check" : "close"} size={16} color={x.capabilities[k] ? "#1f7a63" : "#9a9ca0"} width={2.2} />{label}
-                      </span>
-                    ))}
-                    <span className="row small muted" style={{ gap: 8 }}><Icon name="close" size={16} color="#9a9ca0" width={2.2} />Actuator assignments, calibration, interlocks: controller only (dose counters: reset only)</span>
-                  </div>
-                  {x.address && <a className="btn text" style={{ alignSelf: "flex-start", paddingLeft: 0 }} href={`http://${x.address}`} target="_blank" rel="noreferrer">Open controller web UI</a>}
-                </div>
-              ))}
-            </div>
-          </Section>
+          <BioreactorsSection sampling={sys.data?.sampling_interval_s} />
 
           <Section id="loops" title="Loop control" sub="Which control loops can be started and stopped from this software (Start / Stop selected loops on the fermentation page).">
             {!local && <div className="banner warn small" role="note"><Icon name="warn" size={18} /><span>Read only from this device: this section can be changed only on the lab PC.</span></div>}
@@ -578,5 +572,102 @@ export function SettingsPage() {
         </div>
       </div>
     </>
+  );
+}
+
+
+const DRIVER_OPTS = [{ k: "ez2control", label: "ez2-Control (Applikon)" }, { k: "simulator", label: "Simulator" }];
+const STATUS_TEXT: Record<Bioreactor["status"], string> = { connected: "Connected", simulated: "Simulated", not_reachable: "Not reachable", disabled: "Disabled", starting: "Starting…" };
+
+/** Bioreactors & probes (2.3): name, driver, address and reading interval per bioreactor, applied without restarting the service. */
+function BioreactorsSection({ sampling }: { sampling?: number }) {
+  const ctx = useUser();
+  const list = usePolling(api.bioreactors, 10000);
+  const [edit, setEdit] = useState<Record<string, Partial<Bioreactor>>>({});
+  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [test, setTest] = useState<Record<string, string>>({});
+  const admin = !ctx || ctx.can("admin");
+  const val = <K extends keyof Bioreactor>(b: Bioreactor, k: K) => (edit[b.id]?.[k] ?? b[k]) as Bioreactor[K];
+  const change = (b: Bioreactor, patch: Partial<Bioreactor>) => setEdit({ ...edit, [b.id]: { ...edit[b.id], ...patch } });
+  const save = async (b: Bioreactor, confirm = false) => {
+    setMsg(null);
+    const e = edit[b.id] ?? {};
+    try {
+      await api.patchBioreactor(b.id, { name: e.name, driver: e.driver, address: e.address, interval_s: e.interval_s, enabled: e.enabled, confirm });
+      const { [b.id]: _, ...rest } = edit; setEdit(rest); list.refresh();
+      setMsg({ kind: "good", text: `${val(b, "name")}: saved and applied.` });
+    } catch (x) {
+      const m = (x as Error).message;
+      if (!confirm && /experiment|confirm/i.test(m) && window.confirm(`${m}\n\nApply anyway?`)) return save(b, true);
+      setMsg({ kind: "alert", text: m });
+    }
+  };
+  return (
+    <Section id="bioreactors" title="Bioreactors & probes"
+      sub={<>Each bioreactor: name shown everywhere, controller driver and address, and how often it is read (2–300 s; default 5 s).
+        Changes apply at once, without restarting the service.{!admin && " Only an administrator can change them."}</>}>
+      <div className="grid-cards">
+        {(list.data ?? []).map((b) => {
+          const dirty = !!edit[b.id];
+          return (
+            <fieldset key={b.id} className="plain stack" disabled={!admin}
+              style={{ border: "1px solid var(--outline-variant)", borderRadius: 12, padding: 16, gap: 10 }}>
+              <div className="row between">
+                <span className="row" style={{ gap: 10 }}>
+                  <span className="pill mono" style={{ background: "#003366", color: "#fff", borderColor: "transparent", height: 28 }}>{b.id}</span>
+                  <b>{b.name}</b>
+                </span>
+                <span className="row small" style={{ gap: 6 }} title={b.error ?? ""}>
+                  <span className={`dot ${b.status === "connected" || b.status === "simulated" ? "ok" : b.status === "not_reachable" ? "bad" : "idle"}`} />
+                  {STATUS_TEXT[b.status]}{b.last_reading_age_s != null && b.status !== "disabled" ? ` · ${Math.round(b.last_reading_age_s)} s ago` : ""}</span>
+              </div>
+              <label className="field">Name<input value={val(b, "name")} maxLength={60} onChange={(e) => change(b, { name: e.target.value })} /></label>
+              <div className="row" style={{ alignItems: "flex-start" }}>
+                <label className="field" style={{ flex: "1 1 160px" }}>Driver
+                  <select value={val(b, "driver")} onChange={(e) => change(b, { driver: e.target.value })}>
+                    {DRIVER_OPTS.map((d) => <option key={d.k} value={d.k}>{d.label}</option>)}
+                  </select></label>
+                <label className="field" style={{ flex: "1 1 150px" }}>Address (IP)
+                  <input className="mono" value={val(b, "address")} disabled={val(b, "driver") === "simulator"} placeholder="192.168.1.x"
+                    onChange={(e) => change(b, { address: e.target.value.trim() })} /></label>
+                <label className="field" style={{ flex: "0 1 110px" }}>Read every (s)
+                  <input className="mono" inputMode="decimal" value={String(val(b, "interval_s"))}
+                    onChange={(e) => change(b, { interval_s: Number(e.target.value.replace(",", ".")) || (e.target.value as unknown as number) })} /></label>
+              </div>
+              {(Number(val(b, "interval_s")) < 5 || Number(val(b, "interval_s")) > 60) && (
+                <span className="xs" style={{ color: "var(--data-orange-text)" }}>
+                  {Number(val(b, "interval_s")) < 5 ? "Under 5 s: more load on the controller and a larger database." : "Over 60 s: dosing rates and alerts become coarse."}</span>)}
+              <label className="row small" style={{ gap: 8 }}>
+                <input type="checkbox" checked={val(b, "enabled")} onChange={(e) => change(b, { enabled: e.target.checked })} style={{ width: 18, height: 18 }} />
+                Enabled (read and shown)</label>
+              {b.active_experiment && <span className="xs muted">In use by <span className="mono">{b.active_experiment}</span>: changing driver or address asks for confirmation.</span>}
+              {test[b.id] && <span className="xs">{test[b.id]}</span>}
+              <div className="row" style={{ gap: 8 }}>
+                <button className="btn filled" disabled={!dirty} onClick={() => save(b)}>Save</button>
+                {dirty && <button className="btn text" onClick={() => { const { [b.id]: _, ...rest } = edit; setEdit(rest); }}>Discard</button>}
+                <button className="btn text" onClick={async () => {
+                  setTest({ ...test, [b.id]: "Testing…" });
+                  try { const r = await api.testBioreactor(b.id, { driver: val(b, "driver"), address: val(b, "address") });
+                    setTest({ ...test, [b.id]: r.ok ? "✓ The controller answered." : `✗ ${r.error ?? "No answer"}` }); }
+                  catch (x) { setTest({ ...test, [b.id]: `✗ ${(x as Error).message}` }); }
+                }}>Test connection</button>
+                {b.address && b.driver === "ez2control" && <a className="btn text" href={`http://${b.address}`} target="_blank" rel="noreferrer">Controller web UI</a>}
+                {b.experiments === 0 && <button className="btn text" style={{ color: "#b30020" }} onClick={async () => {
+                  if (!window.confirm(`Remove ${b.name}? It has no experiments.`)) return;
+                  try { await api.deleteBioreactor(b.id); list.refresh(); } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+                }}>Remove</button>}
+              </div>
+            </fieldset>
+          );
+        })}
+      </div>
+      {admin && <button className="btn outlined" style={{ alignSelf: "flex-start" }} onClick={async () => {
+        try { await api.createBioreactor({ driver: "simulator", enabled: false }); list.refresh(); setMsg({ kind: "good", text: "Bioreactor added (disabled): set driver and address, then enable it." }); }
+        catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+      }}><Icon name="plus" size={18} />Add bioreactor</button>}
+      <span className="xs muted">Probes are those of each controller; external probes (other instruments) will appear here as their drivers are added.
+        Actuator assignments, calibration and interlocks stay on the controller's display.{sampling ? ` Default reading interval: ${sampling} s.` : ""}</span>
+      {msg && <div className={`banner ${msg.kind} small`} role="status">{msg.text}</div>}
+    </Section>
   );
 }

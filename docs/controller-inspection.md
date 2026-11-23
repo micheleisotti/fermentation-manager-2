@@ -295,3 +295,16 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
   also stops a prime/manual output (`manualcontrol.js` disables the UI when `2.47` = 1): if so, a pH
   interlock high on the alkali pump would be a controller-side safety net for a stuck manual command.
 - Actuators are assigned to loops on another page of the display (actuator settings), not here.
+
+### Loop configuration (actuator assignment) — `Scripts/windows/loopconfiguration.js` (read 23 Nov)
+- Display: Menu › Configuration › Loop Configuration (photo R2: pH ↑Alkali ↓Addition 2, dO2 ↑Stirrer,
+  Temperature ↑Heating ↓Cooling, Foam none). Web UI collects the edits and sends them on **Accept**:
+  - add on the "above"/positive side: `J3.51.<sensor>s<actuator>`; negative side: `J3.52.<sensor>s<actuator>`
+    (appended at the next free position, max 4 per side);
+  - remove: `J3.53.<sensor>s<actuator>`;
+  - a sensor used as actuator (cascade, e.g. stirrer for dO2) is sent as `actuator + 0x40000000`;
+  - double-sided (polarity) actuators fill both sides at once.
+- Allowed only with an **Engineer** login, loop off (`1.14` = 0) and no feed calibration (`3.58` = 0).
+  Free actuators listed by the UI: `2.21` (available) = 3 and not a TGF carrier.
+- Not written by FM2 yet: planned for 2.3.x (edit assignments / free an actuator such as Addition 2 for
+  an FM2 rule) after a live test, with read-back of `2.7`/`2.8` and an event in the log.
