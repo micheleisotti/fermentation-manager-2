@@ -709,3 +709,9 @@ html, body { overscroll-behavior-y: none; overflow-x: clip; }
 .sq-dots { display: inline-flex; gap: 5px; }
 .sq-dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--outline-variant); display: inline-block; }
 .sq-dots i.on { background: var(--data-green); }
+/* "live" dots: slow fade in and out (Home Live pill, running time chips) */
+.live-pill { gap: 6px; }
+.live-pill .live-dot { background: #4ad0a4; }
+.live-dot, .run-chip.ok .dot { animation: fm2-pulse 1.6s ease-in-out infinite; }
+@keyframes fm2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .2; } }
+@media (prefers-reduced-motion: reduce) { .live-dot, .run-chip.ok .dot { animation: none; } }

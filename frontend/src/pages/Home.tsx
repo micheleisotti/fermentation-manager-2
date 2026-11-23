@@ -195,7 +195,7 @@ export function Home() {
 
       <section className="stack" aria-labelledby="running">
         <div className="row" style={{ gap: 14 }}>
-          <span className="live-pill">Live</span>
+          <span className="live-pill"><span className="dot ok live-dot" />Live</span>
           <h2 id="running" className="display">{[
             running.length ? <span key="r" className="hl">{running.length} running</span> : null,
             idle.length ? <span key="i">{idle.length} idle</span> : null,
