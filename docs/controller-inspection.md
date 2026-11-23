@@ -280,3 +280,8 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
   Pulse Time, Dead Time, First Action (Pulse Time / Dead Time). Hence R2 dO2 (`1.19.1` = 3) is in
   Level mode with 30 s pulse/dead time; the stirrer's `1.19.13` = 2 needs checking on the
   display (the type list may differ for the stirrer).
+- Temperature also offers **TCUSP** (`1.19` = 6): confirmation says it "will clear all above
+  setpoint actuators from the loop". Most likely "Temperature Control Unit SetPoint" (the setpoint
+  is sent to an external thermostat/circulator): inference, not documented. **Never selected by FM2.**
+- Foam/Level sensor (display): only "Sensor Settings": probe type Level/Foam (`5.3.0`) and High/Low
+  sensitivity (`5.3.1`); no control settings are shown while no actuator is assigned to it.
