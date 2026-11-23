@@ -240,3 +240,22 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
 - [x] Decision (Michele, 10 Nov): FM2 may start/stop loops (`1.14`), only those enabled in Settings
       (implemented in PR #23).
 - [ ] Decision (user): whether timed Addition 2 doses driven by FM2 are wanted (outside the driver's rules).
+
+### Manual output and prime (23 Nov 2026, R1 192.0.2.41, scripts/ez2_manual_test.py)
+- Web UI (`Scripts/windows/manualcontrol.js`): on/off actuators (`2.6` = 1) get a "Start/Stop
+  Actuator" toggle writing `2.20.<a>` 1/0; analogue ones (`2.6` = 0) a number 0…factor. "Click &
+  Hold To Prime" writes `2.46.<a>` = 1 on press and 0 on release. The UI requires Operator and
+  disables both while the assigned loop is on (`1.14.<2.7>`), during feed calibration or interlock.
+- Alkali (29): `2.6` = 1, 4.80 mL/min. `2.46.29` 1/0 and `2.20.29` 1/0 both work with an
+  **Operator (level 1)** login; `2.20` written as 1 reads back 4.80 (full output).
+  Pump on within ~0.4 s, off within ~0.25 s. **The dose counter counts prime and manual**
+  (+0.17 mL in 2.1 s), still catching up ~1 s after the stop.
+- **No controller-side stop**: prime left at 1 ran ~41 s, after FM2's logout and with the
+  WebSocket closed, until `2.46` = 0 was written. Same for `2.20`.
+- **The controller does NOT enforce the loop interlock**: with the pH loop on (`1.14.0` = 1,
+  `2.19.29` = 1) `2.46.29` = 1 was accepted and the alkali pump ran 2 s (acid probably running at
+  the same time). Only the web UI blocks it: FM2 must check `1.14.<assigned sensor>`, `2.47` and
+  `2.19` itself before any manual/prime write.
+- Login refused while someone is logged in on the display: the login write answers `0.11` =
+  `-5|0|`. Reading `0.11` before trying shows only this connection's state (`0|-1|`), not the
+  display's: the refusal code is the only signal.
