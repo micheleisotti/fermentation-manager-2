@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { StatusDots } from "./Mobile";
 import { api, type EventItem, type LiveReactor } from "../api";
 import { usePolling } from "../hooks";
 import { Icon } from "./ui";
@@ -91,7 +92,8 @@ function NotificationPanel({ list, seen, onClose, onRead }: { list: EventItem[];
       </div>
       {list.length === 0 ? <div className="small muted" style={{ padding: "8px 16px 16px" }}>No notifications.</div> : (
         <div className="notif-list">
-          {list.slice(0, 40).map((e) => (
+          {[...list.filter((e) => e.severity === "alert" && e.at > seen), ...list.filter((e) => !(e.severity === "alert" && e.at > seen)).slice(0, 6)]
+            .sort((a, b) => b.at.localeCompare(a.at)).map((e) => (
             <Link key={e.id} className={`notif ${e.severity} ${e.at > seen && e.severity === "alert" ? "unread" : ""}`}
               to={e.experiment_id ? `/experiments/${e.experiment_id}` : `/reactors/${e.reactor_id}`} onClick={onClose}>
               <Icon name={e.severity === "alert" ? "warn" : e.severity === "good" ? "check" : "info"} size={18}
@@ -102,6 +104,7 @@ function NotificationPanel({ list, seen, onClose, onRead }: { list: EventItem[];
               </span>
             </Link>
           ))}
+          <span className="xs muted" style={{ padding: "10px 16px" }}>Older notifications are in the Events of each fermentation and controller.</span>
         </div>
       )}
     </div>
@@ -198,6 +201,8 @@ function ServerStatus() {
 }
 
 export function Shell({ children }: { children: ReactNode }) {
+  const loc = useLocation();
+  const hideTop = /^\/experiments\/\d+/.test(loc.pathname);   // the phone fermentation page has its own header
   const live = usePolling(api.live, 10000);
   const notif = useNotifications();
   const [panel, setPanel] = useState(false);
@@ -239,10 +244,18 @@ export function Shell({ children }: { children: ReactNode }) {
       </nav>
 
       <main className="main">
-        <div className="topbar">
-          <Link to="/" aria-label="Home"><Wordmark height={20} /></Link>
+        {!hideTop && <div className="topbar">
+          <Link to="/" aria-label="Home" className="side-icon small"><img src={bioreactor} alt="" aria-hidden="true" /></Link>
+          <span className="tb-mid">
+            <span className="side-name wordmark-2 tb-name">
+              <img className="wm-dark" src={wordmark} alt="Fermentation manager 2" style={{ height: 15 }} />
+              <img className="wm-light" src={wordmarkLight} alt="" aria-hidden="true" style={{ height: 15 }} />
+            </span>
+            <StatusDots live={live.data?.filter((x) => x.reactor_id)} />
+          </span>
           <BellButton n={notif.unread} onClick={openPanel} label={false} />
-        </div>
+          <span className="tb-user"><UserButton /></span>
+        </div>}
         <ConnectionBanner />
         {children}
       </main>

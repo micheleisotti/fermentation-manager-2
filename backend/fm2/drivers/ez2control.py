@@ -80,6 +80,8 @@ READ_MAP: dict[str, str] = {
     "do2_setpoint":             f"1.13.{DO2}",
     "do2_high_limit":           f"1.4.{DO2}",
     "do2_low_limit":            f"1.5.{DO2}",
+    "stirrer_high_limit":       f"1.4.{STIRRER}",
+    "stirrer_low_limit":        f"1.5.{STIRRER}",
     "heating_out":              f"2.12.{HEATING}",
     "heating_factor":           f"2.4.{HEATING}",
     "cooling_out":              f"2.12.{COOLING}",
@@ -284,6 +286,7 @@ def snapshot_from_values(values: dict[str, str], ts: datetime) -> ControllerSnap
     extra = {
         "do2": f("do2"), "do2_setpoint": f("do2_setpoint"),
         "do2_low_limit": f("do2_low_limit"), "do2_high_limit": f("do2_high_limit"),
+        "stirrer_low_limit": f("stirrer_low_limit"), "stirrer_high_limit": f("stirrer_high_limit"),
         "heating_pct": pct("heating_out", "heating_factor"), "cooling_pct": pct("cooling_out", "cooling_factor"),
         "stirrer_out_rpm": f("stirrer_out_rpm"),
         "n2_pct": pct("n2_out", "n2_factor"), "air_pct": pct("air_out", "air_factor"),

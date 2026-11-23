@@ -576,3 +576,74 @@ html[data-theme="dark"] .wordmark-2 .wm-light, html[data-theme="dim"] .wordmark-
 .btn.hold-on { background: var(--data-green-dark) !important; color: #fff !important; }
 .loop-card.absent { background: var(--surface-container); color: var(--ink-soft); box-shadow: none; border: 1px dashed var(--outline-variant); }
 .as-btn { border: 0; text-align: left; font: inherit; cursor: pointer; }
+
+/* ---- 2.3.1: phone layout (mobile prototype) ---- */
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  /* every panel that opens from the right on wide screens opens from the bottom here */
+  .scrim.side, .scrim { justify-content: center; align-items: flex-end; }
+  .scrim.side > .dialog, .scrim > .dialog { width: 100% !important; max-width: 100%; max-height: 88vh; height: auto; overflow-y: auto;
+    border-radius: 24px 24px 0 0; animation: fm2-up .22s cubic-bezier(.2, .8, .2, 1); padding-top: 28px; position: relative;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+  .scrim.side > .dialog::before, .scrim > .dialog::before { content: ""; position: absolute; top: 10px; left: 50%; width: 40px; height: 4px;
+    margin-left: -20px; border-radius: 2px; background: var(--outline-variant); }
+  .notif-panel { top: auto !important; left: 0 !important; right: 0 !important; bottom: 0 !important; width: 100%; max-height: 80vh;
+    border-radius: 24px 24px 0 0; animation: fm2-up .22s cubic-bezier(.2, .8, .2, 1); }
+  .topbar { display: flex; align-items: center; gap: 10px; margin: -6px 0 2px; }
+  .tb-mid { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .home-card .chart.mini, .home-card .mini-select { display: none; }
+  .home-card { gap: 10px; padding: 14px 16px; }
+  .home-status { display: none; }
+}
+@keyframes fm2-up { from { transform: translateY(60px); opacity: .5; } to { transform: none; opacity: 1; } }
+.side-icon.small { width: 40px; height: 40px; border-radius: 12px; flex: 0 0 auto; }
+.side-icon.small img { height: 30px; }
+.tb-name img { width: auto; max-width: 100%; }
+.status-dots { display: inline-flex; gap: 6px; border: 0; background: none; padding: 2px 0; cursor: pointer; align-self: flex-start; }
+.status-dots .dot { width: 9px; height: 9px; }
+.vcell { border: 0; background: none; font: inherit; color: inherit; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 8px 4px; border-left: 1px solid var(--outline-variant); cursor: pointer; }
+.vstrip > .vcell:first-child { border-left: 0; }
+.m-tile { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--outline-variant); border-radius: 16px; padding: 12px 14px; font: inherit; text-align: left; cursor: pointer; }
+.m-chev { font-size: 20px; color: var(--ink-soft); }
+.loop-names { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.loop-names i { font-style: normal; font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--neutral-chip); color: var(--ink-soft); }
+.loop-names i.on { background: var(--good-container); color: var(--data-green-dark); font-weight: 600; }
+.sp-field { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--divider); }
+.stepper { display: flex; align-items: center; gap: 10px; }
+.stepper button { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--surface-container); color: var(--ink); font-size: 20px; font-weight: 700; cursor: pointer; }
+.stepper button:disabled { opacity: .4; }
+.stepper b { font-size: 18px; min-width: 70px; text-align: center; }
+.p-title { font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.p-tile { display: flex; flex-direction: column; gap: 2px; background: var(--surface); color: var(--ink); border: 0; border-radius: 14px; padding: 10px 12px;
+  box-shadow: var(--elev-1); text-align: left; font: inherit; min-width: 0; }
+button.p-tile { cursor: pointer; }
+.p-tile-v { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-tile-v small { font-size: 11px; font-weight: 400; margin-left: 2px; color: var(--ink-soft); }
+.p-big { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.big-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 84px; border-radius: 18px;
+  background: var(--primary-container); color: var(--on-primary-container); border: 0; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.big-tile.end { background: var(--surface); color: var(--alert-text); border: 1.5px solid var(--alert-text); }
+.p-big .btn { min-height: 84px; border-radius: 18px; }
+
+/* Android Chrome: no stretch/bounce overscroll (it moved and shrank the page and hid the bottom bar), no sideways scroll,
+   heights follow the visible viewport when the address bar hides */
+html, body { overscroll-behavior-y: none; overflow-x: clip; }
+@supports (height: 100dvh) {
+  .app, .signin { min-height: 100dvh; }
+  .rail, .sidebar { height: 100dvh; }
+}
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  .rail { height: auto !important; transform: translateZ(0); }
+  .main { padding-bottom: calc(96px + env(safe-area-inset-bottom)); max-width: 100vw; }
+  .p-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  .tb-user .user-btn-wrap { display: flex; margin-top: 0; }
+  .tb-user .user-btn-name { display: none; }
+  .tb-user .user-menu { left: auto; right: 0; top: 48px; bottom: auto; }
+  .hc-since { display: none; }
+}
+.run-chip { white-space: nowrap; flex: 0 0 auto; }
+.p-top .xs.muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

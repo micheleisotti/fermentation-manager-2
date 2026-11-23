@@ -51,7 +51,7 @@ export interface Snapshot {
   ph_low_limit: number | null; ph_high_limit: number | null;
   temperature_low_limit: number | null; temperature_high_limit: number | null;
   extra?: Partial<Record<"do2" | "do2_setpoint" | "do2_low_limit" | "do2_high_limit" | "heating_pct" | "cooling_pct" |
-    "stirrer_out_rpm" | "n2_pct" | "air_pct" | "acid_cumulative_ml" | "acid_pump_pct" | "level_contact" |
+    "stirrer_out_rpm" | "stirrer_low_limit" | "stirrer_high_limit" | "n2_pct" | "air_pct" | "acid_cumulative_ml" | "acid_pump_pct" | "level_contact" |
     "antifoam_cumulative_ml" | "antifoam_pct" | "redox_mv", number>>;
 }
 

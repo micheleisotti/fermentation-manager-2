@@ -2,10 +2,11 @@ import { useMemo, useState, type ReactElement } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Channel, type EventItem, type LiveReactor, type Snapshot } from "../api";
 import { ExperimentTable } from "./ExperimentsList";
-import { usePolling, fmt, fmtDuration, fmtAge } from "../hooks";
+import { usePolling, fmt, fmtDuration, fmtAge, PHONE_QUERY, useMediaQuery } from "../hooks";
 import { phAndRateOption, trendsOption, varsFor } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
 import { reactorName } from "../components/Shell";
+import { ReactorPreview, ValuePill } from "../components/Mobile";
 
 const outOf = (v: number | null | undefined, lo: number | null | undefined, hi: number | null | undefined) =>
   v != null && lo != null && hi != null && (v < lo || v > hi);
@@ -75,11 +76,12 @@ function ValueStrip({ s, ch }: { s: Snapshot | null | undefined; ch: Channel[] |
 }
 
 /** A reactor with no experiment recording: live values only, nothing is stored. */
-function IdleCard({ r }: { r: LiveReactor }) {
+function IdleCard({ r, onPreview }: { r: LiveReactor; onPreview?: () => void }) {
   const nav = useNavigate();
+  const go = onPreview ?? (() => nav(`/reactors/${r.reactor_id}`));
   return (
-    <div className={`card home-card ${r.online ? "" : "offline"}`} role="link" tabIndex={0} onClick={() => nav(`/reactors/${r.reactor_id}`)}
-      onKeyDown={(e) => { if (e.key === "Enter") nav(`/reactors/${r.reactor_id}`); }}>
+    <div className={`card home-card ${r.online ? "" : "offline"}`} role="link" tabIndex={0} onClick={go}
+      onKeyDown={(e) => { if (e.key === "Enter") go(); }}>
       <div className="row between" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
         <div className="stack" style={{ gap: 0 }}>
           <span className="xs muted">{reactorName(r)}</span>
@@ -87,7 +89,7 @@ function IdleCard({ r }: { r: LiveReactor }) {
         </div>
         <span className={`run-chip ${r.online ? "" : "bad"}`}><span className={`dot ${r.online ? "idle" : "bad"}`} />{r.online ? "Idle" : "Offline"}</span>
       </div>
-      {r.online ? <ValueStrip s={r.snapshot} ch={null} />
+      {r.online ? <ValuePill s={r.snapshot} ch={null} />
         : <span className="small muted">{r.error ? `${r.error} · ` : ""}check cable or power, or disable it in Settings › Bioreactors & probes</span>}
       <div className="row between xs muted">
         <span>{r.online ? "No experiment · open to monitor or plan" : ""}</span>
@@ -97,7 +99,7 @@ function IdleCard({ r }: { r: LiveReactor }) {
   );
 }
 
-function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
+function RunningCard({ r, events, onPreview }: { r: LiveReactor; events: EventItem[]; onPreview?: () => void }) {
   const nav = useNavigate();
   const exp = r.experiment!;
   const s = r.snapshot;
@@ -117,7 +119,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
   }, [readings.data, analysis.data, preview, ch.join()]);
   const alert = events.find((e) => e.experiment_id === exp.id && e.severity === "alert" &&
     Date.now() - new Date(e.at).getTime() < 30 * 60 * 1000);
-  const go = () => nav(`/experiments/${exp.id}`);
+  const go = onPreview ?? (() => nav(`/experiments/${exp.id}`));
   return (
     <div className="card home-card" role="link" tabIndex={0} onClick={go} onKeyDown={(e) => { if (e.key === "Enter") go(); }}>
       <div className="row between" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
@@ -129,14 +131,14 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
           ? <span className="run-chip prep"><span className="dot prep" />Preparing</span>
           : <span className="run-chip ok"><span className="dot ok" />{fmtDuration(exp.t_h)}</span>}
       </div>
-      <ValueStrip s={s} ch={ch} />
+      <ValuePill s={s} ch={ch} />
       <EChart option={option} className="chart mini" ariaLabel={`${r.reactor_id}: ${choices.find((c) => c.key === preview)?.label ?? ""} since start`} />
       <div className="row between xs muted" onClick={(e) => e.stopPropagation()}>
         <span className="row" style={{ gap: 6 }}>
           <select aria-label="Preview chart" value={preview} className="mini-select"
             onChange={(x) => { setPreview(x.target.value); savePreview(r.reactor_id, x.target.value); }}>
             {choices.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-          </select>· since start
+          </select><span className="hc-since">· since start</span>
           {alert && <span className="warn-chip"><Icon name="warn" size={13} color="#8a5a00" />{alert.message}</span>}
         </span>
         <span>{fmtAge(r.last_reading_age_s)} ago</span>
@@ -150,6 +152,9 @@ const fmtUptime = (s: number) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 8
 
 export function Home() {
   const live = usePolling(api.live, 10000);
+  const phone = useMediaQuery(PHONE_QUERY);
+  const [preview, setPreview] = useState<string | null>(null);
+  const pr = live.data?.find((x) => x.reactor_id === preview);
   const sys = usePolling(api.systemStatus, 30000);
   const exps = usePolling(() => api.experiments(), 30000);
   const events = usePolling(api.recentEvents, 20000);
@@ -202,8 +207,8 @@ export function Home() {
         ) : (
           <div className="grid-cards">
             {reactors.map((r) => r.experiment
-              ? <RunningCard key={r.reactor_id} r={r} events={events.data ?? []} />
-              : <IdleCard key={r.reactor_id} r={r} />)}
+              ? <RunningCard key={r.reactor_id} r={r} events={events.data ?? []} onPreview={phone ? () => setPreview(r.reactor_id) : undefined} />
+              : <IdleCard key={r.reactor_id} r={r} onPreview={phone ? () => setPreview(r.reactor_id) : undefined} />)}
           </div>
         )}
         {running.length === 0 && reactors.length > 0 &&
@@ -217,6 +222,7 @@ export function Home() {
         </div>
         <ExperimentTable list={last} empty="No experiments yet: plan one with New → Experiment." />
       </section>
+      {pr && <ReactorPreview r={pr} onClose={() => setPreview(null)} />}
     </>
   );
 }

@@ -1,5 +1,15 @@
 /** Short changelog shown in Settings › Credits (newest first). Keep each line short. */
 export const CHANGELOG: { version: string; date: string; items: string[] }[] = [
+  { version: "2.3.1", date: "2026-11", items: [
+    "Phone layout as in the mobile prototype: header with icon, name and status dots (tap for details), bell and account",
+    "Home on phones: compact tiles with the value pill (base mL with pH); tap opens the preview from the bottom",
+    "Preview: values, compact chart, loops, Setpoints and Open",
+    "Setpoint sheet: channel tabs, setpoint and limits with − / + (dO2 and stirrer limits too)",
+    "Fermentation on phones: value tiles (tap to edit), tabs, full chart, Loops / Dose counters / Manual dose, Analysis and End",
+    "All panels open from the bottom on phones",
+    "Notifications: all unread plus the last 6 read; the full list is in each fermentation's and controller's Events",
+    "Android: no stretch overscroll, no sideways scroll, bottom bar stays in place",
+  ] },
   { version: "2.3.0", date: "2026-11", items: [
     "New logo; side column with navigation, bioreactors, notifications and account on wide screens",
     "Notification centre; phones keep the bottom bar with logo and bell on top",
