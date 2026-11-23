@@ -94,7 +94,11 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
   const items = timeline.data ?? [];
   const alert = items.find((i) => i.category === "alert" && Date.now() - new Date(i.at).getTime() < 30 * 60 * 1000);
   const partnerAlert = partner ? (partnerEvents.data ?? []).find((i) => i.severity === "alert" && Date.now() - new Date(i.at).getTime() < 30 * 60 * 1000) : undefined;
-  const pair = partner ? [e, partner].sort((a, b) => a.reactor_id.localeCompare(b.reactor_id)) : [];
+  // every bioreactor in the same parallel run (2 or more), by bioreactor name
+  const group = e.parallel_run_code
+    ? (live.data ?? []).filter((q) => q.experiment && (q.experiment.id === e.id || (q.experiment.parallel_run && q.experiment.parallel_run === e.parallel_run_code)))
+        .map((q) => ({ id: q.experiment!.id, name: q.name || q.reactor_id, rid: q.reactor_id })).sort((a, b) => a.rid.localeCompare(b.rid))
+    : [];
   const spChannels = ch.filter((c) => ["ph", "temperature", "stirrer", "do2"].includes(c));
   const tabs = [["trends", "Trends"], ...(ch.includes("ph") ? [["buffering", "Buffering"]] : []), ["events", "Events"], ["sampling", "Sampling"]] as [typeof tab, string][];
 
@@ -113,15 +117,15 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
         </span>
       </header>
       <div className="p-row2">
-        {running && !preparing && <span className="run-chip ok sm"><span className="dot ok" />Running · {fmtDuration(r?.experiment?.t_h)}</span>}
+        {running && !preparing && <span className="run-chip ok sm" title="Recording"><span className="dot ok" />{fmtDuration(r?.experiment?.t_h)}</span>}
         {preparing && <span className="run-chip prep sm"><span className="dot prep" />Preparing</span>}
         {!running && <StatusChip status={e.status} />}
-        {pair.length > 0 && (
+        {group.length > 1 && (
           <div role="tablist" aria-label="Parallel run" className="p-pair">
-            {pair.map((q) => (
+            {group.map((q) => (
               <button key={q.id} role="tab" aria-selected={q.id === e.id} className={q.id === e.id ? "on" : ""}
                 onClick={() => q.id !== e.id && nav(`/experiments/${q.id}`, { replace: true })}>
-                {q.reactor_id} · {q.strain || q.code}{q.id !== e.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
+                {q.name}{q.id !== e.id && q.id === partner?.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
               </button>
             ))}
           </div>
@@ -173,11 +177,11 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
       {tab === "sampling" && <section className="card tight">{running ? <PhoneMeasurement e={e} startedAt={e.started_at} />
         : <span className="small muted">The experiment has ended: add samplings from the desktop page.</span>}</section>}
 
-      {running && <>
-        <LoopsTile reactor={e.reactor_id} s={r?.snapshot} ch={ch} />
-        <CountersTile reactor={e.reactor_id} s={r?.snapshot} recording={!preparing} onDone={() => readings.refresh()} />
-        <PumpsTile reactor={e.reactor_id} name={name} />
-      </>}
+      {running && <div className="p-three">
+        <LoopsTile reactor={e.reactor_id} s={r?.snapshot} ch={ch} square />
+        <CountersTile reactor={e.reactor_id} s={r?.snapshot} recording={!preparing} onDone={() => readings.refresh()} square />
+        <PumpsTile reactor={e.reactor_id} name={name} square />
+      </div>}
       <div className="p-big">
         <Link className="big-tile" to={`/analysis/experiments/${e.id}`}><Icon name="chart" size={22} />Analysis</Link>
         {preparing && <StartExperimentButton e={e} onDone={onChange ?? (() => undefined)} compact />}

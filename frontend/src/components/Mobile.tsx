@@ -55,30 +55,44 @@ function Tile({ title, sub, aside, onClick }: { title: ReactNode; sub?: ReactNod
   );
 }
 
-export function LoopsTile({ reactor, s, ch }: { reactor: string; s: Snapshot | null | undefined; ch?: Channel[] | null }) {
+function SquareTile({ title, children, onClick }: { title: string; children?: ReactNode; onClick: () => void }) {
+  return <button className="sq-tile" onClick={onClick}><b>{title}</b>{children}</button>;
+}
+
+export function LoopsTile({ reactor, s, ch, square = false }: { reactor: string; s: Snapshot | null | undefined; ch?: Channel[] | null; square?: boolean }) {
   const loops = loopList(s, ch);
   return (
-    <LoopsButton reactor={reactor} channels={ch ?? undefined} trigger={(open) => (
+    <LoopsButton reactor={reactor} channels={ch ?? undefined} trigger={(open) => square ? (
+      <SquareTile title="Loops" onClick={open}>
+        <span className="sq-dots" aria-label={`${loops.filter((l) => l.on).length} of ${loops.length} loops on`}>
+          {loops.map((l) => <i key={l.k} className={l.on ? "on" : ""} title={`${l.name} ${l.on ? "on" : "off"}`} />)}
+        </span>
+      </SquareTile>
+    ) : (
       <Tile title="Loops" sub={`${loops.filter((l) => l.on).length} on`} onClick={open}
         aside={<span className="loop-names">{loops.map((l) => <i key={l.k} className={l.on ? "on" : ""}>{l.name}</i>)}</span>} />
     )} />
   );
 }
 
-export function CountersTile({ reactor, s, recording, onDone }: { reactor: string; s: Snapshot | null | undefined; recording: boolean; onDone?: () => void }) {
+export function CountersTile({ reactor, s, recording, onDone, square = false }: { reactor: string; s: Snapshot | null | undefined; recording: boolean; onDone?: () => void; square?: boolean }) {
   const x = (s?.extra ?? {}) as Record<string, number | undefined>;
   const parts = [s?.base_cumulative_ml != null && `Alkali ${fmt(s.base_cumulative_ml, 1)}`, x.acid_cumulative_ml != null && `Add. 2 ${fmt(x.acid_cumulative_ml, 1)}`,
     x.antifoam_cumulative_ml != null && `Antifoam ${fmt(x.antifoam_cumulative_ml, 1)}`].filter(Boolean).join(" · ");
   return (
-    <ResetCountersButton reactor={reactor} recording={recording} onDone={onDone} trigger={(open) => (
+    <ResetCountersButton reactor={reactor} recording={recording} onDone={onDone} trigger={(open) => square ? (
+      <SquareTile title="Dose counters" onClick={open}><span className="xs muted">reset</span></SquareTile>
+    ) : (
       <Tile title="Dose counters" sub={parts ? `${parts} mL` : ""} onClick={open} />
     )} />
   );
 }
 
-export function PumpsTile({ reactor, name }: { reactor: string; name: string }) {
+export function PumpsTile({ reactor, name, square = false }: { reactor: string; name: string; square?: boolean }) {
   return (
-    <ManualPumpsButton reactor={reactor} name={name} trigger={(open) => (
+    <ManualPumpsButton reactor={reactor} name={name} trigger={(open) => square ? (
+      <SquareTile title="Manual dose" onClick={open}><span className="xs muted">hold to run</span></SquareTile>
+    ) : (
       <Tile title="Manual dose" sub="hold to run" onClick={open} />
     )} />
   );
