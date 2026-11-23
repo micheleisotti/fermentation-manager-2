@@ -83,12 +83,12 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
   if (ch.includes("ph")) tiles.push({ k: "ph", ch: "ph", label: "pH", v: fmt(s?.ph), sub: `set ${fmt(s?.ph_setpoint)}`, bad: out(s?.ph, s?.ph_low_limit, s?.ph_high_limit) });
   if (ch.includes("temperature")) tiles.push({ k: "t", ch: "temperature", label: "T", v: fmt(s?.temperature, 1), unit: "°C", sub: `set ${fmt(s?.temperature_setpoint, 1)}`,
     bad: out(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) });
-  if (ch.includes("stirrer")) tiles.push({ k: "st", ch: "stirrer", label: "Stir", v: fmt(s?.stirrer, 0), unit: "rpm", sub: `set ${fmt(s?.stirrer_setpoint, 0)}` });
+  if (ch.includes("stirrer")) tiles.push({ k: "st", ch: "stirrer", label: "Stirrer", v: fmt(s?.stirrer, 0), unit: "rpm", sub: `set ${fmt(s?.stirrer_setpoint, 0)}` });
   if (ch.includes("do2")) tiles.push({ k: "do2", ch: "do2", label: "dO2", v: fmt(x.do2, 1), unit: "%", sub: `set ${fmt(x.do2_setpoint, 1)}` });
   if (ch.includes("ph")) {
-    tiles.push({ k: "base", label: "Base", v: fmt(s?.base_cumulative_ml ?? (bd?.total_ml as number), 1), unit: "mL",
-      sub: `${fmt(lastBin?.rate_ml_min, 3)} mL/min` });
+    tiles.push({ k: "base", label: "Base", v: fmt(s?.base_cumulative_ml ?? (bd?.total_ml as number), 1), sub: "mL" });
   }
+  if (ch.includes("redox")) tiles.push({ k: "rdx", label: "Redox", v: fmt(x.redox_mv, 0), unit: "mV" });
   if (ch.includes("level")) tiles.push({ k: "lvl", label: "Level", v: x.level_contact == null ? "—" : x.level_contact ? "contact" : "no cont." });
 
   const items = timeline.data ?? [];
@@ -108,8 +108,8 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
       <header className="p-head">
         <Link to="/" className="p-back" aria-label="Back to home"><Icon name="back" size={20} /></Link>
         <span className="stack" style={{ gap: 0, minWidth: 0, flex: "1 1 auto" }}>
-          <span className="p-title">{e.name}{e.strain && <> · {e.strain}</>}</span>
-          <span className="xs muted p-sub">{name}{e.parallel_run_code ? ` · Parallel run ${e.parallel_run_code}` : ""} · <span className="mono">{e.code}</span></span>
+          <span className="p-sub mono">{e.parallel_run_code ? `Parallel run ${e.parallel_run_code}` : name}</span>
+          <span className="p-title">{e.name}{e.strain && <> · {e.strain}</>} <span className="p-code mono">{e.code}</span></span>
         </span>
       </header>
       <div className="p-row2">
@@ -121,7 +121,7 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
             {pair.map((q) => (
               <button key={q.id} role="tab" aria-selected={q.id === e.id} className={q.id === e.id ? "on" : ""}
                 onClick={() => q.id !== e.id && nav(`/experiments/${q.id}`, { replace: true })}>
-                {q.reactor_id}{q.id !== e.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
+                {q.reactor_id} · {q.strain || q.code}{q.id !== e.id && partnerAlert && <span className="dot bad" aria-label="Alert" style={{ marginLeft: 4 }} />}
               </button>
             ))}
           </div>
@@ -134,9 +134,9 @@ export function PhoneFermentation({ e, partner, onChange }: { e: Experiment; par
       <div className="p-tiles">
         {tiles.map((t) => {
           const body = <>
-            <span className="p-tile-l">{t.label}{t.unit ? ` ${t.unit}` : ""}</span>
-            <span className="p-tile-v mono" style={t.bad ? { color: "var(--alert-text)" } : undefined}>{running || t.k === "base" ? t.v : "—"}</span>
-            {t.sub && <span className="xs muted">{t.sub}</span>}
+            <span className="p-tile-top"><span className="p-tile-l">{t.label}</span>
+              <span className="p-tile-v mono" style={t.bad ? { color: "var(--alert-text)" } : undefined}>{running || t.k === "base" ? t.v : "—"}</span></span>
+            <span className="p-tile-s mono">{t.sub}{t.unit && t.sub?.startsWith("set") ? ` ${t.unit}` : ""}{!t.sub && t.unit ? t.unit : ""}</span>
           </>;
           return t.ch && running && s
             ? <button key={t.k} className="p-tile" onClick={() => setSp(t.ch!)} aria-label={`${t.label}: setpoint and limits`}>{body}</button>
