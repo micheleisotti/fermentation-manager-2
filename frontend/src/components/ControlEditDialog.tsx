@@ -55,7 +55,7 @@ export function ControlEditDialog({ reactor, parameter, snapshot, remote, onClos
   const what = (p: string) => (p.endsWith("low_limit") ? "Low limit" : p.endsWith("high_limit") ? "High limit" : "Target");
 
   return (
-    <div className="scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(!!results); }}>
+    <div className="scrim side" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(!!results); }}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="ce-title">
         <h2 id="ce-title">{m.label} · <span className="mono">{reactor}</span></h2>
         {!results ? (

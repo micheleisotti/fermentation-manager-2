@@ -68,7 +68,12 @@ class SimulatedController(ControllerDriver):
             LoopInfo("level", 3, "Foam", 4, False, "level", "NO CONT", 0.0, False, (),
                      probe="Foam probe, sensitivity High"),
             LoopInfo("redox", 32, "Redox", 1, False, "pid", "0.000", 0.0, False, ()),
-        ), unassigned_pumps=(LoopActuator(30, "Antifoam", 0, pump=True, calibrated=False, dose_monitoring=True, unit="%"),))
+        ), unassigned_pumps=(LoopActuator(30, "Antifoam", 0, pump=True, calibrated=False, dose_monitoring=True, unit="%"),),
+            free_outputs=(LoopActuator(0, "N2 Valve", 0, unit="%"), LoopActuator(1, "Air Valve", 0, unit="%"),
+                          LoopActuator(30, "Antifoam", 0, pump=True, calibrated=False, dose_monitoring=True, unit="%")),
+            not_installed=(("output", 2, "O2 Valve"), ("output", 3, "CO2 Valve"), ("output", 5, "AnalogOut 1"),
+                           ("output", 38, "N2 MFC"), ("input", 5, "Analog In 1"), ("input", 23, "DigitalIn 1")))
+        self.prime_on: dict[int, bool] = {}
         self.reset()
 
     # -- simulation control -------------------------------------------------------
@@ -106,6 +111,8 @@ class SimulatedController(ControllerDriver):
         self._x += dx
         # acid production lowers pH (growth-associated + small maintenance term)
         self._ph -= (0.9 * dx + 0.002 * self._x * h) * 0.6
+        if self.prime_on.get(29):          # manual prime of the alkali pump: 4.8 mL/min
+            self._base_ml += 4.8 * 60 * h
         ph_sp = self.sp["ph"]
         if self._ph < ph_sp - 0.01:
             self._base_ml += self.dose_ml
@@ -192,6 +199,52 @@ class SimulatedController(ControllerDriver):
         with self._lock:
             self._advance()
             setattr(self, attr, 0.0)
+
+    def manual_state(self, pump_id: int):
+        from .base import ManualState
+        names = {29: "Alkali", 28: "Addition 2", 30: "Antifoam"}
+        if pump_id not in names:
+            raise DriverError(f"actuator {pump_id} is not a pump")
+        loop_on = pump_id in (28, 29) and self.loops_active.get("ph", False)
+        with self._lock:
+            self._advance()
+            count = {29: self._base_ml, 28: self._acid_ml, 30: self._antifoam_ml}[pump_id]
+        return ManualState(pump_id, names[pump_id], loop_on, loop_on, False, False, self.prime_on.get(pump_id, False), count)
+
+    def write_prime(self, pump_id: int, on: bool) -> None:
+        with self._lock:
+            self._advance()
+            self.prime_on[pump_id] = bool(on)
+
+    def write_loop_assignment(self, loop: str, actuator_id: int, side: int, cascade: bool = False) -> None:
+        from dataclasses import replace
+        if self.loops_active.get(loop):
+            raise DriverError(f"the {loop} loop is on: stop it before changing its actuators")
+        with self._lock:
+            names = {a.id: a for lp in self.loop_config.loops for a in lp.actuators}
+            names.update({a.id: a for a in self.loop_config.free_outputs})
+            act = names.get(actuator_id) or LoopActuator(actuator_id, f"Actuator {actuator_id}", 0)
+            loops = []
+            for lp in self.loop_config.loops:
+                acts = tuple(a for a in lp.actuators if a.id != actuator_id)
+                if lp.key == loop and side != 0:
+                    acts = acts + (replace(act, side=side),)
+                loops.append(replace(lp, actuators=acts))
+            used = {a.id for lp in loops for a in lp.actuators}
+            free = tuple(replace(a, side=0) for a in names.values() if a.id not in used and a.kind == "actuator"
+                         and a.id not in (18, 19, 46, 13))
+            self.loop_config = replace(self.loop_config, loops=tuple(loops), free_outputs=free,
+                                       unassigned_pumps=tuple(a for a in free if a.pump))
+
+    def write_channel_values(self, channel: str, setpoint, low, high) -> dict:
+        if channel not in ("do2", "stirrer"):
+            raise DriverError(f"no channel values for {channel!r}")
+        self.channel_values = getattr(self, "channel_values", {})
+        cur = self.channel_values.setdefault(channel, {"setpoint": None, "low": None, "high": None})
+        for k, v in (("setpoint", setpoint), ("low", low), ("high", high)):
+            if v is not None:
+                cur[k] = v
+        return dict(cur)
 
     def read_loop_config(self) -> LoopConfig:
         if self.fail_reads:

@@ -13,6 +13,8 @@ class ORM(BaseModel):
 class NamedIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
+    molarity: Optional[float] = Field(default=None, gt=0, le=20)       # buffers only (mol/L)
+    equivalents: Optional[float] = Field(default=None, gt=0, le=4)
 
 
 class NamedOut(ORM):
@@ -21,6 +23,8 @@ class NamedOut(ORM):
     description: str
     archived: bool
     n_used: int = 0
+    molarity: Optional[float] = None
+    equivalents: Optional[float] = None
 
 
 class VariableIn(BaseModel):
@@ -49,6 +53,8 @@ class NamedPatch(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     archived: Optional[bool] = None
+    molarity: Optional[float] = Field(default=None, ge=0, le=20)      # 0 clears it
+    equivalents: Optional[float] = Field(default=None, ge=0, le=4)
 
 
 class EndIn(BaseModel):
@@ -91,6 +97,7 @@ class ProfileIn(BaseModel):
     temperature_control_mode: Optional[str] = None
     temperature_pid: Optional[dict] = None
     loop_assignments: Optional[dict] = None
+    channel_params: Optional[dict] = None
     notes: str = ""
     author: str = ""
 
@@ -110,6 +117,7 @@ class ProfileOut(ORM):
     temperature_control_mode: Optional[str] = None
     temperature_pid: Optional[dict] = None
     loop_assignments: Optional[dict] = None
+    channel_params: Optional[dict] = None
     notes: str
     updated_at: Optional[datetime] = None
     n_experiments: int = 0
@@ -122,6 +130,7 @@ class ExperimentIn(BaseModel):
     strain: str = ""
     medium_id: Optional[int] = None
     buffer_id: Optional[int] = None
+    buffer_volume_ml: Optional[float] = Field(default=None, gt=0, le=100000)
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
     plan_params: Optional[dict] = None
@@ -136,6 +145,7 @@ class ExperimentPatch(BaseModel):
     strain: Optional[str] = None
     medium_id: Optional[int] = None
     buffer_id: Optional[int] = None
+    buffer_volume_ml: Optional[float] = Field(default=None, ge=0, le=100000)   # 0 clears it
     working_volume_ml: Optional[float] = None
     profile_id: Optional[int] = None
     plan_params: Optional[dict] = None
@@ -153,6 +163,9 @@ class ExperimentOut(ORM):
     strain: str
     medium_id: Optional[int]
     buffer_id: Optional[int]
+    buffer_molarity: Optional[float] = None
+    buffer_equivalents: Optional[float] = None
+    buffer_volume_ml: Optional[float] = None
     working_volume_ml: Optional[float]
     reactor_id: str
     status: str
@@ -189,6 +202,7 @@ class MeasurementIn(BaseModel):
     t_h: Optional[float] = None             # alternative to sampled_at: hours since Start (e.g. a frozen aliquot)
     unit: str = ""
     note: str = ""
+    volume_taken_ml: Optional[float] = Field(default=None, ge=0, le=10000)
     author: str = ""
 
 
@@ -211,6 +225,7 @@ class MeasurementOut(ORM):
     unit: str
     note: str
     author: str
+    volume_taken_ml: Optional[float] = None
 
 
 class LimitsIn(BaseModel):
@@ -262,3 +277,50 @@ class UserPatch(BaseModel):
 class LoginIn(BaseModel):
     user_id: int
     pin: Optional[str] = None
+
+
+class ReactorIn(BaseModel):
+    name: Optional[str] = None
+    driver: Optional[str] = "simulator"
+    address: Optional[str] = ""
+    interval_s: Optional[float] = None
+    enabled: bool = False
+
+
+class ReactorPatch(BaseModel):
+    name: Optional[str] = None
+    driver: Optional[str] = None
+    address: Optional[str] = None
+    interval_s: Optional[float] = None
+    enabled: Optional[bool] = None
+    confirm: bool = False
+
+
+class ReactorTestIn(BaseModel):
+    driver: Optional[str] = None
+    address: Optional[str] = None
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+class TemplateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    data: Optional[dict] = None
+    from_experiment_id: Optional[int] = None
+
+
+class TemplatePatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    data: Optional[dict] = None
+    archived: Optional[bool] = None
+
+
+class AssignIn(BaseModel):
+    loop: str
+    actuator_id: int = Field(ge=0, le=63)
+    side: int = Field(ge=-1, le=1)        # +1 below the setpoint, -1 above, 0 remove
+    cascade: bool = False

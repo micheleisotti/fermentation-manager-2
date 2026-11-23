@@ -5,7 +5,7 @@
  */
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, type Named, type Variable } from "../api";
+import { api, type Named, type Template, type Variable } from "../api";
 import { usePolling } from "../hooks";
 import { Profiles } from "./Profiles";
 
@@ -14,6 +14,7 @@ const TABS = [
   { k: "media", label: "Media" },
   { k: "buffers", label: "Buffers / base" },
   { k: "variables", label: "Manual variables" },
+  { k: "templates", label: "Templates" },
 ] as const;
 type Tab = (typeof TABS)[number]["k"];
 
@@ -33,6 +34,7 @@ export function Library() {
       {tab === "media" && <NamedManager kind="media" noun="medium" placeholder="e.g. MRS, CDM + 2% glucose" />}
       {tab === "buffers" && <NamedManager kind="buffers" noun="buffer / base" placeholder="e.g. NaOH 2 M" />}
       {tab === "variables" && <Variables />}
+      {tab === "templates" && <Templates />}
     </>
   );
 }
@@ -53,7 +55,11 @@ function NamedManager({ kind, noun, placeholder }: { kind: "media" | "buffers"; 
   const { run, banner } = useMsg();
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
-  const [edit, setEdit] = useState<{ id: number; name: string; description: string } | null>(null);
+  const [edit, setEdit] = useState<{ id: number; name: string; description: string; molarity: string; equivalents: string } | null>(null);
+  const [mol, setMol] = useState("");
+  const [eqv, setEqv] = useState("1");
+  const buf = kind === "buffers";
+  const num = (t: string) => (t.trim() === "" ? null : Number(t.replace(",", ".")));
   const [showArch, setShowArch] = useState(false);
   const rows = (list.data ?? []).filter((x) => showArch || !x.archived);
   const nArch = (list.data ?? []).filter((x) => x.archived).length;
@@ -68,25 +74,31 @@ function NamedManager({ kind, noun, placeholder }: { kind: "media" | "buffers"; 
           </div>
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>Name</th><th>Description</th><th className="num">Used by</th><th /></tr></thead>
+              <thead><tr><th>Name</th><th>Description</th>{buf && <th className="num">Conc. (M)</th>}{buf && <th className="num">Eq.</th>}<th className="num">Used by</th><th /></tr></thead>
               <tbody>
                 {rows.map((x: Named) => edit?.id === x.id ? (
                   <tr key={x.id}>
                     <td><input className="cell-input" style={{ width: "100%" }} value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} aria-label="Name" /></td>
                     <td><input className="cell-input" style={{ width: "100%" }} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} aria-label="Description" /></td>
+                    {buf && <td className="num"><input className="cell-input mono" style={{ width: 70, textAlign: "right" }} inputMode="decimal" value={edit.molarity} onChange={(e) => setEdit({ ...edit, molarity: e.target.value })} aria-label="Concentration (M)" /></td>}
+                    {buf && <td className="num"><input className="cell-input mono" style={{ width: 50, textAlign: "right" }} inputMode="decimal" value={edit.equivalents} onChange={(e) => setEdit({ ...edit, equivalents: e.target.value })} aria-label="Equivalents" /></td>}
                     <td />
                     <td className="num" style={{ whiteSpace: "nowrap" }}>
                       <button className="btn text" onClick={() => setEdit(null)}>Cancel</button>
-                      <button className="btn filled" onClick={async () => { if (await run(() => api.updateNamed(kind, x.id, { name: edit.name, description: edit.description }))) { setEdit(null); list.refresh(); } }}>Save</button>
+                      <button className="btn filled" onClick={async () => { if (await run(() => api.updateNamed(kind, x.id, { name: edit.name, description: edit.description,
+                        ...(buf ? { molarity: num(edit.molarity) ?? 0, equivalents: num(edit.equivalents) ?? 1 } : {}) }))) { setEdit(null); list.refresh(); } }}>Save</button>
                     </td>
                   </tr>
                 ) : (
                   <tr key={x.id} style={x.archived ? { opacity: 0.6 } : undefined}>
                     <td style={{ fontWeight: 500 }}>{x.name}{x.archived && <span className="tag archived" style={{ marginLeft: 8 }}>Archived</span>}</td>
                     <td className="small">{x.description || <span className="muted">—</span>}</td>
+                    {buf && <td className="num mono">{x.molarity ?? <span className="muted">—</span>}</td>}
+                    {buf && <td className="num mono">{x.equivalents ?? 1}</td>}
                     <td className="num mono">{x.n_used} exp.</td>
                     <td className="num" style={{ whiteSpace: "nowrap" }}>
-                      <button className="btn text" onClick={() => setEdit({ id: x.id, name: x.name, description: x.description })}>Edit</button>
+                      <button className="btn text" onClick={() => setEdit({ id: x.id, name: x.name, description: x.description,
+                        molarity: x.molarity == null ? "" : String(x.molarity), equivalents: String(x.equivalents ?? 1) })}>Edit</button>
                       <button className="btn text" onClick={async () => { await run(() => api.updateNamed(kind, x.id, { archived: !x.archived })); list.refresh(); }}>
                         {x.archived ? "Restore" : "Archive"}</button>
                       {x.n_used === 0 && <button className="btn text" style={{ color: "#b30020" }} onClick={async () => {
@@ -95,7 +107,7 @@ function NamedManager({ kind, noun, placeholder }: { kind: "media" | "buffers"; 
                     </td>
                   </tr>
                 ))}
-                {rows.length === 0 && <tr><td colSpan={4} className="muted">None yet.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={buf ? 6 : 4} className="muted">None yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -107,8 +119,17 @@ function NamedManager({ kind, noun, placeholder }: { kind: "media" | "buffers"; 
           <h2 style={{ fontSize: 18 }}>New {noun}</h2>
           <label className="field">Name<input value={name} placeholder={placeholder} onChange={(e) => setName(e.target.value)} /></label>
           <label className="field">Description (optional)<textarea rows={2} value={desc} onChange={(e) => setDesc(e.target.value)} /></label>
+          {buf && <div className="row" style={{ alignItems: "flex-start" }}>
+            <label className="field" style={{ flex: "1 1 120px" }}>Concentration (mol/L)
+              <input className="mono" inputMode="decimal" value={mol} placeholder="e.g. 2" onChange={(e) => setMol(e.target.value)} /></label>
+            <label className="field" style={{ flex: "0 1 110px" }}>Equivalents
+              <input className="mono" inputMode="decimal" value={eqv} onChange={(e) => setEqv(e.target.value)} /></label>
+          </div>}
+          {buf && <span className="xs muted">With a concentration, totals and rates are also shown in mmol (mL × M × equivalents: 1 for NaOH, KOH, NH₄OH).
+            It is frozen in each plan, so changing it later does not alter past experiments.</span>}
           <button className="btn filled" disabled={!name.trim()} onClick={async () => {
-            if (await run(() => api.createNamed(kind, name.trim(), desc), `Added “${name.trim()}”.`)) { setName(""); setDesc(""); list.refresh(); }
+            const extra = buf ? { molarity: num(mol), equivalents: num(eqv) ?? 1 } : {};
+            if (await run(() => api.createNamed(kind, name.trim(), desc, extra), `Added “${name.trim()}”.`)) { setName(""); setDesc(""); setMol(""); setEqv("1"); list.refresh(); }
           }}>Add</button>
         </section>
       </aside>
@@ -209,5 +230,54 @@ function Variables() {
         </section>
       </aside>
     </div>
+  );
+}
+
+
+/** Templates: whole plans (medium, buffer and volume, channels, profile and values, notes) for "New from template". */
+function Templates() {
+  const list = usePolling(api.templates, 600000);
+  const { run, banner } = useMsg();
+  const [edit, setEdit] = useState<{ id: number; name: string; description: string } | null>(null);
+  const rows: Template[] = list.data ?? [];
+  return (
+    <section className="card">
+      <h2 style={{ fontSize: 18 }}>Templates</h2>
+      <span className="small muted">A template is a whole plan: medium, buffer and available volume, channels, profile and its values, notes.
+        Save one from an experiment's planning page (<b>Save as template</b>); use it with <b>New → Experiment from template</b>.</span>
+      <div className="table-wrap">
+        <table className="data">
+          <thead><tr><th>Name</th><th>Contents</th><th>Description</th><th /></tr></thead>
+          <tbody>
+            {rows.map((t) => edit?.id === t.id ? (
+              <tr key={t.id}>
+                <td><input className="cell-input" style={{ width: "100%" }} value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} aria-label="Name" /></td>
+                <td />
+                <td><input className="cell-input" style={{ width: "100%" }} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} aria-label="Description" /></td>
+                <td className="num" style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn text" onClick={() => setEdit(null)}>Cancel</button>
+                  <button className="btn filled" onClick={async () => { if (await run(() => api.updateTemplate(t.id, { name: edit.name, description: edit.description }))) { setEdit(null); list.refresh(); } }}>Save</button>
+                </td>
+              </tr>
+            ) : (
+              <tr key={t.id}>
+                <td style={{ fontWeight: 500 }}>{t.name}</td>
+                <td className="small">{[t.data.strain, t.medium_name, t.buffer_name && `${t.buffer_name}${t.data.buffer_volume_ml ? ` · ${t.data.buffer_volume_ml} mL` : ""}`,
+                  t.profile_name && `profile “${t.profile_name}”`, (t.data.channels ?? []).join(", ")].filter(Boolean).join(" · ") || "—"}</td>
+                <td className="small">{t.description || <span className="muted">—</span>}</td>
+                <td className="num" style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn text" onClick={() => setEdit({ id: t.id, name: t.name, description: t.description })}>Edit</button>
+                  <button className="btn text" style={{ color: "#b30020" }} onClick={async () => {
+                    if (window.confirm(`Delete template “${t.name}”? Experiments made from it are not affected.`)) { await run(() => api.deleteTemplate(t.id)); list.refresh(); }
+                  }}>Delete</button>
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={4} className="muted">No templates yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {banner}
+    </section>
   );
 }

@@ -154,6 +154,21 @@ class LoopInfo:
 class LoopConfig:
     loops: tuple              # LoopInfo
     unassigned_pumps: tuple = ()   # LoopActuator (side 0) installed but in no loop
+    free_outputs: tuple = ()       # every installed output in no loop (pumps, gas valves, ...) — 2.3
+    not_installed: tuple = ()      # (kind "input"|"output", id, name): known to the controller, not installed
+
+
+@dataclass(frozen=True)
+class ManualState:
+    """What a manual (prime) command on one pump depends on, read just before writing it."""
+    pump_id: int
+    name: str
+    assigned_loop_on: bool
+    controlled: bool
+    interlocked: bool
+    manual_on: bool
+    prime_on: bool
+    counter_ml: Optional[float]
 
 
 
@@ -164,6 +179,9 @@ class ControllerDriver(ABC):
     @abstractmethod
     def read(self) -> ControllerSnapshot:
         """Read current values, setpoints and (if available) limits. Raises DriverError."""
+
+    def close(self) -> None:
+        """Release the connection (driver replaced or bioreactor disabled in Settings)."""
 
     @abstractmethod
     def write_setpoint(self, parameter: str, value: float) -> None:
@@ -186,6 +204,21 @@ class ControllerDriver(ABC):
     def read_loop_config(self) -> LoopConfig:
         """Loops, their actuators (and cascades) and calibration state. Raises DriverError."""
         raise DriverError("this controller driver cannot read the loop configuration")
+
+    def manual_state(self, pump_id: int) -> "ManualState":
+        raise DriverError("this controller driver has no manual pump commands")
+
+    def write_prime(self, pump_id: int, on: bool) -> None:
+        """Prime ("Click & Hold To Prime", 2.46) of one pump on/off. The controller does not stop it by itself."""
+        raise DriverError("this controller driver has no manual pump commands")
+
+    def write_loop_assignment(self, loop: str, actuator_id: int, side: int, cascade: bool = False) -> None:
+        """Add an actuator to a loop (side +1 below / -1 above the setpoint) or remove it (side 0)."""
+        raise DriverError("this controller driver cannot change the loop configuration")
+
+    def write_channel_values(self, channel: str, setpoint: Optional[float], low: Optional[float], high: Optional[float]) -> dict:
+        """Setpoint and process limits of dO2 / stirrer limits (2.3). Returns the read-back values."""
+        raise DriverError(f"this controller driver cannot write {channel} values")
 
     def reset_dose_counter(self, counter: str) -> None:
         """Reset one dose counter (DOSE_COUNTERS) to 0, like the controller's own "Reset Dose Monitor".

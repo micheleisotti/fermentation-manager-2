@@ -302,10 +302,19 @@ def test_write_request_allowlist():
     # actuator assignment (2.7) and loop add/remove (3.51-3.53), interlock limits (1.20/1.21),
     # stirrer alarm limits, dO2 limits
     for addr in ("2.13.29", "2.24.29", "1.30.0", "1.14.32", "1.14.5", "3.0.13", "3.0.1", "1.19.1", "1.19.13", "3.72.0",
-                 "2.7.28", "2.8.28", "3.51.0", "3.52.0", "3.53.0", "2.20.29",
-                 "1.20.0", "1.21.0", "1.4.13", "1.5.1"):
+                 "2.7.28", "2.8.28", "3.51.32", "2.20.29", "2.46.18", "2.46.0", "1.13.3",
+                 "1.20.0", "1.21.0", "1.4.32"):
         with pytest.raises(DriverError):
             build_write_request(addr, "0")
+    # 2.3 (decision 23 Nov 2026): prime of the pumps (0/1), loop configuration commands (actuator id),
+    # dO2 setpoint and dO2 / stirrer alarm limits
+    assert build_write_request("2.46.29", "1") == b"J2.46.29s1\r"
+    assert build_write_request("3.53.0", "28") == b"J3.53.0s28\r"
+    for addr, bad in (("2.46.29", "2"), ("3.51.0", "-1"), ("3.52.1", "1.5")):
+        with pytest.raises(DriverError):
+            build_write_request(addr, bad)
+    for addr in ("1.13.1", "1.4.13", "1.5.1"):
+        assert build_write_request(addr, "20") == f"J{addr}s20\r".encode()
     with pytest.raises(DriverError):
         build_write_request("1.13.0", "6.3\rJ2.13.29s0")      # no injection of a second command
     with pytest.raises(DriverError):

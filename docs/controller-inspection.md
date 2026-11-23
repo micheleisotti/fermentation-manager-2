@@ -240,3 +240,86 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
 - [x] Decision (Michele, 10 Nov): FM2 may start/stop loops (`1.14`), only those enabled in Settings
       (implemented in PR #23).
 - [ ] Decision (user): whether timed Addition 2 doses driven by FM2 are wanted (outside the driver's rules).
+
+### Manual output and prime (23 Nov 2026, R1 192.0.2.41, scripts/ez2_manual_test.py)
+- Web UI (`Scripts/windows/manualcontrol.js`): on/off actuators (`2.6` = 1) get a "Start/Stop
+  Actuator" toggle writing `2.20.<a>` 1/0; analogue ones (`2.6` = 0) a number 0…factor. "Click &
+  Hold To Prime" writes `2.46.<a>` = 1 on press and 0 on release. The UI requires Operator and
+  disables both while the assigned loop is on (`1.14.<2.7>`), during feed calibration or interlock.
+- Alkali (29): `2.6` = 1, 4.80 mL/min. `2.46.29` 1/0 and `2.20.29` 1/0 both work with an
+  **Operator (level 1)** login; `2.20` written as 1 reads back 4.80 (full output).
+  Pump on within ~0.4 s, off within ~0.25 s. **The dose counter counts prime and manual**
+  (+0.17 mL in 2.1 s), still catching up ~1 s after the stop.
+- **No controller-side stop**: prime left at 1 ran ~41 s, after FM2's logout and with the
+  WebSocket closed, until `2.46` = 0 was written. Same for `2.20`.
+- **The controller does NOT enforce the loop interlock**: with the pH loop on (`1.14.0` = 1,
+  `2.19.29` = 1) `2.46.29` = 1 was accepted and the alkali pump ran 2 s (acid probably running at
+  the same time). Only the web UI blocks it: FM2 must check `1.14.<assigned sensor>`, `2.47` and
+  `2.19` itself before any manual/prime write.
+- Login refused while someone is logged in on the display: the login write answers `0.11` =
+  `-5|0|`. Reading `0.11` before trying shows only this connection's state (`0|-1|`), not the
+  display's: the refusal code is the only signal.
+
+### Loop configuration, both controllers (23 Nov 2026, `docs/inspect-2026-11-23/R*-values.tsv`)
+| Loop (sensor) | type `1.19` | P / I / D | deadband | cycle s | settling s | SP `1.13` R1 / R2 | alarm lo–hi |
+|---|---|---|---|---|---|---|---|
+| pH (0) | 0 PID | 100 / 2 / 10 | 0.02 | 10 | 300 | 6.20 / 6.20 | 6.00–6.40 |
+| dO2 (1) | R1 0, **R2 3** | 7 / 1500 / 0 | 0 | 5 | 150 | 200 / 70 % | R1 40–200, R2 20–120 |
+| Temperature (2) | 1 Adaptive | 30 / R1 3279.8, R2 3059.8 / R1 100, R2 14.7 | 0 | 5 | 1500 | 12 / 12 °C | 10–38 |
+| Level (3) | 3 | 10 / 0 / 0 | 0 | 5 | 600 | 0 | — |
+| Stirrer (13) | 2 | 10 / 0 / 0 | 0 | 5 | 600 | 80 / 80 rpm | 20–500 |
+- R2 dO2 also has pulse time `3.22` = 30 and dead time `3.25` = 30 (R1: 0).
+- Assigned actuators (both): Stirrer 18 → stirrer loop, Heating 19 → temperature, Alkali 29 → pH
+  (below SP), Addition 2 28 → pH (above SP). **Antifoam 30, N2 0 and Air 1 are in no loop**
+  (`1.16.3` = 0: the Level loop has no actuator); dO2 drives the stirrer in cascade.
+- Display "Control Settings" (photos, R2 pH, 23 Nov): the four controller types and their fields.
+  **PID** (`1.19` = 0): P, I, D, Dead Band, Cycle Time. **Adaptive** (1): the same plus Settling
+  Time. **External** (2): asks for confirmation because it turns the positive actuators into
+  "Setpoint Out" and the negative ones into "Process Value Out" (the loop no longer doses):
+  **FM2 must never select it** (already excluded: only PID/Adaptive are writable). **Level** (3):
+  Pulse Time, Dead Time, First Action (Pulse Time / Dead Time). Hence R2 dO2 (`1.19.1` = 3) is in
+  Level mode with 30 s pulse/dead time; the stirrer's `1.19.13` = 2 needs checking on the
+  display (the type list may differ for the stirrer).
+- Temperature also offers **TCUSP** (`1.19` = 6): confirmation says it "will clear all above
+  setpoint actuators from the loop". Most likely "Temperature Control Unit SetPoint" (the setpoint
+  is sent to an external thermostat/circulator): inference, not documented. **Never selected by FM2.**
+- Foam/Level sensor (display): only "Sensor Settings": probe type Level/Foam (`5.3.0`) and High/Low
+  sensitivity (`5.3.1`); no control settings are shown while no actuator is assigned to it.
+- Stirrer: the display shows **no Control Settings** (the stirrer's `1.19.13` = 2 is its own speed
+  control, not selectable): FM2 treats the stirrer as setpoint + alarm limits only.
+- "Limits" page of a loop (photo, R2 pH): **Process Limits** high/low (`1.4`/`1.5`, alarm only;
+  Alarm State "Loop") and **Interlock Limits** high/low (`1.20`/`1.21`: pH 14.00 / 0.00, i.e.
+  never reached), Dead Band 0.50, Interlock State Off, "Affected Actuators High/Low" (`1.25`/`1.26`,
+  bit masks). An interlock switches off the affected actuators while the value is beyond the limit
+  and releases them after the dead band. Not writable by FM2. **To verify**: whether an interlock
+  also stops a prime/manual output (`manualcontrol.js` disables the UI when `2.47` = 1): if so, a pH
+  interlock high on the alkali pump would be a controller-side safety net for a stuck manual command.
+- Actuators are assigned to loops on another page of the display (actuator settings), not here.
+
+### Loop configuration (actuator assignment) — `Scripts/windows/loopconfiguration.js` (read 23 Nov)
+- Display: Menu › Configuration › Loop Configuration (photo R2: pH ↑Alkali ↓Addition 2, dO2 ↑Stirrer,
+  Temperature ↑Heating ↓Cooling, Foam none). Web UI collects the edits and sends them on **Accept**:
+  - add on the "above"/positive side: `J3.51.<sensor>s<actuator>`; negative side: `J3.52.<sensor>s<actuator>`
+    (appended at the next free position, max 4 per side);
+  - remove: `J3.53.<sensor>s<actuator>`;
+  - a sensor used as actuator (cascade, e.g. stirrer for dO2) is sent as `actuator + 0x40000000`;
+  - double-sided (polarity) actuators fill both sides at once.
+- Allowed only with an **Engineer** login, loop off (`1.14` = 0) and no feed calibration (`3.58` = 0).
+  Free actuators listed by the UI: `2.21` (available) = 3 and not a TGF carrier.
+- Not written by FM2 yet: planned for 2.3.x (edit assignments / free an actuator such as Addition 2 for
+  an FM2 rule) after a live test, with read-back of `2.7`/`2.8` and an event in the log.
+- Actuator settings (photo R1 Alkali, "HMI Settings DigitalPump 2"): name, unit mL/min, type Pump, screen
+  priority 28 (`2.2`), decimals; Advanced: Low/High Limit 0.00/4.86 (`2.10`/`2.9`: output range, high =
+  calibration), Inhibit None (`2.29`), Interval 5 (`2.51`, period of the on/off duty cycle, s); Timer
+  function Delay/On/Off time 0/1/0 s (`2.23`/`2.24`/`2.25`). Read-only for FM2. The high limit caps the
+  loop's dosing rate; the timer probably makes pulse dosing (on/off cycles) — to verify before use.
+
+
+### Written by FM2 from 2.3.0 (23 Nov 2026)
+- Prime `2.46.<pump>` 0/1 (pumps 22–30, Operator login) for "hold to run", with FM2-side checks before
+  switching on (`1.14.<2.7>`, `2.19`, `2.47`, `2.20`), keep-alive watchdog (1.5 s), 60 s limit, switch-off at
+  start-up of what FM2 left on (`data/manual-outputs.json`). `2.20` (manual toggle) is still never written.
+- Loop configuration `3.51/3.52/3.53.<sensor>` = actuator id (Engineer login, loop off, not while recording),
+  read back from `2.7/2.8` and logged. **First live use to be checked on the display.**
+- dO2 setpoint `1.13.1` and limits `1.4/1.5.1`, stirrer limits `1.4/1.5.13`, from the plan ("Check and load").
+- Login answer `-5`: reported as "controller locked by a login on the display or web UI".

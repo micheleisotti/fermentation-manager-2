@@ -1,7 +1,8 @@
 """
-Lightweight sign-in: who is using the app, with an optional numeric PIN per user.
-
-Not an authorisation system: there are no roles. The server signs the token it hands
+Lightweight sign-in: who is using the app, with an optional numeric PIN per user, and
+levels (2.3): admin (everything), operator (no Settings for bioreactors, probes, notifications,
+remote access, users), observer (looks only: nothing that writes, above all nothing that reaches
+a controller). Levels are enforced once an administrator exists. The server signs the token it hands
 out (HMAC with a secret kept next to the database), so the name recorded on data comes
 from the server, not from what the browser claims. Wrong PINs are rate limited.
 
@@ -22,6 +23,12 @@ from pathlib import Path
 from typing import Optional
 
 PIN_MIN, PIN_MAX = 4, 8
+ROLES = ("observer", "operator", "admin")
+ROLE_LABELS = {"admin": "Administrator", "operator": "Operator", "observer": "Observer"}
+
+
+def role_rank(role: str) -> int:
+    return ROLES.index(role) if role in ROLES else 0
 TOKEN_DAYS = 180
 MAX_FAILS, LOCK_S = 5, 300
 

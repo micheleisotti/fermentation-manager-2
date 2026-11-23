@@ -5,6 +5,7 @@ FastAPI application. One service process hosts the API, the acquisition thread a
 
 from __future__ import annotations
 
+import time
 import io
 from types import SimpleNamespace
 import re
@@ -29,8 +30,9 @@ from ..alerts import AlertParams
 from ..analysis import base_dosing, control, kinetics, report, stats
 from ..services.app_settings import SWITCHABLE_LOOPS
 from .. import loops
-from ..config import Settings
+from ..config import DRIVERS, INTERVAL_MAX_S, INTERVAL_MIN_S, INTERVAL_WARN_S, Settings
 import logging
+from ..manual import HOLD_TIMEOUT_S, MAX_RUN_S, ManualPumps, ManualRefused
 from pathlib import Path
 
 from ..backup import BackupError, BackupManager
@@ -40,9 +42,9 @@ from ..db import add_missing_columns, make_engine, make_session_factory, session
 from ..drivers.base import CHANNELS, DEFAULT_CHANNELS, DOSE_COUNTER_LABELS, DOSE_COUNTERS, EXTRA_FIELDS, counter_value
 from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
 from ..models import (
-    DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event,
+    DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event, ExperimentTemplate,
     Experiment, ExperimentStatus, ManualMeasurement, ManualMeasurementEdit, Medium, ParallelRun,
-    PhControlMode, SessionMember, SetpointCommand, Variable, VariableCategory,
+    PhControlMode, Reactor, SessionMember, SetpointCommand, Variable, VariableCategory,
 )
 from ..services import commands
 from .. import users as users_mod
@@ -69,11 +71,21 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
         if not s.scalar(select(func.count()).select_from(Variable)):
             s.add_all(Variable(name=n, unit=u, category=c) for n, u, c in DEFAULT_VARIABLES)
 
-    drivers = drivers or {r.reactor_id: make_driver(r.driver, r.reactor_id, r.address) for r in settings.reactors}
+    given = drivers is not None
+    reactors = _seed_reactors(sessions, settings, list(drivers) if given else None)
+    if not given:
+        drivers = {}
+        for r in reactors:
+            if r["enabled"]:
+                try:
+                    drivers[r["id"]] = make_driver(r["driver"], r["id"], r["address"], clock=None if clock is _utcnow else clock)
+                except ValueError as ex:
+                    log.error("bioreactor %s: %s", r["id"], ex)
     app_settings = AppSettings(sessions)
     notifier = Notifier(app_settings)
     acq = Acquisition(drivers, sessions, settings.sampling_interval_s, clock=clock,
-                      alert_params=app_settings.alert_params(), notifier=notifier)
+                      alert_params=app_settings.alert_params(), notifier=notifier,
+                      intervals={r["id"]: r["interval_s"] for r in reactors if r["id"] in drivers})
     backups = BackupManager(db_file, app_settings)
 
     def _apply(section: str, _value: dict) -> None:
@@ -83,23 +95,74 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
                 st.params = acq.alert_params
     app_settings.on_change(_apply)
 
+    def _manual_stopped(run, why: str, ml: Optional[float]) -> None:
+        dur = max(0.0, time.monotonic() - run.started)
+        msg = (f"{run.reactor_id}: manual pump {run.name} by {run.author}: {dur:.1f} s"
+               + (f", {ml:.2f} mL" if ml is not None else "") + f" ({why})")
+        with session_scope(sessions) as s:
+            exp = s.scalar(select(Experiment).where(Experiment.reactor_id == run.reactor_id, Experiment.status.in_(ACTIVE)))
+            s.add(Event(experiment_id=exp.id if exp else None, reactor_id=run.reactor_id, kind="manual_pump",
+                        severity="info" if why == "released" else "alert", message=msg))
+    manual = ManualPumps(acq.drivers, Path(settings.data_dir) / "manual-outputs.json", on_stop=_manual_stopped)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if start_acquisition:
+            manual.recover()
+            manual.start()
             acq.start()
             backups.start()
         yield
+        manual.stop()
         acq.stop()
         backups.stop()
 
     app = FastAPI(title="Fermentation Manager", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.sessions, app.state.acq, app.state.clock = settings, sessions, acq, clock
     app.state.app_settings, app.state.notifier, app.state.backups = app_settings, notifier, backups
+    app.state.manual = manual
     app.state.auth_secret = users_mod.load_secret(db_file.parent / "auth-secret.txt")
     app.state.pin_throttle = users_mod.Throttle()
+    @app.middleware("http")
+    async def check_level(request: Request, call_next):
+        need = needed_role(request.method, request.url.path)
+        if need:
+            s_ = sessions()
+            try:
+                have = role_of(request, s_)
+            finally:
+                s_.close()
+            if users_mod.role_rank(have) < users_mod.role_rank(need):
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": f"This needs the {users_mod.ROLE_LABELS[need]} level "
+                                               f"(you are {users_mod.ROLE_LABELS[have]})."}, status_code=403)
+        return await call_next(request)
+
     app.include_router(router, prefix="/api")
     _mount_frontend(app, settings)
     return app
+
+
+def _seed_reactors(sessions, settings: Settings, given_ids: Optional[list[str]]) -> list[dict]:
+    """
+    Fill Settings > Bioreactors & probes on first start from the old configuration (FM2_R1_*, local.env),
+    so updating keeps the same controllers and addresses. With drivers given (tests, demo clock) the
+    table just mirrors their ids.
+    """
+    with session_scope(sessions) as s:
+        if given_ids is not None:
+            for i, rid in enumerate(given_ids):
+                if s.get(Reactor, rid) is None:
+                    s.add(Reactor(id=rid, name=f"Bioreactor {rid[1:] if rid[1:].isdigit() else rid}",
+                                  driver="simulator", interval_s=settings.sampling_interval_s, position=i))
+        elif not s.scalar(select(func.count()).select_from(Reactor)):
+            for i, r in enumerate(settings.reactors):
+                s.add(Reactor(id=r.reactor_id, name=f"Bioreactor {r.reactor_id[1:]}", driver=r.driver,
+                              address=r.address, interval_s=settings.sampling_interval_s, position=i))
+            log.info("bioreactors created from the previous configuration")
+        s.flush()
+        return [{"id": r.id, "driver": r.driver, "address": r.address, "interval_s": r.interval_s,
+                 "enabled": r.enabled} for r in s.scalars(select(Reactor).order_by(Reactor.position, Reactor.id))]
 
 
 def _mount_frontend(app: FastAPI, settings: Settings) -> None:
@@ -175,6 +238,55 @@ def current_user(request: Request, db: Session) -> Optional[User]:
     return u if u and not u.archived and u.token_version == parsed[1] else None
 
 
+def admins_exist(db: Session) -> bool:
+    return bool(db.scalar(select(func.count()).select_from(User).where(User.role == "admin", User.archived.is_(False))))
+
+
+def effective_role(u: Optional[User], db: Session) -> str:
+    """Level actually in force for a user (see users.py): admin/operator need a PIN, Guest is an observer."""
+    if not admins_exist(db):
+        return "admin"            # no administrator yet: levels not enforced (earlier behaviour)
+    if u is None or u.name == GUEST_NAME or not u.pin_hash:
+        return "observer"
+    return u.role or "operator"
+
+
+def role_of(request: Request, db: Session) -> str:
+    return effective_role(current_user(request, db), db)
+
+
+def require_role(request: Request, db: Session, needed: str) -> None:
+    have = role_of(request, db)
+    if users_mod.role_rank(have) < users_mod.role_rank(needed):
+        raise HTTPException(403, f"This needs the {users_mod.ROLE_LABELS[needed]} level (you are {users_mod.ROLE_LABELS[have]}).")
+
+
+# Level needed by each writing request, checked in one place (middleware) so no endpoint is forgotten.
+# First match wins; any other POST/PUT/PATCH/DELETE under /api needs Operator. Reading (GET) is open.
+ROLE_RULES: list[tuple[str, str, Optional[str]]] = [
+    ("POST", r"^/api/auth/login$", None),
+    ("POST", r"^/api/users$", None),                       # creating yourself (new users start as Operator)
+    ("PUT", r"^/api/users/\d+$", None),                   # own name and PIN (checked in the endpoint)
+    ("POST", r"^/api/users/\d+/first-admin$", None),      # checked in the endpoint (lab PC, no admin yet)
+    ("PUT", r"^/api/users/\d+/role$", "admin"),
+    ("PUT", r"^/api/settings/", "admin"),
+    ("POST", r"^/api/settings/", "admin"),
+    ("POST", r"^/api/backup/run$", "admin"),
+    ("ANY", r"^/api/bioreactors", "admin"),
+    ("DELETE", r"^/api/experiments/\d+$", "admin"),
+    ("POST", r"^/api/reactors/[^/]+/loop-assignment$", "admin"),
+]
+
+
+def needed_role(method: str, path: str) -> Optional[str]:
+    if method in ("GET", "HEAD", "OPTIONS") or not path.startswith("/api/"):
+        return None
+    for m, pattern, role in ROLE_RULES:
+        if (m == "ANY" or m == method) and re.match(pattern, path):
+            return role
+    return "operator"
+
+
 def who(request: Request, db: Session) -> str:
     """Name recorded on data: the signed-in user, or Guest."""
     u = current_user(request, db)
@@ -211,7 +323,7 @@ def _check_channels(ch: Optional[list[str]]) -> Optional[list[str]]:
 
 PLAN_KEYS = ("ph_setpoint", "temperature_setpoint", "stirrer_setpoint", "ph_control_mode", "ph_pid",
              "ph_low_limit", "ph_high_limit", "temperature_low_limit", "temperature_high_limit",
-             "temperature_control_mode", "temperature_pid", "loop_assignments")
+             "temperature_control_mode", "temperature_pid", "loop_assignments", "channel_params")
 LOOP_PLAN = {"ph": ("ph_control_mode", "ph_pid"), "temperature": ("temperature_control_mode", "temperature_pid")}
 
 
@@ -223,7 +335,35 @@ def profile_params(p: Optional[ControllerProfile]) -> dict:
     d["ph_pid"] = dict(p.ph_pid) if p.ph_pid else None
     d["temperature_pid"] = dict(p.temperature_pid) if p.temperature_pid else None
     d["loop_assignments"] = dict(p.loop_assignments) if p.loop_assignments else None
+    d["channel_params"] = dict(p.channel_params) if p.channel_params else None
     return d
+
+
+CHANNEL_PARAM_KEYS = ("setpoint", "low", "high")
+
+
+def _clean_channel_params(v) -> Optional[dict]:
+    """{channel: {setpoint, low, high, mode, params{}}} for channels other than pH and temperature."""
+    if not v:
+        return None
+    if not isinstance(v, dict):
+        raise HTTPException(422, "channel_params must be an object")
+    out = {}
+    for ch, block in v.items():
+        if ch not in CHANNELS or not isinstance(block, dict):
+            raise HTTPException(422, f"Unknown channel {ch}")
+        b: dict = {}
+        for k in CHANNEL_PARAM_KEYS:
+            x = block.get(k)
+            b[k] = None if x in ("", None) else float(x)
+        if b["low"] is not None and b["high"] is not None and b["low"] >= b["high"]:
+            raise HTTPException(422, f"{ch}: low limit must be lower than high limit")
+        mode = block.get("mode")
+        b["mode"] = str(mode)[:30] if mode else None
+        b["params"] = {str(kk)[:40]: (None if vv in ("", None) else float(vv)) for kk, vv in (block.get("params") or {}).items()} or None
+        if any(x is not None for x in b.values()):
+            out[ch] = b
+    return out or None
 
 
 def plan_of(e: Experiment) -> dict:
@@ -245,6 +385,8 @@ def _clean_plan(d: Optional[dict]) -> Optional[dict]:
             out[k] = v or None
         elif k == "loop_assignments":
             out[k] = _clean_assignments(v)
+        elif k == "channel_params":
+            out[k] = _clean_channel_params(v)
         elif k in ("ph_pid", "temperature_pid"):
             out[k] = {kk: (None if vv in ("", None) else float(vv)) for kk, vv in (v or {}).items()} or None
         else:
@@ -339,6 +481,8 @@ def _catalogue(path: str, model):
         if db.scalar(select(model).where(model.name == body.name)):
             raise HTTPException(409, f"'{body.name}' already exists")
         obj = model(name=body.name, description=body.description)
+        if isinstance(obj, Buffer):
+            obj.molarity, obj.equivalents = body.molarity, body.equivalents
         db.add(obj)
         db.flush()
         return _named_out(db, obj)
@@ -361,6 +505,11 @@ def _catalogue(path: str, model):
             obj.description = body.description
         if body.archived is not None:
             obj.archived = body.archived
+        if isinstance(obj, Buffer):
+            if body.molarity is not None:
+                obj.molarity = body.molarity or None
+            if body.equivalents is not None:
+                obj.equivalents = body.equivalents or None
         db.flush()
         return _named_out(db, obj)
 
@@ -387,6 +536,85 @@ def _named_out(db: Session, obj) -> S.NamedOut:
 
 _catalogue("media", Medium)
 _catalogue("buffers", Buffer)
+
+
+# --- experiment templates (Library, 2.3) ------------------------------------------------------
+
+TEMPLATE_KEYS = ("strain", "medium_id", "buffer_id", "buffer_volume_ml", "working_volume_ml", "profile_id",
+                 "plan_params", "channels", "notes", "rules")
+
+
+def _clean_template(d: Optional[dict], db: Session) -> dict:
+    d = {k: v for k, v in (d or {}).items() if k in TEMPLATE_KEYS}
+    if "channels" in d:
+        d["channels"] = _check_channels(d["channels"])
+    if "plan_params" in d:
+        d["plan_params"] = _clean_plan(d["plan_params"])
+    for k, model in (("medium_id", Medium), ("buffer_id", Buffer), ("profile_id", ControllerProfile)):
+        if d.get(k) is not None and db.get(model, d[k]) is None:
+            raise HTTPException(422, f"{k.replace('_id', '')} not found")
+    d["rules"] = []   # FM2 rules come with the pump commands (verified on the controller first)
+    return d
+
+
+def _template_out(t: ExperimentTemplate, db: Session) -> dict:
+    d = t.data or {}
+    prof = db.get(ControllerProfile, d["profile_id"]) if d.get("profile_id") else None
+    return {"id": t.id, "name": t.name, "description": t.description, "data": d, "archived": t.archived,
+            "author": t.author, "updated_at": t.updated_at,
+            "profile_name": prof.name if prof else None,
+            "medium_name": (db.get(Medium, d["medium_id"]).name if d.get("medium_id") and db.get(Medium, d["medium_id"]) else None),
+            "buffer_name": (db.get(Buffer, d["buffer_id"]).name if d.get("buffer_id") and db.get(Buffer, d["buffer_id"]) else None)}
+
+
+@router.get("/templates")
+def list_templates(db: Session = Depends(get_db), include_archived: bool = False):
+    q = select(ExperimentTemplate).order_by(ExperimentTemplate.name)
+    if not include_archived:
+        q = q.where(ExperimentTemplate.archived.is_(False))
+    return [_template_out(t, db) for t in db.scalars(q)]
+
+
+@router.post("/templates", status_code=201)
+def create_template(body: S.TemplateIn, request: Request, db: Session = Depends(get_db)):
+    name = body.name.strip()
+    if db.scalar(select(ExperimentTemplate).where(func.lower(ExperimentTemplate.name) == name.lower())):
+        raise HTTPException(409, f"A template named {name} already exists.")
+    if body.from_experiment_id is not None:
+        e = _404(db.get(Experiment, body.from_experiment_id))
+        data = {k: getattr(e, k) for k in TEMPLATE_KEYS if k != "rules" and hasattr(e, k)}
+        data["plan_params"] = e.plan_params or (profile_params(e.profile) if e.profile else None)
+        data["channels"] = e.channels
+    else:
+        data = body.data or {}
+    t = ExperimentTemplate(name=name, description=body.description, data=_clean_template(data, db), author=who(request, db))
+    db.add(t)
+    db.flush()
+    return _template_out(t, db)
+
+
+@router.put("/templates/{tid}")
+def update_template(tid: int, body: S.TemplatePatch, db: Session = Depends(get_db)):
+    t = _404(db.get(ExperimentTemplate, tid))
+    if body.name is not None:
+        name = body.name.strip()
+        if not name or db.scalar(select(ExperimentTemplate).where(func.lower(ExperimentTemplate.name) == name.lower(), ExperimentTemplate.id != tid)):
+            raise HTTPException(409, "Name empty or already used.")
+        t.name = name
+    if body.description is not None:
+        t.description = body.description
+    if body.data is not None:
+        t.data = _clean_template(body.data, db)
+    if body.archived is not None:
+        t.archived = body.archived
+    db.flush()
+    return _template_out(t, db)
+
+
+@router.delete("/templates/{tid}")
+def delete_template(tid: int, db: Session = Depends(get_db)):
+    db.delete(_404(db.get(ExperimentTemplate, tid)))
+    return {"deleted": tid}
 
 
 VARIABLE_ROLES = ("biomass", "product", "substrate", "other")
@@ -474,6 +702,7 @@ def _profile_data(body: S.ProfileIn) -> dict:
         raise HTTPException(422, "temperature control mode must be pid or adaptive")
     data["temperature_control_mode"] = data["temperature_control_mode"] or None
     data["loop_assignments"] = _clean_assignments(data["loop_assignments"])
+    data["channel_params"] = _clean_channel_params(data.get("channel_params"))
     for a, b in (("ph_low_limit", "ph_high_limit"), ("temperature_low_limit", "temperature_high_limit")):
         if data[a] is not None and data[b] is not None and data[a] >= data[b]:
             raise HTTPException(422, f"{a.replace('_', ' ')} must be lower than {b.replace('_', ' ')}")
@@ -568,9 +797,22 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
         raise HTTPException(422, "Profile not found")
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
     e.profile_ref = profile_params(prof) if prof else None
+    _freeze_buffer(db, e)
     db.add(e)
     db.flush()
     return _exp_out(e)
+
+
+def _freeze_buffer(db: Session, e: Experiment) -> None:
+    """Copy the buffer's concentration into the plan (later Library edits do not change the experiment)."""
+    b = db.get(Buffer, e.buffer_id) if e.buffer_id else None
+    e.buffer_molarity = b.molarity if b else None
+    e.buffer_equivalents = (b.equivalents or 1.0) if b and b.molarity else None
+
+
+def buffer_factor(e: Experiment) -> Optional[float]:
+    """mmol per mL of dosed buffer (mol/L x equivalents), None without a planned concentration."""
+    return e.buffer_molarity * (e.buffer_equivalents or 1.0) if e.buffer_molarity else None
 
 
 @router.get("/experiments/{exp_id}", response_model=S.ExperimentOut)
@@ -592,8 +834,15 @@ def patch_experiment(exp_id: int, body: S.ExperimentPatch, db: Session = Depends
         raise HTTPException(409, "Profile and controller parameters can only be changed before Start")
     new_profile = "profile_id" in data and data["profile_id"] != e.profile_id
     new_plan = "plan_params" in data and not _same(data["plan_params"], e.plan_params)
+    if "buffer_volume_ml" in data:
+        data["buffer_volume_ml"] = data["buffer_volume_ml"] or None
+    new_buffer = "buffer_id" in data and data["buffer_id"] != e.buffer_id
+    if new_buffer and e.status not in (ExperimentStatus.planned, ExperimentStatus.preparing):
+        raise HTTPException(409, "The buffer can only be changed before Start")
     for k, v in data.items():
         setattr(e, k, v)
+    if new_buffer or (e.buffer_id and e.buffer_molarity is None and e.status in (ExperimentStatus.planned, ExperimentStatus.preparing)):
+        _freeze_buffer(db, e)
     if new_profile or new_plan:
         # The plan was (re)saved against the profile as it is now
         db.flush()
@@ -665,6 +914,28 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
                                 **({"message": r.message} if r.status != "confirmed" else {})})
         except commands.CommandRejected as ex:
             results.append({"parameter": f"{param}_limits", "status": "error", "message": str(ex)})
+    # 2.3: dO2 setpoint and limits, stirrer limits (channel_params)
+    for ch, vals in (getattr(prof, "channel_params", None) or {}).items():
+        if ch not in ("do2", "stirrer") or ch not in chans or not vals:
+            continue
+        sp = vals.get("setpoint") if ch == "do2" else None
+        lo, hi = vals.get("low"), vals.get("high")
+        if sp is None and lo is None and hi is None:
+            continue
+        try:
+            rb = driver.write_channel_values(ch, sp, lo, hi)
+        except DriverError as ex:
+            results.append({"parameter": f"{ch}_values", "status": "error", "message": str(ex)})
+            continue
+        for key, want in (("setpoint", sp), ("low", lo), ("high", hi)):
+            if want is None:
+                continue
+            got = rb.get(key)
+            status = "confirmed" if got is not None and abs(got - want) < 1e-6 else "mismatch"
+            db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=f"{ch}_{key}", old_value=None,
+                                   requested_value=want, readback_value=got, status=status, origin="profile",
+                                   author=who(request, db)))
+            results.append({"parameter": f"{ch}_{key}", "status": status, "readback": got})
     wanted = [loop for loop in LOOP_PLAN if getattr(prof, LOOP_PLAN[loop][0]) and loop in chans]
     diffs: dict[str, str] = {}
     if wanted and prof.loop_assignments:
@@ -1015,7 +1286,7 @@ def get_readings(exp_id: int, db: Session = Depends(get_db), since_h: float = 0.
 def _meas_out(m: ManualMeasurement) -> S.MeasurementOut:
     return S.MeasurementOut(id=m.id, experiment_id=m.experiment_id, variable_id=m.variable_id,
                             variable_name=m.variable.name, sampled_at=m.sampled_at, t_h=m.t_h, value=m.value,
-                            unit=m.unit, note=m.note, author=m.author)
+                            unit=m.unit, note=m.note, author=m.author, volume_taken_ml=m.volume_taken_ml)
 
 
 @router.get("/experiments/{exp_id}/measurements", response_model=list[S.MeasurementOut])
@@ -1041,7 +1312,8 @@ def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Se
     else:
         at = body.sampled_at or now_of(request)
     m = ManualMeasurement(experiment_id=e.id, variable_id=var.id, sampled_at=at, t_h=_t_h(e, at),
-                          value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db))
+                          value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db),
+                          volume_taken_ml=body.volume_taken_ml)
     db.add(m)
     db.flush()
     db.refresh(m)
@@ -1069,11 +1341,15 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
     acq: Acquisition = request.app.state.acq
     now = now_of(request)
     out = []
-    for rid, live in acq.live.items():
+    names = {r.id: r for r in db.scalars(select(Reactor))}
+    order = sorted(acq.live.items(), key=lambda kv: (names[kv[0]].position if kv[0] in names else 99, kv[0]))
+    for rid, live in order:
         exp = db.scalar(select(Experiment).where(Experiment.reactor_id == rid, Experiment.status.in_(ACTIVE)))
         snap = live.snapshot
         out.append({
             "reactor_id": rid,
+            "name": names[rid].name if rid in names else rid,
+            "interval_s": acq.interval_of(rid),
             "online": live.last_error is None and live.last_ok is not None,
             "last_reading_age_s": (now - live.last_ok).total_seconds() if live.last_ok else None,
             "error": live.last_error,
@@ -1087,6 +1363,155 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
                                                     "parallel_run": exp.parallel_run.code if exp.parallel_run else None},
         })
     return out
+
+
+# --- bioreactors & probes (Settings, 2.3) ----------------------------------------------------
+
+def _reactor_out(r: Reactor, acq: Acquisition, db: Session, now: datetime) -> dict:
+    live = acq.live.get(r.id)
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == r.id, Experiment.status.in_(ACTIVE)))
+    used = db.scalar(select(func.count()).select_from(Experiment).where(Experiment.reactor_id == r.id))
+    status = ("disabled" if not r.enabled else "simulated" if r.driver == "simulator" and live and live.last_ok
+              else "connected" if live and live.last_ok and live.last_error is None
+              else "not_reachable" if live and live.last_error else "starting")
+    return {"id": r.id, "name": r.name, "driver": r.driver, "driver_label": DRIVERS.get(r.driver, r.driver),
+            "address": r.address, "interval_s": r.interval_s, "enabled": r.enabled, "position": r.position,
+            "status": status, "error": live.last_error if live else None,
+            "last_reading_age_s": (now - live.last_ok).total_seconds() if live and live.last_ok else None,
+            "active_experiment": exp.code if exp else None, "experiments": used,
+            "interval_warning": r.interval_s < INTERVAL_WARN_S or r.interval_s > 60}
+
+
+@router.get("/bioreactors")
+def list_bioreactors(request: Request, db: Session = Depends(get_db)):
+    acq: Acquisition = request.app.state.acq
+    now = now_of(request)
+    return {"reactors": [_reactor_out(r, acq, db, now) for r in db.scalars(select(Reactor).order_by(Reactor.position, Reactor.id))],
+            "drivers": [{"id": k, "label": v} for k, v in DRIVERS.items()],
+            "interval": {"min": INTERVAL_MIN_S, "max": INTERVAL_MAX_S, "warn_below": INTERVAL_WARN_S, "default": request.app.state.settings.sampling_interval_s}}
+
+
+def _check_reactor_fields(driver: Optional[str], address: Optional[str], interval_s: Optional[float]) -> None:
+    if driver is not None and driver not in DRIVERS:
+        raise HTTPException(422, f"Driver must be one of: {', '.join(DRIVERS.values())}.")
+    if interval_s is not None and not (INTERVAL_MIN_S <= interval_s <= INTERVAL_MAX_S):
+        raise HTTPException(422, f"Sampling interval must be {INTERVAL_MIN_S:g}-{INTERVAL_MAX_S:g} s.")
+    if address is not None and len(address) > 200:
+        raise HTTPException(422, "Address too long.")
+
+
+def _apply_reactor(request: Request, r: Reactor) -> None:
+    """Make the running acquisition match the saved configuration of one bioreactor."""
+    acq: Acquisition = request.app.state.acq
+    if not r.enabled:
+        acq.remove_reactor(r.id)
+        return
+    if r.driver != "simulator" and not r.address.strip():
+        acq.remove_reactor(r.id)
+        return
+    clock = request.app.state.clock
+    acq.set_reactor(r.id, make_driver(r.driver, r.id, r.address.strip(), clock=None if clock is _utcnow else clock), r.interval_s)
+
+
+@router.post("/bioreactors", status_code=201)
+def create_bioreactor(body: S.ReactorIn, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    _check_reactor_fields(body.driver, body.address, body.interval_s)
+    n = 1
+    while db.get(Reactor, f"R{n}"):
+        n += 1
+    rid = f"R{n}"
+    name = (body.name or f"Bioreactor {n}").strip()[:60]
+    if db.scalar(select(Reactor).where(func.lower(Reactor.name) == name.lower())):
+        raise HTTPException(409, f"A bioreactor named {name} already exists.")
+    pos = (db.scalar(select(func.max(Reactor.position))) or 0) + 1
+    r = Reactor(id=rid, name=name, driver=body.driver or "simulator", address=(body.address or "").strip(),
+                interval_s=body.interval_s or request.app.state.settings.sampling_interval_s,
+                enabled=bool(body.enabled), position=pos)
+    db.add(r)
+    db.flush()
+    _apply_reactor(request, r)
+    return _reactor_out(r, request.app.state.acq, db, now_of(request))
+
+
+@router.patch("/bioreactors/{rid}")
+def update_bioreactor(rid: str, body: S.ReactorPatch, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    r = _404(db.get(Reactor, rid), "Unknown bioreactor")
+    _check_reactor_fields(body.driver, body.address, body.interval_s)
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == rid, Experiment.status.in_(ACTIVE)))
+    reconnect = ((body.driver is not None and body.driver != r.driver)
+                 or (body.address is not None and body.address.strip() != r.address)
+                 or (body.enabled is not None and body.enabled != r.enabled))
+    if exp and reconnect and not body.confirm:
+        raise HTTPException(409, f"{exp.code} is running on {r.name}: recording pauses while the controller reconnects. Confirm to go on.")
+    if body.name is not None:
+        name = body.name.strip()[:60]
+        if not name or db.scalar(select(Reactor).where(func.lower(Reactor.name) == name.lower(), Reactor.id != rid)):
+            raise HTTPException(409, "Name empty or already used.")
+        r.name = name
+    if body.driver is not None:
+        r.driver = body.driver
+    if body.address is not None:
+        r.address = body.address.strip()
+    if body.enabled is not None:
+        r.enabled = body.enabled
+    if body.interval_s is not None:
+        r.interval_s = body.interval_s
+    db.flush()
+    if reconnect:
+        _apply_reactor(request, r)
+    elif body.interval_s is not None and rid in request.app.state.acq.drivers:
+        request.app.state.acq.set_interval(rid, r.interval_s)
+    if exp and (reconnect or body.interval_s is not None):
+        _event(db, exp, "bioreactor_config", f"{r.name}: configuration changed by {who(request, db)}"
+               + (f" (sampling every {r.interval_s:g} s)" if body.interval_s is not None else ""))
+    return _reactor_out(r, request.app.state.acq, db, now_of(request))
+
+
+@router.delete("/bioreactors/{rid}", status_code=204)
+def delete_bioreactor(rid: str, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    r = _404(db.get(Reactor, rid), "Unknown bioreactor")
+    if db.scalar(select(func.count()).select_from(Experiment).where(Experiment.reactor_id == rid)):
+        raise HTTPException(409, f"{r.name} is used by experiments: disable it instead.")
+    request.app.state.acq.remove_reactor(rid)
+    db.delete(r)
+
+
+@router.post("/bioreactors/{rid}/test")
+def test_bioreactor(rid: str, body: S.ReactorTestIn, request: Request, db: Session = Depends(get_db)):
+    """Read the controller once with the given (or saved) driver and address; nothing is written."""
+    r = _404(db.get(Reactor, rid), "Unknown bioreactor")
+    driver_kind = body.driver or r.driver
+    address = (body.address if body.address is not None else r.address).strip()
+    _check_reactor_fields(driver_kind, address, None)
+    if driver_kind != "simulator" and not address:
+        return {"ok": False, "error": "Give the controller's address."}
+    acq: Acquisition = request.app.state.acq
+    same = driver_kind == r.driver and address == r.address and rid in acq.drivers
+    try:
+        drv = acq.drivers[rid] if same else make_driver(driver_kind, rid, address)
+        snap = drv.read()
+    except (DriverError, ValueError) as ex:
+        return {"ok": False, "error": str(ex)}
+    finally:
+        if not same:
+            try:
+                drv.close()   # type: ignore[possibly-undefined]
+            except Exception:
+                pass
+    vals = {k: v for k, v in snap.__dict__.items() if isinstance(v, (int, float)) and v is not None}
+    found = [c for c in ("ph", "temperature", "stirrer", "do2", "redox") if vals.get(c) is not None or (snap.extra or {}).get(c) is not None]
+    return {"ok": True, "channels": found, "values": {k: vals[k] for k in ("ph", "temperature", "stirrer") if k in vals}}
+
+
+@router.get("/reactors/{reactor_id}/history")
+def reactor_history(reactor_id: str, request: Request):
+    """Live values of the last 3 hours, kept in memory only (Trends of a bioreactor without experiment)."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    return {"interval_s": acq.interval_of(reactor_id), "window_h": 3, "points": acq.history_of(reactor_id)}
 
 
 @router.post("/reactors/{reactor_id}/setpoints")
@@ -1227,6 +1652,94 @@ def reset_counters(reactor_id: str, body: S.CounterResetIn, request: Request, db
     return {"results": [r.__dict__ for r in results]}
 
 
+# --- manual pumps (hold to run), loop assignments (2.3) ------------------------------------------
+
+def _pumps_of(cfg) -> list:
+    acts = [a for lp in cfg.loops for a in lp.actuators if a.pump] + [a for a in (cfg.free_outputs or cfg.unassigned_pumps) if a.pump]
+    seen, out = set(), []
+    for a in acts:
+        if a.id not in seen:
+            seen.add(a.id)
+            out.append(a)
+    return out
+
+
+@router.get("/reactors/{reactor_id}/pumps")
+def list_pumps(reactor_id: str, request: Request):
+    """Pumps of the controller with what blocks a manual run, and the runs in progress."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    manual: ManualPumps = request.app.state.manual
+    try:
+        cfg = _loop_config(request, reactor_id, True)
+    except DriverError as ex:
+        return {"reachable": False, "message": str(ex), "pumps": []}
+    out = []
+    for a in _pumps_of(cfg):
+        try:
+            st = driver.manual_state(a.id)
+            why = ("its loop is on" if st.assigned_loop_on else "under loop control" if st.controlled
+                   else "interlocked" if st.interlocked else "in manual on the controller" if st.manual_on else None)
+            counter = st.counter_ml
+        except DriverError as ex:
+            why, counter = str(ex), None
+        run = manual.runs.get((reactor_id, a.id))
+        out.append({"id": a.id, "name": a.name, "calibrated": a.calibrated, "blocked": why, "counter_ml": counter,
+                    "running": run is not None, "seconds": (time.monotonic() - run.started) if run else None})
+    return {"reachable": True, "pumps": out, "hold_timeout_s": HOLD_TIMEOUT_S, "max_run_s": MAX_RUN_S}
+
+
+@router.post("/reactors/{reactor_id}/pumps/{pump_id}/hold")
+def hold_pump(reactor_id: str, pump_id: int, request: Request, db: Session = Depends(get_db), start: bool = True):
+    """Start (or keep running) a manual pump; call again at least every second while the button is held."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    _check_remote(request)
+    manual: ManualPumps = request.app.state.manual
+    try:
+        run = manual.hold(reactor_id, pump_id, who(request, db), start=start)
+    except ManualRefused as ex:
+        raise HTTPException(409, str(ex))
+    except DriverError as ex:
+        raise HTTPException(502, str(ex))
+    return {"running": True, "seconds": time.monotonic() - run.started, "max_run_s": MAX_RUN_S}
+
+
+@router.post("/reactors/{reactor_id}/pumps/{pump_id}/release")
+def release_pump(reactor_id: str, pump_id: int, request: Request):
+    manual: ManualPumps = request.app.state.manual
+    try:
+        run = manual.release(reactor_id, pump_id)
+    except DriverError as ex:
+        raise HTTPException(502, f"The pump may still be running — stop it on the controller's display. {ex}")
+    return {"running": False, "was_running": run is not None}
+
+
+@router.post("/reactors/{reactor_id}/loop-assignment")
+def change_loop_assignment(reactor_id: str, body: S.AssignIn, request: Request, db: Session = Depends(get_db)):
+    """Add an actuator to a loop (side +1 below / -1 above the setpoint) or remove it (side 0). Loop must be off."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status == ExperimentStatus.fermenting))
+    if exp is not None:
+        raise HTTPException(409, f"{exp.code} is recording on {reactor_id}: change the loop configuration before Start or after End.")
+    try:
+        driver.write_loop_assignment(body.loop, body.actuator_id, body.side, body.cascade)
+        time.sleep(0.3)
+        cfg = _loop_config(request, reactor_id, True)
+    except DriverError as ex:
+        raise HTTPException(502, str(ex))
+    lp = next((x for x in cfg.loops if x.key == body.loop), None)
+    now_ids = {(a.id, 1 if a.side > 0 else -1) for a in (lp.actuators if lp else ())}
+    ok = ((body.actuator_id, body.side) in now_ids) if body.side else all(i != body.actuator_id for i, _ in now_ids)
+    name = next((a.name for a in list(lp.actuators if lp else ()) + list(cfg.free_outputs) if a.id == body.actuator_id), f"actuator {body.actuator_id}")
+    what = "removed from" if body.side == 0 else f"added {'below' if body.side > 0 else 'above'} the setpoint of"
+    _reactor_event(db, request, reactor_id, None, "loop_config",
+                   f"{reactor_id}: {name} {what} the {body.loop} loop by {who(request, db)}"
+                   + ("" if ok else " — NOT confirmed by the controller"), severity="info" if ok else "alert")
+    return {"confirmed": ok, "reachable": True, **loops.config_view(cfg), "assignments": loops.assignments_of(cfg)}
+
+
 @router.get("/reactors/{reactor_id}/activity")
 def reactor_activity(reactor_id: str, request: Request, db: Session = Depends(get_db), hours: float = 72.0):
     """Commands and events of a reactor (with or without an experiment) in the last hours: monitoring page."""
@@ -1306,6 +1819,39 @@ def experiment_events(exp_id: int, db: Session = Depends(get_db)):
     return db.scalars(select(Event).where(Event.experiment_id == exp_id).order_by(Event.at.desc())).all()
 
 
+@router.get("/experiments/{exp_id}/timeline")
+def experiment_timeline(exp_id: int, db: Session = Depends(get_db), limit: int = 500):
+    """
+    One list for the "Latest events" panel (2.3): alerts and detected events, setpoint and limit changes,
+    loop switching and counter resets (the old change log), and samplings. Newest first.
+    """
+    e = _404(db.get(Experiment, exp_id))
+    items: list[dict] = []
+    for ev in db.scalars(select(Event).where(Event.experiment_id == exp_id)):
+        kind = ("detected" if ev.kind in DETECTED_EVENT_KINDS else "alert" if ev.severity == "alert"
+                else "loops" if ev.kind in ("loop", "loops", "counter_reset") else "info")
+        items.append({"at": _as_utc(ev.at).isoformat(), "t_h": ev.t_h, "category": kind, "title": ev.message,
+                      "detail": ev.kind.replace("_", " "), "severity": ev.severity, "author": None})
+    for c in db.scalars(select(SetpointCommand).where(SetpointCommand.experiment_id == exp_id)):
+        unit = {"ph": "", "temperature": " °C", "stirrer": " rpm"}.get(c.parameter, "")
+        title = (f"{c.parameter.replace('_', ' ')} {c.old_value:g} → {c.requested_value:g}{unit}" if c.old_value is not None
+                 else f"{c.parameter.replace('_', ' ')} → {c.requested_value:g}{unit}")
+        items.append({"at": _as_utc(c.at).isoformat(), "t_h": _t_h(e, _as_utc(c.at)) if e.started_at else None,
+                      "category": "change", "title": title,
+                      "detail": f"{c.status} · {c.origin}" + (f" · {c.message}" if c.message else ""),
+                      "severity": "alert" if c.status in ("rejected", "error", "mismatch") else "info", "author": c.author})
+    for m in db.scalars(select(ManualMeasurement).where(ManualMeasurement.experiment_id == exp_id)):
+        items.append({"at": _as_utc(m.sampled_at).isoformat(), "t_h": m.t_h, "category": "sampling",
+                      "title": f"{m.variable.name} = {m.value:g}{(' ' + m.unit) if m.unit else ''}",
+                      "detail": "manual" + (f" · {m.volume_taken_ml:g} mL taken" if m.volume_taken_ml else ""),
+                      "severity": "info", "author": m.author})
+    items.sort(key=lambda x: x["at"], reverse=True)
+    return items[:limit]
+
+
+DETECTED_EVENT_KINDS = ("phase_acidification", "phase_exponential", "probably_finished", "finished")
+
+
 @router.get("/events/recent", response_model=list[S.EventOut])
 def recent_events(db: Session = Depends(get_db), limit: int = 50):
     return db.scalars(select(Event).order_by(Event.at.desc()).limit(limit)).all()
@@ -1354,10 +1900,19 @@ def experiment_parameters(db: Session, exp_id: int, fit_variable: str = "OD600",
     final_od = float(od[-1]) if len(od) else None
     if not df.empty:
         bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float), final_od, bin_h)
-        out["base_dosing"] = bd.__dict__
+        out["base_dosing"] = _with_mmol(bd.__dict__, buffer_factor(db.get(Experiment, exp_id)))
     else:
         out["base_dosing"] = None
     return out
+
+
+def _with_mmol(bd: dict, factor: Optional[float]) -> dict:
+    """Same quantities in mmol of buffer (mL x mol/L x equivalents); None without a planned concentration."""
+    bd = dict(bd)
+    bd["total_mmol"] = bd.get("total_ml") * factor if factor and bd.get("total_ml") is not None else None
+    bd["peak_rate_mmol_min"] = bd.get("peak_rate_ml_min") * factor if factor and bd.get("peak_rate_ml_min") is not None else None
+    bd["buffer_mmol_per_ml"] = factor
+    return bd
 
 
 ANALYSIS_STEPS_H = (0.25, 0.5, 1.0, 2.0, 4.0)
@@ -1495,6 +2050,7 @@ SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model
     ("X_max", "Predicted maximum X₀·e^A", "", "fit"),
     ("A_ln", "Asymptote A", "ln X/X₀", "fit"),
     ("total_ml", "Total base", "mL", "controller, cumulative at end"),
+    ("total_mmol", "Total base", "mmol", "mL × planned concentration × equivalents"),
     ("peak_rate_ml_min", "Peak base rate", "mL min⁻¹", "15-min bins"),
     ("t_peak_h", "Time of peak base rate", "h", "15-min bins"),
     ("t_half_total_h", "Time to 50 % of total base", "h", "controller, cumulative"),
@@ -1623,8 +2179,8 @@ def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str
     t_od, od = _manual_series(db, e.id, "OD600")
     bd = {}
     if "ph" in channels_of(e) and not df.empty:
-        bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
-                                   float(od[-1]) if len(od) else None).__dict__
+        bd = _with_mmol(base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
+                                              float(od[-1]) if len(od) else None).__dict__, buffer_factor(e))
     cv = _control_values(control.summarize(df, channels_of(e))) if not df.empty else {}
     if "ph" in channels_of(e) and not df.empty:
         bd["t_end_h"] = (_estimated_end(request, df) or {}).get("t_end_h")
@@ -1964,6 +2520,9 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
             r = r.set_index(pd.to_datetime(r["ts"], utc=True)).drop(columns=["ts"]) \
                 .apply(pd.to_numeric, errors="coerce").resample(f"{resample_min}min").mean() \
                 .dropna(how="all").reset_index()
+        f_ = buffer_factor(e)
+        if f_ and not r.empty and "base_cumulative_ml" in r:
+            r["base_cumulative_mmol"] = pd.to_numeric(r["base_cumulative_ml"], errors="coerce") * f_
         r = _naive(r, ["ts"]).rename(columns={"ts": "timestamp (UTC)"})
         lead = [c for c in ("t_h", "timestamp (UTC)") if c in r]
         out["Controller data"] = r[lead + [c for c in r.columns if c not in lead]].dropna(axis=1, how="all") \
@@ -2009,6 +2568,8 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
                 "started_at (UTC)": e.started_at, "ended_at (UTC)": e.ended_at,
                 "parallel_run": e.parallel_run.code if e.parallel_run else None,
                 "medium": e.medium.name if e.medium else None, "buffer": e.buffer.name if e.buffer else None,
+                "buffer concentration (mol/L)": e.buffer_molarity, "buffer equivalents per mole": e.buffer_equivalents if e.buffer_molarity else None,
+                "buffer available volume (mL)": e.buffer_volume_ml,
                 "working_volume_ml": e.working_volume_ml, "author": e.author, "notes": e.notes}
         rows = [{"field": k, "value": v} for k, v in meta.items()]
         rows += [{"field": f"plan.{k}", "value": v} for k, v in _flatten(e.plan_snapshot)]
@@ -2057,16 +2618,20 @@ def _attachment(name: str) -> str:
 
 # --- users (identity for signatures, optional PIN) ---------------------------------------------
 
-def _user_out(u: User) -> dict:
-    return {"id": u.id, "name": u.name, "has_pin": u.pin_hash is not None, "archived": u.archived,
-            "guest": u.name == GUEST_NAME}
+def _user_out(u: User, db: Optional[Session] = None) -> dict:
+    role = "observer" if u.name == GUEST_NAME else (u.role or "operator")
+    out = {"id": u.id, "name": u.name, "has_pin": u.pin_hash is not None, "archived": u.archived,
+           "guest": u.name == GUEST_NAME, "role": role}
+    if db is not None:
+        out["effective_role"] = effective_role(u, db)
+    return out
 
 
 @router.get("/users")
 def list_users(db: Session = Depends(get_db), include_archived: bool = False):
     q = select(User).order_by(User.name)
     users = [u for u in db.scalars(q) if include_archived or not u.archived]
-    return sorted([_user_out(u) for u in users], key=lambda x: (x["guest"], x["name"].lower()))
+    return sorted([_user_out(u, db) for u in users], key=lambda x: (x["guest"], x["name"].lower()))
 
 
 @router.post("/users", status_code=201)
@@ -2104,7 +2669,47 @@ def login(body: S.LoginIn, request: Request, db: Session = Depends(get_db)):
 @router.get("/auth/me")
 def me(request: Request, db: Session = Depends(get_db)):
     u = current_user(request, db)
-    return {"user": _user_out(u) if u else None}
+    return {"user": _user_out(u, db) if u else None, "role": effective_role(u, db),
+            "admins_exist": admins_exist(db), "client_local": is_local(request)}
+
+
+@router.post("/users/{uid}/first-admin")
+def first_admin(uid: int, request: Request, db: Session = Depends(get_db)):
+    """Make the first administrator: only from the lab PC, only while none exists, only for a user with a PIN."""
+    if admins_exist(db):
+        raise HTTPException(409, "An administrator already exists: ask them to change levels.")
+    if not is_local(request):
+        raise HTTPException(403, "The first administrator can be set only on the lab PC.")
+    u = _404(db.get(User, uid))
+    me_ = current_user(request, db)
+    if me_ is None or me_.id != u.id:
+        raise HTTPException(403, f"Sign in as {u.name} first.")
+    if u.name == GUEST_NAME or not u.pin_hash:
+        raise HTTPException(422, "Set a PIN first: an administrator needs one.")
+    u.role = "admin"
+    log.info("first administrator: %s", u.name)
+    db.flush()
+    return _user_out(u, db)
+
+
+@router.put("/users/{uid}/role")
+def set_role(uid: int, body: S.RoleIn, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    u = _404(db.get(User, uid))
+    if body.role not in users_mod.ROLES:
+        raise HTTPException(422, "Unknown level.")
+    if u.name == GUEST_NAME:
+        raise HTTPException(422, "Guest is always an observer.")
+    if (u.role == "admin" and body.role != "admin"
+            and db.scalar(select(func.count()).select_from(User).where(User.role == "admin", User.archived.is_(False))) <= 1):
+        raise HTTPException(409, "This is the last administrator: make someone else administrator first.")
+    old = u.role or "operator"
+    u.role = body.role
+    log.info("level of %s: %s -> %s (by %s)", u.name, old, body.role, who(request, db))
+    db.add(Event(experiment_id=None, reactor_id="-", kind="user_level", severity="info",
+                 message=f"{u.name}: {users_mod.ROLE_LABELS[old]} → {users_mod.ROLE_LABELS[body.role]} (by {who(request, db)})"))
+    db.flush()
+    return _user_out(u, db)
 
 
 @router.put("/users/{uid}")
@@ -2129,6 +2734,9 @@ def update_user(uid: int, body: S.UserPatch, request: Request, db: Session = Dep
         u.token_version += 1   # other devices signed in as this user must sign in again
         token = users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)
     if body.archived is not None:
+        if body.archived and u.role == "admin" and db.scalar(select(func.count()).select_from(User).where(
+                User.role == "admin", User.archived.is_(False))) <= 1:
+            raise HTTPException(409, "This is the last administrator and cannot be archived.")
         u.archived = body.archived
     db.flush()
     return {"user": _user_out(u), "token": token}
@@ -2201,10 +2809,10 @@ def system_info(request: Request, db: Session = Depends(get_db)):
     return {
         "version": __version__, "citation": citation.info(), **build_info(), "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
         "experiments": db.scalar(select(func.count()).select_from(Experiment)),
-        "reactors": [{"reactor_id": r.reactor_id, "driver": r.driver, "address": r.address,
-                      "online": acq.live[r.reactor_id].last_error is None and acq.live[r.reactor_id].last_ok is not None,
-                      "capabilities": acq.drivers[r.reactor_id].capabilities.__dict__}
-                     for r in st.reactors if r.reactor_id in acq.drivers],
+        "reactors": [{"reactor_id": r.id, "name": r.name, "driver": r.driver, "address": r.address,
+                      "online": acq.live[r.id].last_error is None and acq.live[r.id].last_ok is not None,
+                      "capabilities": acq.drivers[r.id].capabilities.__dict__}
+                     for r in db.scalars(select(Reactor).order_by(Reactor.position, Reactor.id)) if r.id in acq.drivers],
     }
 
 

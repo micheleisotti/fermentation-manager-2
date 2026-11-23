@@ -72,6 +72,9 @@ class Buffer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200), unique=True)
     description: Mapped[str] = mapped_column(Text, default="")
+    # 2.2.2: concentration, so the dosed volume can also be shown in mmol (mL x mol/L x equivalents)
+    molarity: Mapped[Optional[float]] = mapped_column(Float)          # mol/L
+    equivalents: Mapped[Optional[float]] = mapped_column(Float)       # per mole (NaOH 1, Na2CO3 2); None = 1
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -108,10 +111,29 @@ class ControllerProfile(Base):
     # Actuators (and cascades) per loop the profile was made for, as read from a controller:
     # {"ph": [{"id": 29, "name": "Alkali", "side": 1, "kind": "actuator"}, ...], ...} (loops.py)
     loop_assignments: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Other channels (2.3: stirrer limits, dO2, level, ...): {channel: {setpoint, low, high, mode, params}}.
+    # Kept with the plan; loaded on the controller only where the driver supports it (verified per channel).
+    channel_params: Mapped[Optional[dict]] = mapped_column(JSON)
     notes: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class ExperimentTemplate(Base):
+    """
+    Whole plan of an experiment, reusable (Library > Templates, 2.3): general data, medium, buffer and
+    volume, channels, a linked profile and the plan's controller values; later also FM2 rules.
+    """
+    __tablename__ = "experiment_templates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    data: Mapped[dict] = mapped_column(JSON)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    author: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # --- experiments --------------------------------------------------------------
@@ -149,6 +171,11 @@ class Experiment(Base):
     parallel_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parallel_runs.id"))
     # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)
     channels: Mapped[Optional[list]] = mapped_column(JSON)
+    # Buffer as planned (2.2.2): concentration frozen when the plan is saved, so later edits of the
+    # buffer in the Library do not change this experiment; available volume for the "bottle low" alert
+    buffer_molarity: Mapped[Optional[float]] = mapped_column(Float)
+    buffer_equivalents: Mapped[Optional[float]] = mapped_column(Float)
+    buffer_volume_ml: Mapped[Optional[float]] = mapped_column(Float)
     notes: Mapped[str] = mapped_column(Text, default="")
     # Hidden from Home and from analysis-session pickers (reversible; nothing is deleted)
     archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
@@ -200,6 +227,7 @@ class ManualMeasurement(Base):
     value: Mapped[float] = mapped_column(Float)
     unit: Mapped[str] = mapped_column(String(40), default="")
     note: Mapped[str] = mapped_column(Text, default="")
+    volume_taken_ml: Mapped[Optional[float]] = mapped_column(Float)   # sample volume removed (2.3, sampling)
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -290,17 +318,36 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class Reactor(Base):
+    """
+    A bioreactor controller FM2 reads (Settings > Bioreactors & probes). The id ("R1", "R2", ...) is what
+    experiments store; name, driver, address and sampling interval can change. Addresses are site data:
+    they live here and in backups, never in the code.
+    """
+    __tablename__ = "reactors"
+    id: Mapped[str] = mapped_column(String(10), primary_key=True)
+    name: Mapped[str] = mapped_column(String(60))
+    driver: Mapped[str] = mapped_column(String(30), default="simulator")     # "ez2control" | "simulator"
+    address: Mapped[str] = mapped_column(String(200), default="")
+    interval_s: Mapped[float] = mapped_column(Float, default=5.0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class User(Base):
     """
-    People who use the app. Identity only (no permission levels): the chosen user signs
-    experiments, measurements and commands. An optional PIN stops others from signing
-    as that user; "Guest" never has a PIN.
+    People who use the app. The chosen user signs experiments, measurements and commands.
+    Levels (2.3): admin, operator, observer. Admin and operator need a PIN to use their
+    level; without PIN, and as "Guest", a user is an observer. Until an administrator
+    exists, levels are not enforced (as in earlier versions).
     """
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     pin_hash: Mapped[Optional[str]] = mapped_column(String(200))   # "salt$hash" (PBKDF2-SHA256), None = no PIN
     token_version: Mapped[int] = mapped_column(Integer, default=0)  # bumped on PIN change: old sign-ins expire
+    role: Mapped[Optional[str]] = mapped_column(String(20), default="operator")  # admin | operator | observer (None = operator)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

@@ -7,6 +7,7 @@ Usage (PowerShell, from C:\\FermentationManager):
   .venv\\Scripts\\python.exe scripts\\ez2_inspect.py dump  <controller-ip>
   .venv\\Scripts\\python.exe scripts\\ez2_inspect.py watch <controller-ip> 1.14 1.19 2.12 2.13
 
+values: like dump, without the web-UI files (fast)
 dump : saves the controller's web-UI scripts and the values of every address that answers
        into data\\inspect\\<ip>-<date-time>\\  (values.tsv + web\\...)
 sensor: every value of the given sensor indices (default 32 = Redox), e.g. sensor <ip> 32 1
@@ -140,13 +141,14 @@ def fetch_web(ip, dest_dir):
     print(f"web files saved: {ok} (of {len(seen)} tried) in {dest_dir}")
 
 
-def dump(ip):
+def dump(ip, web=True):
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     out = HERE / f"{ip}-{stamp}"
     (out / "web").mkdir(parents=True, exist_ok=True)
 
-    # 1) web-UI files (plain HTTP GET, as any browser does)
-    fetch_web(ip, out / "web")
+    # 1) web-UI files (plain HTTP GET, as any browser does); skipped by "values"
+    if web:
+        fetch_web(ip, out / "web")
 
     # 2) every address that answers
     link = Link(ip)
@@ -210,7 +212,7 @@ def sensor(ip, idx):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in ("dump", "watch", "web", "sensor"):
+    if len(sys.argv) < 3 or sys.argv[1] not in ("dump", "values", "watch", "web", "sensor"):
         print(__doc__)
         sys.exit(1)
     if sys.argv[1] == "sensor":
@@ -220,5 +222,7 @@ if __name__ == "__main__":
         fetch_web(sys.argv[2], HERE / f"{sys.argv[2]}-web")
     elif sys.argv[1] == "dump":
         dump(sys.argv[2])
+    elif sys.argv[1] == "values":
+        dump(sys.argv[2], web=False)
     else:
         watch(sys.argv[2], sys.argv[3:] or ["1.14", "1.19", "2.12", "2.13"])

@@ -109,7 +109,7 @@ export function ExperimentsList() {
 }
 
 /** One "End of experiment" button: the dialog asks Completed or Aborted, with an optional note. */
-export function EndExperimentButton({ e, onDone, compact = false }: { e: Experiment; onDone: () => void; compact?: boolean }) {
+export function EndExperimentButton({ e, onDone, compact = false, danger = false }: { e: Experiment; onDone: () => void; compact?: boolean; danger?: boolean }) {
   const [open, setOpen] = useState(false);
   const [outcome, setOutcome] = useState<"completed" | "aborted">("completed");
   const [note, setNote] = useState("");
@@ -118,8 +118,11 @@ export function EndExperimentButton({ e, onDone, compact = false }: { e: Experim
   const [cfg, setCfg] = useState<{ dest: string; on: boolean } | null>(null);
   const [copy, setCopy] = useState(true);
   const [result, setResult] = useState<{ path?: string; error?: string } | null>(null);
+  const [loopsOn, setLoopsOn] = useState<string[] | null>(null);
   const openDialog = async () => {
-    setOpen(true); setResult(null); setErr(null);
+    setOpen(true); setResult(null); setErr(null); setLoopsOn(null);
+    // 2.3: warn when loops are still on — ending the experiment does not switch them off
+    api.loopsState(e.reactor_id).then((ls) => setLoopsOn(ls.reachable ? ls.loops.filter((l) => l.active).map((l) => l.label) : null)).catch(() => undefined);
     try {
       const b = (await api.settings()).backup;
       setCfg({ dest: b.archive_destination, on: b.archive_on_end }); setCopy(!!b.archive_destination && b.archive_on_end);
@@ -136,13 +139,18 @@ export function EndExperimentButton({ e, onDone, compact = false }: { e: Experim
   };
   return (
     <>
-      <button className="btn outlined" style={{ color: "var(--ink)", ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={openDialog}>
-        <Icon name="stop" size={16} />End of experiment</button>
+      <button className={`btn outlined ${danger ? "danger-outline" : ""}`} style={{ ...(danger ? {} : { color: "var(--ink)" }), ...(compact ? { width: "100%", justifyContent: "center" } : {}) }} onClick={openDialog}>
+        {!danger && <Icon name="stop" size={16} />}{danger ? "End experiment" : "End of experiment"}</button>
       {open && (
         <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) setOpen(false); }}>
           <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="end-title" style={{ width: "min(520px, 100vw)" }}>
             <h2 id="end-title" style={{ fontSize: 20 }}>End {e.code}?</h2>
             <span className="small muted">Recording stops now. The controller keeps running as it is: stop the loops on the controller if needed.</span>
+            {loopsOn && loopsOn.length > 0 && (
+              <div className="banner warn small" role="alert"><Icon name="warn" size={18} color="#8a5a00" />
+                <span><b>Loops still on: {loopsOn.join(", ")}.</b> Ending the experiment does not switch them off: pumps, heating and
+                  stirrer keep working. Stop them with <b>Loops</b> (or on the controller) if the run is over.</span></div>
+            )}
             <div className="stack" role="radiogroup" aria-label="Outcome" style={{ gap: 8 }}>
               {([["completed", "Completed", "End of production: the run is valid and is offered in analysis sessions."],
                 ["aborted", "Aborted", "The run failed (contamination, fault, test…): data are kept, but it is not offered in analysis sessions."]] as const).map(([k, t, d]) => (
