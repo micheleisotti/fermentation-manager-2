@@ -72,6 +72,9 @@ class Buffer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200), unique=True)
     description: Mapped[str] = mapped_column(Text, default="")
+    # 2.2.2: concentration, so the dosed volume can also be shown in mmol (mL x mol/L x equivalents)
+    molarity: Mapped[Optional[float]] = mapped_column(Float)          # mol/L
+    equivalents: Mapped[Optional[float]] = mapped_column(Float)       # per mole (NaOH 1, Na2CO3 2); None = 1
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -149,6 +152,11 @@ class Experiment(Base):
     parallel_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("parallel_runs.id"))
     # Channels in use (drivers.base.CHANNELS); None = the default set (T, pH, stirrer)
     channels: Mapped[Optional[list]] = mapped_column(JSON)
+    # Buffer as planned (2.2.2): concentration frozen when the plan is saved, so later edits of the
+    # buffer in the Library do not change this experiment; available volume for the "bottle low" alert
+    buffer_molarity: Mapped[Optional[float]] = mapped_column(Float)
+    buffer_equivalents: Mapped[Optional[float]] = mapped_column(Float)
+    buffer_volume_ml: Mapped[Optional[float]] = mapped_column(Float)
     notes: Mapped[str] = mapped_column(Text, default="")
     # Hidden from Home and from analysis-session pickers (reversible; nothing is deleted)
     archived: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
@@ -200,6 +208,7 @@ class ManualMeasurement(Base):
     value: Mapped[float] = mapped_column(Float)
     unit: Mapped[str] = mapped_column(String(40), default="")
     note: Mapped[str] = mapped_column(Text, default="")
+    volume_taken_ml: Mapped[Optional[float]] = mapped_column(Float)   # sample volume removed (2.3, sampling)
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

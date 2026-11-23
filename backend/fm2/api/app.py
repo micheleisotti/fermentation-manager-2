@@ -434,6 +434,8 @@ def _catalogue(path: str, model):
         if db.scalar(select(model).where(model.name == body.name)):
             raise HTTPException(409, f"'{body.name}' already exists")
         obj = model(name=body.name, description=body.description)
+        if isinstance(obj, Buffer):
+            obj.molarity, obj.equivalents = body.molarity, body.equivalents
         db.add(obj)
         db.flush()
         return _named_out(db, obj)
@@ -456,6 +458,11 @@ def _catalogue(path: str, model):
             obj.description = body.description
         if body.archived is not None:
             obj.archived = body.archived
+        if isinstance(obj, Buffer):
+            if body.molarity is not None:
+                obj.molarity = body.molarity or None
+            if body.equivalents is not None:
+                obj.equivalents = body.equivalents or None
         db.flush()
         return _named_out(db, obj)
 
@@ -663,9 +670,22 @@ def create_experiment(body: S.ExperimentIn, request: Request, db: Session = Depe
         raise HTTPException(422, "Profile not found")
     e = Experiment(code=_next_code(db, Experiment, "FM"), **data)
     e.profile_ref = profile_params(prof) if prof else None
+    _freeze_buffer(db, e)
     db.add(e)
     db.flush()
     return _exp_out(e)
+
+
+def _freeze_buffer(db: Session, e: Experiment) -> None:
+    """Copy the buffer's concentration into the plan (later Library edits do not change the experiment)."""
+    b = db.get(Buffer, e.buffer_id) if e.buffer_id else None
+    e.buffer_molarity = b.molarity if b else None
+    e.buffer_equivalents = (b.equivalents or 1.0) if b and b.molarity else None
+
+
+def buffer_factor(e: Experiment) -> Optional[float]:
+    """mmol per mL of dosed buffer (mol/L x equivalents), None without a planned concentration."""
+    return e.buffer_molarity * (e.buffer_equivalents or 1.0) if e.buffer_molarity else None
 
 
 @router.get("/experiments/{exp_id}", response_model=S.ExperimentOut)
@@ -687,8 +707,15 @@ def patch_experiment(exp_id: int, body: S.ExperimentPatch, db: Session = Depends
         raise HTTPException(409, "Profile and controller parameters can only be changed before Start")
     new_profile = "profile_id" in data and data["profile_id"] != e.profile_id
     new_plan = "plan_params" in data and not _same(data["plan_params"], e.plan_params)
+    if "buffer_volume_ml" in data:
+        data["buffer_volume_ml"] = data["buffer_volume_ml"] or None
+    new_buffer = "buffer_id" in data and data["buffer_id"] != e.buffer_id
+    if new_buffer and e.status not in (ExperimentStatus.planned, ExperimentStatus.preparing):
+        raise HTTPException(409, "The buffer can only be changed before Start")
     for k, v in data.items():
         setattr(e, k, v)
+    if new_buffer or (e.buffer_id and e.buffer_molarity is None and e.status in (ExperimentStatus.planned, ExperimentStatus.preparing)):
+        _freeze_buffer(db, e)
     if new_profile or new_plan:
         # The plan was (re)saved against the profile as it is now
         db.flush()
@@ -1110,7 +1137,7 @@ def get_readings(exp_id: int, db: Session = Depends(get_db), since_h: float = 0.
 def _meas_out(m: ManualMeasurement) -> S.MeasurementOut:
     return S.MeasurementOut(id=m.id, experiment_id=m.experiment_id, variable_id=m.variable_id,
                             variable_name=m.variable.name, sampled_at=m.sampled_at, t_h=m.t_h, value=m.value,
-                            unit=m.unit, note=m.note, author=m.author)
+                            unit=m.unit, note=m.note, author=m.author, volume_taken_ml=m.volume_taken_ml)
 
 
 @router.get("/experiments/{exp_id}/measurements", response_model=list[S.MeasurementOut])
@@ -1136,7 +1163,8 @@ def add_measurement(exp_id: int, body: S.MeasurementIn, request: Request, db: Se
     else:
         at = body.sampled_at or now_of(request)
     m = ManualMeasurement(experiment_id=e.id, variable_id=var.id, sampled_at=at, t_h=_t_h(e, at),
-                          value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db))
+                          value=body.value, unit=body.unit or var.unit, note=body.note, author=who(request, db),
+                          volume_taken_ml=body.volume_taken_ml)
     db.add(m)
     db.flush()
     db.refresh(m)
@@ -1554,6 +1582,39 @@ def experiment_events(exp_id: int, db: Session = Depends(get_db)):
     return db.scalars(select(Event).where(Event.experiment_id == exp_id).order_by(Event.at.desc())).all()
 
 
+@router.get("/experiments/{exp_id}/timeline")
+def experiment_timeline(exp_id: int, db: Session = Depends(get_db), limit: int = 500):
+    """
+    One list for the "Latest events" panel (2.3): alerts and detected events, setpoint and limit changes,
+    loop switching and counter resets (the old change log), and samplings. Newest first.
+    """
+    e = _404(db.get(Experiment, exp_id))
+    items: list[dict] = []
+    for ev in db.scalars(select(Event).where(Event.experiment_id == exp_id)):
+        kind = ("detected" if ev.kind in DETECTED_EVENT_KINDS else "alert" if ev.severity == "alert"
+                else "loops" if ev.kind in ("loop", "loops", "counter_reset") else "info")
+        items.append({"at": _as_utc(ev.at).isoformat(), "t_h": ev.t_h, "category": kind, "title": ev.message,
+                      "detail": ev.kind.replace("_", " "), "severity": ev.severity, "author": None})
+    for c in db.scalars(select(SetpointCommand).where(SetpointCommand.experiment_id == exp_id)):
+        unit = {"ph": "", "temperature": " °C", "stirrer": " rpm"}.get(c.parameter, "")
+        title = (f"{c.parameter.replace('_', ' ')} {c.old_value:g} → {c.requested_value:g}{unit}" if c.old_value is not None
+                 else f"{c.parameter.replace('_', ' ')} → {c.requested_value:g}{unit}")
+        items.append({"at": _as_utc(c.at).isoformat(), "t_h": _t_h(e, _as_utc(c.at)) if e.started_at else None,
+                      "category": "change", "title": title,
+                      "detail": f"{c.status} · {c.origin}" + (f" · {c.message}" if c.message else ""),
+                      "severity": "alert" if c.status in ("rejected", "error", "mismatch") else "info", "author": c.author})
+    for m in db.scalars(select(ManualMeasurement).where(ManualMeasurement.experiment_id == exp_id)):
+        items.append({"at": _as_utc(m.sampled_at).isoformat(), "t_h": m.t_h, "category": "sampling",
+                      "title": f"{m.variable.name} = {m.value:g}{(' ' + m.unit) if m.unit else ''}",
+                      "detail": "manual" + (f" · {m.volume_taken_ml:g} mL taken" if m.volume_taken_ml else ""),
+                      "severity": "info", "author": m.author})
+    items.sort(key=lambda x: x["at"], reverse=True)
+    return items[:limit]
+
+
+DETECTED_EVENT_KINDS = ("phase_acidification", "phase_exponential", "probably_finished", "finished")
+
+
 @router.get("/events/recent", response_model=list[S.EventOut])
 def recent_events(db: Session = Depends(get_db), limit: int = 50):
     return db.scalars(select(Event).order_by(Event.at.desc()).limit(limit)).all()
@@ -1602,10 +1663,19 @@ def experiment_parameters(db: Session, exp_id: int, fit_variable: str = "OD600",
     final_od = float(od[-1]) if len(od) else None
     if not df.empty:
         bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float), final_od, bin_h)
-        out["base_dosing"] = bd.__dict__
+        out["base_dosing"] = _with_mmol(bd.__dict__, buffer_factor(db.get(Experiment, exp_id)))
     else:
         out["base_dosing"] = None
     return out
+
+
+def _with_mmol(bd: dict, factor: Optional[float]) -> dict:
+    """Same quantities in mmol of buffer (mL x mol/L x equivalents); None without a planned concentration."""
+    bd = dict(bd)
+    bd["total_mmol"] = bd.get("total_ml") * factor if factor and bd.get("total_ml") is not None else None
+    bd["peak_rate_mmol_min"] = bd.get("peak_rate_ml_min") * factor if factor and bd.get("peak_rate_ml_min") is not None else None
+    bd["buffer_mmol_per_ml"] = factor
+    return bd
 
 
 ANALYSIS_STEPS_H = (0.25, 0.5, 1.0, 2.0, 4.0)
@@ -1743,6 +1813,7 @@ SESSION_PARAMS = [  # (key, label, unit, source); "fit" keys come from the model
     ("X_max", "Predicted maximum X₀·e^A", "", "fit"),
     ("A_ln", "Asymptote A", "ln X/X₀", "fit"),
     ("total_ml", "Total base", "mL", "controller, cumulative at end"),
+    ("total_mmol", "Total base", "mmol", "mL × planned concentration × equivalents"),
     ("peak_rate_ml_min", "Peak base rate", "mL min⁻¹", "15-min bins"),
     ("t_peak_h", "Time of peak base rate", "h", "15-min bins"),
     ("t_half_total_h", "Time to 50 % of total base", "h", "controller, cumulative"),
@@ -1871,8 +1942,8 @@ def _experiment_values(db: Session, e: Experiment, fit_variable: str, model: str
     t_od, od = _manual_series(db, e.id, "OD600")
     bd = {}
     if "ph" in channels_of(e) and not df.empty:
-        bd = base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
-                                   float(od[-1]) if len(od) else None).__dict__
+        bd = _with_mmol(base_dosing.summarize(df["t_h"].astype(float), df["base_cumulative_ml"].astype(float),
+                                              float(od[-1]) if len(od) else None).__dict__, buffer_factor(e))
     cv = _control_values(control.summarize(df, channels_of(e))) if not df.empty else {}
     if "ph" in channels_of(e) and not df.empty:
         bd["t_end_h"] = (_estimated_end(request, df) or {}).get("t_end_h")
@@ -2212,6 +2283,9 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
             r = r.set_index(pd.to_datetime(r["ts"], utc=True)).drop(columns=["ts"]) \
                 .apply(pd.to_numeric, errors="coerce").resample(f"{resample_min}min").mean() \
                 .dropna(how="all").reset_index()
+        f_ = buffer_factor(e)
+        if f_ and not r.empty and "base_cumulative_ml" in r:
+            r["base_cumulative_mmol"] = pd.to_numeric(r["base_cumulative_ml"], errors="coerce") * f_
         r = _naive(r, ["ts"]).rename(columns={"ts": "timestamp (UTC)"})
         lead = [c for c in ("t_h", "timestamp (UTC)") if c in r]
         out["Controller data"] = r[lead + [c for c in r.columns if c not in lead]].dropna(axis=1, how="all") \
@@ -2257,6 +2331,8 @@ def export_tables(db: Session, exp_id: int, blocks=EXPORT_BLOCKS, resample_min: 
                 "started_at (UTC)": e.started_at, "ended_at (UTC)": e.ended_at,
                 "parallel_run": e.parallel_run.code if e.parallel_run else None,
                 "medium": e.medium.name if e.medium else None, "buffer": e.buffer.name if e.buffer else None,
+                "buffer concentration (mol/L)": e.buffer_molarity, "buffer equivalents per mole": e.buffer_equivalents if e.buffer_molarity else None,
+                "buffer available volume (mL)": e.buffer_volume_ml,
                 "working_volume_ml": e.working_volume_ml, "author": e.author, "notes": e.notes}
         rows = [{"field": k, "value": v} for k, v in meta.items()]
         rows += [{"field": f"plan.{k}", "value": v} for k, v in _flatten(e.plan_snapshot)]

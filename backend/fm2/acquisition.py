@@ -145,6 +145,18 @@ class Acquisition:
                 log.warning("%s read failed: %s", reactor_id, e)
             self._record(reactor_id, snap, now)
 
+    @staticmethod
+    def _dosed_so_far(s: Session, experiment_id: int) -> float:
+        """Base dosed since Start from the stored readings (counter resets stitched), e.g. after a restart."""
+        from .analysis.base_dosing import stitch_counter
+        vals = [v for v in s.scalars(select(ControllerReading.base_cumulative_ml)
+                                     .where(ControllerReading.experiment_id == experiment_id)
+                                     .order_by(ControllerReading.t_h)) if v is not None]
+        if len(vals) < 2:
+            return 0.0
+        st = stitch_counter(vals)
+        return float(st[-1] - st[0])
+
     def _remember(self, reactor_id: str, snap: ControllerSnapshot, now: datetime) -> None:
         h = self.history.setdefault(reactor_id, deque())
         row = {"ts": now.isoformat(), **{k: getattr(snap, k, None) for k in HISTORY_FIELDS}}
@@ -185,6 +197,10 @@ class Acquisition:
                 ))
             state = self.alert_state_for(exp.id, reactor_id, pre_start=pre)
             state.channels = frozenset(exp.channels or DEFAULT_CHANNELS)   # may change during the run
+            state.buffer_volume_ml = exp.buffer_volume_ml
+            if not pre and not state.buffer_ready:
+                state.buffer_dosed_before_ml = self._dosed_so_far(s, exp.id)
+                state.buffer_ready = True
             for ev in state.observe(snap, now):
                 row = Event(experiment_id=exp.id, reactor_id=reactor_id, kind=ev.kind,
                             severity=ev.severity, message=ev.message, t_h=t_h, at=now)

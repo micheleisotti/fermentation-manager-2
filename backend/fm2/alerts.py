@@ -97,6 +97,12 @@ class ReactorAlertState:
     _loops: dict = field(default_factory=dict)
     _expected_loops: dict = field(default_factory=dict)
     _expected_counter_reset: int = 0     # readings left in which a drop is FM2's own reset
+    # bottle running low (2.2.2): available volume from the plan, base dosed before this state existed
+    buffer_volume_ml: Optional[float] = None
+    buffer_dosed_before_ml: float = 0.0
+    buffer_ready: bool = False
+    _buf_ref: Optional[float] = None
+    _buffer_low_sent: bool = False
 
     @property
     def _when(self) -> str:
@@ -145,6 +151,7 @@ class ReactorAlertState:
             events += self._setpoint_rule(param, snap, now, first)
         if "ph" in self.channels:
             events += self._counter_rule(snap)
+            events += self._buffer_rule(snap)
             events += self._finished_rule(snap, now)
         return events
 
@@ -261,6 +268,27 @@ class ReactorAlertState:
                            f"{self.reactor_id}: base counter reset on the controller "
                            f"({before:.2f} → {snap.base_cumulative_ml:.2f} mL); "
                            f"the cumulative volume continues from {before:.2f} mL")]
+
+    def buffer_dosed_ml(self) -> Optional[float]:
+        if self._buf_ref is None:
+            return None
+        return self.buffer_dosed_before_ml + (self._stitched - self._buf_ref)
+
+    def _buffer_rule(self, snap: ControllerSnapshot) -> list[AlertEvent]:
+        """Less than 10 % of the bottle left (available volume set in planning), once per experiment."""
+        if self.pre_start or snap.base_cumulative_ml is None:
+            return []
+        if self._buf_ref is None:
+            self._buf_ref = self._stitched
+        vol = self.buffer_volume_ml
+        if not vol or self._buffer_low_sent or not self.buffer_ready:
+            return []
+        left = vol - (self.buffer_dosed_ml() or 0.0)
+        if left < 0.10 * vol:
+            self._buffer_low_sent = True
+            return [AlertEvent("buffer_low", "alert",
+                               f"{self.reactor_id}: base bottle below 10 % ({max(left, 0):.0f} of {vol:.0f} mL left). Refill or swap it.")]
+        return []
 
     def _finished_rule(self, snap: ControllerSnapshot, now: datetime) -> list[AlertEvent]:
         if self.pre_start or snap.base_cumulative_ml is None or self._finished_sent:
