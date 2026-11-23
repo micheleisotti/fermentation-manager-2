@@ -5,11 +5,7 @@ import { ExperimentTable } from "./ExperimentsList";
 import { usePolling, fmt, fmtDuration, fmtAge } from "../hooks";
 import { phAndRateOption, trendsOption, varsFor } from "../components/charts";
 import { DataValue, EChart, Icon, StatusChip } from "../components/ui";
-import logo from "../assets/logo.png";
-
-/** Display names agreed for the lab: R1 is the left unit, R2 the right one. */
-export const REACTOR_LABEL: Record<string, string> = { R1: "R1-sx", R2: "R2-dx" };
-const label = (id: string) => REACTOR_LABEL[id] ?? id;
+import { reactorName } from "../components/Shell";
 
 const outOf = (v: number | null | undefined, lo: number | null | undefined, hi: number | null | undefined) =>
   v != null && lo != null && hi != null && (v < lo || v > hi);
@@ -66,7 +62,7 @@ function IdleCard({ r }: { r: LiveReactor }) {
     <div className="card">
       <div className="row between" style={{ alignItems: "flex-start" }}>
         <div className="stack" style={{ gap: 4 }}>
-          <span className="kicker">Bioreactor {label(r.reactor_id)}</span>
+          <span className="kicker">{reactorName(r)}</span>
           <span style={{ fontSize: 18, fontWeight: 500 }}>No experiment</span>
         </div>
         <span className="pill" title="Live values from the controller; nothing is recorded until Start">
@@ -85,7 +81,7 @@ function IdleCard({ r }: { r: LiveReactor }) {
         <span>last reading{" "}
           <span className="mono">{fmtAge(r.last_reading_age_s)}</span> ago</span>
         <span className="row" style={{ gap: 8 }}>
-          <Link className="btn tonal" to={`/reactors/${r.reactor_id}`}>Open</Link>
+          <Link className="btn tonal" to={`/reactors/${r.reactor_id}`}>Controller</Link>
         </span>
       </div>
     </div>
@@ -117,7 +113,7 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
     <div className="card">
       <div className="row between" style={{ alignItems: "flex-start" }}>
         <div className="stack" style={{ gap: 4 }}>
-          <span className="kicker">Bioreactor {label(r.reactor_id)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
+          <span className="kicker">{reactorName(r)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
           <span style={{ fontSize: 18, fontWeight: 600 }}>{exp.name}{exp.strain && <span style={{ fontWeight: 400 }}> · {exp.strain}</span>} <span className="mono code-chip">{exp.code}</span></span>
         </div>
         <StatusChip status={exp.status ?? "fermenting"} />
@@ -165,12 +161,11 @@ export function Home() {
 
   return (
     <>
-      <header className="row between">
-        <h1 style={{ lineHeight: 0 }}><img className="logo-img" src={logo} alt="Fermentation Manager 2.0" style={{ height: 64, width: "auto" }} /></h1>
+      <header className="row between home-status">
         <div className="row" style={{ gap: 8 }}>
           {(live.data ?? []).map((r) => (
             <span key={r.reactor_id} className="pill" title={live.error ? "Unknown: no connection to the lab PC" : r.error ?? ""}>
-              <span className={`dot ${live.error ? "" : r.online ? "ok" : "bad"}`} />Controller {label(r.reactor_id)}
+              <span className={`dot ${live.error ? "" : r.online ? "ok" : "bad"}`} />{reactorName(r)}
             </span>
           ))}
           {live.error || sys.error

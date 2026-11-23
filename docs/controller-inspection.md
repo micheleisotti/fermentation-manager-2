@@ -285,3 +285,5 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
   is sent to an external thermostat/circulator): inference, not documented. **Never selected by FM2.**
 - Foam/Level sensor (display): only "Sensor Settings": probe type Level/Foam (`5.3.0`) and High/Low
   sensitivity (`5.3.1`); no control settings are shown while no actuator is assigned to it.
+- Stirrer: the display shows **no Control Settings** (the stirrer's `1.19.13` = 2 is its own speed
+  control, not selectable): FM2 treats the stirrer as setpoint + alarm limits only.

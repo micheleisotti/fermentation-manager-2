@@ -144,19 +144,24 @@ function SignIn({ onDone }: { onDone: (u: UserInfo, token: string) => void }) {
 }
 
 /** Small user button for the navigation rail: shows who is signed in, opens "Switch user". */
-export function UserButton() {
+const ROLE_LABEL: Record<Role, string> = { admin: "Administrator", operator: "Operator", observer: "Observer" };
+
+export function UserButton({ wide = false }: { wide?: boolean }) {
   const ctx = useUser();
   const [open, setOpen] = useState(false);
   if (!ctx) return null;
+  const level = ctx.adminsExist ? ROLE_LABEL[ctx.role] : "levels not active";
   return (
-    <div className="user-btn-wrap">
-      <button className="user-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} title={`Signed in as ${ctx.user.name}`}>
+    <div className={wide ? "user-btn-wrap wide" : "user-btn-wrap"}>
+      <button className={wide ? "user-btn wide" : "user-btn"} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} title={`Signed in as ${ctx.user.name}`}>
         <span className="avatar">{ctx.user.guest ? "G" : initials(ctx.user.name)}</span>
-        <span className="xs user-btn-name">{ctx.user.name}</span>
+        {wide ? <span className="stack" style={{ gap: 0, alignItems: "flex-start", minWidth: 0 }}>
+          <span className="small user-btn-name">{ctx.user.name}</span><span className="xs muted">{level}</span></span>
+          : <span className="xs user-btn-name">{ctx.user.name}</span>}
       </button>
       {open && (
         <div className="menu user-menu" role="menu">
-          <div className="small muted" style={{ padding: "8px 16px" }}>Signed in as <b>{ctx.user.name}</b></div>
+          <div className="small muted" style={{ padding: "8px 16px" }}>Signed in as <b>{ctx.user.name}</b> · {level}</div>
           <button role="menuitem" onClick={() => { setOpen(false); ctx.switchUser(); }}><Icon name="back" color="#54565a" />Switch user</button>
         </div>
       )}

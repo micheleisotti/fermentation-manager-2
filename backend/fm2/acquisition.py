@@ -48,7 +48,8 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 HISTORY_FIELDS = ("ph", "ph_setpoint", "temperature", "temperature_setpoint", "stirrer", "stirrer_setpoint",
-                  "base_cumulative_ml", "base_pump_pct")
+                  "base_cumulative_ml", "base_pump_pct", "ph_low_limit", "ph_high_limit",
+                  "temperature_low_limit", "temperature_high_limit")
 
 
 class Acquisition:

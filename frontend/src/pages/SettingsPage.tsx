@@ -4,7 +4,6 @@ import { useLocation } from "react-router-dom";
 import { api, type AppSettings, type BackupStatus } from "../api";
 import { usePolling } from "../hooks";
 import { DataValue, Icon } from "../components/ui";
-import { REACTOR_LABEL } from "./Home";
 import { initials, useUser } from "../components/UserGate";
 import { AppQr } from "../components/AppQr";
 import { CHANGELOG } from "../changelog";
@@ -290,7 +289,7 @@ export function SettingsPage() {
                   <div className="row between">
                     <span className="row" style={{ gap: 10, fontSize: 16, fontWeight: 500 }}>
                       <span className="pill mono" style={{ background: "#003366", color: "#fff", borderColor: "transparent", height: 28 }}>{x.reactor_id}</span>
-                      Bioreactor {REACTOR_LABEL[x.reactor_id] ?? x.reactor_id}
+                      Bioreactor {x.reactor_id}
                     </span>
                     <span className="row small" style={{ gap: 6 }}><span className={`dot ${x.online ? "ok" : "bad"}`} />{x.online ? "Online" : "Offline"}</span>
                   </div>
