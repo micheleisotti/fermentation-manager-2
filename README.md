@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/assets/fm2-banner.png" alt="Fermentation Manager 2" width="420"></p>
 
+<p align="center"><a href="https://doi.org/10.5281/zenodo.24469780"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.24469780.svg" alt="DOI"></a></p>
+
 # Fermentation Manager 2
 
 Monitoring, control and analysis of lab-scale batch fermentations run on two
@@ -132,9 +134,12 @@ If FM2 was used to record or analyse data that appear in a publication, please c
 repository" reads `CITATION.cff`):
 
 > Isotti, M. (2026). *Fermentation Manager 2 (FM2)* (Version 2.3.1) [Computer software].
-> https://github.com/micheleisotti/fermentation-manager-2
+> https://doi.org/10.5281/zenodo.24469781
 
-A DOI will be added when the first release is archived on Zenodo. Cite the version you used.
+Cite the version you used. Each release is archived on Zenodo with its own DOI (2.3.1:
+[10.5281/zenodo.24469781](https://doi.org/10.5281/zenodo.24469781)); the concept DOI
+[10.5281/zenodo.24469780](https://doi.org/10.5281/zenodo.24469780) covers all versions and
+resolves to the latest.
 The growth-curve and statistics methods are described in the manual (in preparation); they
 rely on published models and open-source libraries, listed with their references in
 [`THIRD_PARTY.md`](THIRD_PARTY.md) and in Settings › Credits and license.

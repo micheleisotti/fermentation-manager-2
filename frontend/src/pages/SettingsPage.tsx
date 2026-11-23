@@ -514,10 +514,12 @@ export function SettingsPage() {
                 <CopyBlock label="Reference" text={sys.data.citation.reference} />
                 <CopyBlock label="BibTeX" text={sys.data.citation.bibtex} />
                 <span className="xs muted">
-                  {sys.data.citation.doi
-                    ? <>Cite the version you used: the DOI of each release is listed on its archive page.</>
-                    : <>A DOI will be added once the first release is archived; until then the reference points to the source code.</>}
-                  
+                  {sys.data.citation.version_doi
+                    ? <>The DOI above identifies version {sys.data.citation.version}: cite the version you used. </>
+                    : sys.data.citation.doi
+                      ? <>This version has no DOI of its own yet: the reference uses the concept DOI, which resolves to the latest archived release. </>
+                      : <>A DOI will be added once the first release is archived; until then the reference points to the source code.</>}
+                  {sys.data.citation.concept_doi && <>All versions: <a className="mono" href={`https://doi.org/${sys.data.citation.concept_doi}`} target="_blank" rel="noreferrer">{sys.data.citation.concept_doi}</a>.</>}
                 </span>
               </>
             ) : <span className="muted small">Loading…</span>}

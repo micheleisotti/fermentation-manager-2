@@ -12,14 +12,24 @@ from fm2 import __version__, citation
 
 
 def test_reference_and_bibtex_without_and_with_doi(monkeypatch):
-    assert citation.DOI is None
+    monkeypatch.setattr(citation, "CONCEPT_DOI", None)
+    monkeypatch.setattr(citation, "VERSION_DOIS", {})
     ref = citation.reference("9.9.9")
     assert "Isotti, M. (2026)" in ref and "Version 9.9.9" in ref and citation.URL in ref
     assert "doi" not in citation.bibtex("9.9.9").lower().replace("@software", "")
-    monkeypatch.setattr(citation, "DOI", "10.5281/zenodo.1234567")
+    monkeypatch.setattr(citation, "CONCEPT_DOI", "10.5281/zenodo.1234567")
     assert "https://doi.org/10.5281/zenodo.1234567" in citation.reference("9.9.9")
     bib = citation.bibtex("9.9.9")
     assert "doi = {10.5281/zenodo.1234567}" in bib and "version = {9.9.9}" in bib and bib.count("{") == bib.count("}")
+
+
+def test_version_doi_preferred_over_concept():
+    assert citation.doi_for("2.3.1") == "10.5281/zenodo.24469781"
+    assert citation.doi_for("9.9.9") == citation.CONCEPT_DOI == "10.5281/zenodo.24469780"
+    assert "https://doi.org/10.5281/zenodo.24469781" in citation.reference("2.3.1")
+    i = citation.info("2.3.1")
+    assert i["version_doi"] == "10.5281/zenodo.24469781" and i["concept_doi"] == "10.5281/zenodo.24469780"
+    assert citation.info("9.9.9")["version_doi"] is None
 
 
 def test_info_matches_package_version():

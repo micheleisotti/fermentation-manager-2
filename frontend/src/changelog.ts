@@ -9,6 +9,9 @@ export const CHANGELOG: { version: string; date: string; items: string[] }[] = [
     "All panels open from the bottom on phones",
     "Notifications: all unread plus the last 6 read; the full list is in each fermentation's and controller's Events",
     "Android: no stretch overscroll, no sideways scroll, bottom bar stays in place",
+    "Live dots fade in and out (Home Live pill, running time)",
+    "App icons from the logo (browser, installed app, iPhone, Android, Windows shortcut)",
+    "Public source code archived on Zenodo with a DOI; How to cite shows the DOI of this version",
   ] },
   { version: "2.3.0", date: "2026-11", items: [
     "New logo; side column with navigation, bioreactors, notifications and account on wide screens",
