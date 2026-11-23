@@ -2,7 +2,7 @@
 // Caches the INTERFACE only (index.html, scripts, styles, fonts, icons), so the app opens even when
 // the lab PC cannot be reached and then shows "Lab PC not reachable". Live data (/api) is never
 // cached: it always comes from the network, or the request fails and the app says so.
-const CACHE = "fm2-shell-v2.3";
+const CACHE = "fm2-shell-v2.3.1";
 const SHELL = ["/", "/index.html", "/manifest.json", "/icon-192.png", "/icon-512.png", "/favicon.png"];
 
 self.addEventListener("install", (e) => {
