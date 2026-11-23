@@ -8,7 +8,7 @@
 # recording resumes by itself, with a gap of a few readings). Use -Force to skip the question
 # (non-interactive use). Needs either an administrator shell or the right to start/stop the fm2
 # service, granted once with grant-update-rights.ps1.
-param([switch]$Force, [string]$Url = "http://localhost:8000")
+param([switch]$Force, [string]$Url = "http://localhost:8000", [string]$Branch = "main")
 
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
@@ -47,9 +47,10 @@ if (-not (Test-Path $localEnv)) {
 
 Step "Git pull (main)"
 $old = (git rev-parse HEAD).Trim()
-git checkout main
-if ($LASTEXITCODE) { throw "git checkout main failed (local changes?)" }
-git pull --ff-only
+git fetch origin
+git checkout $Branch
+if ($LASTEXITCODE) { throw "git checkout $Branch failed (local changes?)" }
+git pull --ff-only origin $Branch
 if ($LASTEXITCODE) { throw "git pull failed" }
 $new = (git rev-parse HEAD).Trim()
 $changed = @()
