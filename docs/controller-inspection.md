@@ -308,3 +308,8 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
   Free actuators listed by the UI: `2.21` (available) = 3 and not a TGF carrier.
 - Not written by FM2 yet: planned for 2.3.x (edit assignments / free an actuator such as Addition 2 for
   an FM2 rule) after a live test, with read-back of `2.7`/`2.8` and an event in the log.
+- Actuator settings (photo R1 Alkali, "HMI Settings DigitalPump 2"): name, unit mL/min, type Pump, screen
+  priority 28 (`2.2`), decimals; Advanced: Low/High Limit 0.00/4.86 (`2.10`/`2.9`: output range, high =
+  calibration), Inhibit None (`2.29`), Interval 5 (`2.51`, period of the on/off duty cycle, s); Timer
+  function Delay/On/Off time 0/1/0 s (`2.23`/`2.24`/`2.25`). Read-only for FM2. The high limit caps the
+  loop's dosing rate; the timer probably makes pulse dosing (on/off cycles) — to verify before use.

@@ -191,7 +191,7 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="app">
       {/* wide screens: side column with logo, navigation, bioreactors, notifications, account */}
       <aside className="sidebar" aria-label="Main navigation">
-        <Link to="/" className="side-logo" aria-label="Home"><Wordmark height={24} /></Link>
+        <Link to="/" className="side-logo" aria-label="Home"><Wordmark height={21} /></Link>
         <ServerStatus />
         <NewMenu wide />
         <nav className="side-nav">

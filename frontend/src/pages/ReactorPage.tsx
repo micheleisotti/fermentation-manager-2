@@ -53,7 +53,7 @@ function LoopsCard({ cfg }: { cfg: LoopConfigView | undefined }) {
         <div key={l.key} className="loop-row">
           <span className={`dot ${l.active ? "ok" : "idle"}`} title={l.active ? "Loop on" : "Loop off"} />
           <span className="stack" style={{ gap: 2, minWidth: 0 }}>
-            <span className="small"><b>{l.label}</b> · loop · controller{l.control_type ? ` · ${l.control_type}` : ""}{l.active ? " · on" : " · off"}</span>
+            <span className="small"><b>{l.label}</b> · loop · controller{l.control_type && l.key !== "stirrer" ? ` · ${l.control_type}` : ""}{l.active ? " · on" : " · off"}</span>
             <span className="xs muted">{l.actuators.length ? l.actuators.map((a) => `${a.name}${a.side_label ? ` (${a.side_label})` : ""}`).join(", ") : "no actuator"}
               {l.drives ? ` · drives ${l.drives}` : ""}</span>
           </span>

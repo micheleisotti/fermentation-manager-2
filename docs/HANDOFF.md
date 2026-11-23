@@ -37,6 +37,26 @@ Fermentation Manager 2 (Nov 2026), so a new session can continue without re-deci
 - Approved mockups (Material 3, project palette): a Claude Design canvas
   "Fermentation Manager 2 — mockup" in Michele's artifacts.
 
+## 2.3.0 (23 Nov 2026, branch `v2.3`)
+- Bioreactors are rows of the `reactors` table (Settings › Bioreactors & probes): name, driver, address,
+  reading interval 2–300 s (default 5), enabled; drivers re-created on change without restart; seeded at
+  first start from the old configuration (FM2_REACTORS / local.env). Idle reactors keep 3 h of live values
+  in memory only (`GET /api/reactors/{id}/history`).
+- User levels admin / operator / observer, enforced in one middleware (`ROLE_RULES` in app.py) **only once
+  an administrator exists**; the first administrator is set on the lab PC by a user with a PIN; the last
+  administrator cannot be demoted or archived; new users are operators; users without PIN act as observers.
+- Buffer: concentration (M) and equivalents in the Library, frozen into the experiment at plan time with the
+  available volume; totals in mmol in analysis/export; event "buffer_low" once when below 10 %.
+- Templates (`experiment_templates`), per-channel plan values (`channel_params`: dO2, stirrer limits —
+  saved only, not loaded on the controller yet), unified timeline `GET /api/experiments/{id}/timeline`.
+- UI: side column (≥1000 px), notification centre, Controller page (loops & actuators, idle trends),
+  Latest events, Sampling volume, End warning with loops on, logo (wordmark + bioreactor icon).
+- PWA: `sw.js` caches the interface only (never `/api`); offline screen "Lab PC not reachable".
+- 23 Nov live tests (docs/controller-inspection.md): manual `2.20` and prime `2.46` work with an Operator
+  login; **no controller-side stop** (prime ran until the off command, also after disconnect); **the controller
+  does not enforce the loop interlock on manual/prime** (only its UI does); display login → `-5`.
+  Loop configuration commands `3.51/3.52/3.53` (Engineer, loop off). All for 2.3.x, not written yet.
+
 ## Decisions (do not re-open without asking)
 - Time is always **hours since Start** (when recording begins), not since inoculation.
 - An experiment is standalone. A **parallel run** is only logistics (R1|R2 switch, overlay);

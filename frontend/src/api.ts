@@ -262,7 +262,7 @@ export const api = {
   variables: () => req<Variable[]>("/variables"),
   events: (id: number) => req<EventItem[]>(`/experiments/${id}/events`),
   timeline: (id: number) => req<TimelineItem[]>(`/experiments/${id}/timeline`),
-  bioreactors: () => req<Bioreactor[]>("/bioreactors"),
+  bioreactors: () => req<{ reactors: Bioreactor[] }>("/bioreactors").then((r) => r.reactors),
   createBioreactor: (body: { name?: string; driver?: string; address?: string; interval_s?: number; enabled?: boolean }) =>
     req<Bioreactor>("/bioreactors", { method: "POST", body: JSON.stringify(body) }),
   patchBioreactor: (id: string, body: { name?: string; driver?: string; address?: string; interval_s?: number; enabled?: boolean; position?: number; confirm?: boolean }) =>
