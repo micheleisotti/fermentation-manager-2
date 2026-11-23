@@ -88,7 +88,7 @@ export function ReactorPage() {
           <span className="ab-sep" />
           <LoopsButton reactor={reactor} channels={exp?.channels} dots={loopDots(r?.snapshot, exp?.channels)} />
           <ResetCountersButton reactor={reactor} recording={exp?.status === "fermenting"} onDone={refresh} />
-          <ManualPumpsButton name={name} />
+          <ManualPumpsButton reactor={reactor} name={name} />
         </div>
       </div>
       <div className="row" role="tablist" aria-label="Sections" style={{ gap: 8 }}>

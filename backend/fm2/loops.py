@@ -71,7 +71,10 @@ def config_view(config: LoopConfig) -> dict:
         d["actuators"] = [asdict(a) | {"side_label": _side(a)} for a in lp.actuators]
         d["warnings"] = loop_warnings(lp, config)
         out.append(d)
-    return {"loops": out, "unassigned_pumps": [asdict(a) for a in config.unassigned_pumps]}
+    gas = ("valve", "mfc", "n2", "o2", "co2", "air")
+    free = [asdict(a) | {"gas": any(g in a.name.lower() for g in gas) and not a.pump} for a in config.free_outputs]
+    return {"loops": out, "unassigned_pumps": [asdict(a) for a in config.unassigned_pumps], "free_outputs": free,
+            "not_installed": [{"kind": k, "id": i, "name": n} for k, i, n in config.not_installed]}
 
 
 def assignments_of(config: LoopConfig, loops=CONTROL_LOOPS) -> dict:

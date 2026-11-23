@@ -5,6 +5,7 @@ FastAPI application. One service process hosts the API, the acquisition thread a
 
 from __future__ import annotations
 
+import time
 import io
 from types import SimpleNamespace
 import re
@@ -31,6 +32,7 @@ from ..services.app_settings import SWITCHABLE_LOOPS
 from .. import loops
 from ..config import DRIVERS, INTERVAL_MAX_S, INTERVAL_MIN_S, INTERVAL_WARN_S, Settings
 import logging
+from ..manual import HOLD_TIMEOUT_S, MAX_RUN_S, ManualPumps, ManualRefused
 from pathlib import Path
 
 from ..backup import BackupError, BackupManager
@@ -93,18 +95,32 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
                 st.params = acq.alert_params
     app_settings.on_change(_apply)
 
+    def _manual_stopped(run, why: str, ml: Optional[float]) -> None:
+        dur = max(0.0, time.monotonic() - run.started)
+        msg = (f"{run.reactor_id}: manual pump {run.name} by {run.author}: {dur:.1f} s"
+               + (f", {ml:.2f} mL" if ml is not None else "") + f" ({why})")
+        with session_scope(sessions) as s:
+            exp = s.scalar(select(Experiment).where(Experiment.reactor_id == run.reactor_id, Experiment.status.in_(ACTIVE)))
+            s.add(Event(experiment_id=exp.id if exp else None, reactor_id=run.reactor_id, kind="manual_pump",
+                        severity="info" if why == "released" else "alert", message=msg))
+    manual = ManualPumps(acq.drivers, Path(settings.data_dir) / "manual-outputs.json", on_stop=_manual_stopped)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if start_acquisition:
+            manual.recover()
+            manual.start()
             acq.start()
             backups.start()
         yield
+        manual.stop()
         acq.stop()
         backups.stop()
 
     app = FastAPI(title="Fermentation Manager", version=__version__, lifespan=lifespan)
     app.state.settings, app.state.sessions, app.state.acq, app.state.clock = settings, sessions, acq, clock
     app.state.app_settings, app.state.notifier, app.state.backups = app_settings, notifier, backups
+    app.state.manual = manual
     app.state.auth_secret = users_mod.load_secret(db_file.parent / "auth-secret.txt")
     app.state.pin_throttle = users_mod.Throttle()
     @app.middleware("http")
@@ -258,6 +274,7 @@ ROLE_RULES: list[tuple[str, str, Optional[str]]] = [
     ("POST", r"^/api/backup/run$", "admin"),
     ("ANY", r"^/api/bioreactors", "admin"),
     ("DELETE", r"^/api/experiments/\d+$", "admin"),
+    ("POST", r"^/api/reactors/[^/]+/loop-assignment$", "admin"),
 ]
 
 
@@ -897,6 +914,28 @@ def load_profile(exp_id: int, request: Request, db: Session = Depends(get_db)):
                                 **({"message": r.message} if r.status != "confirmed" else {})})
         except commands.CommandRejected as ex:
             results.append({"parameter": f"{param}_limits", "status": "error", "message": str(ex)})
+    # 2.3: dO2 setpoint and limits, stirrer limits (channel_params)
+    for ch, vals in (getattr(prof, "channel_params", None) or {}).items():
+        if ch not in ("do2", "stirrer") or ch not in chans or not vals:
+            continue
+        sp = vals.get("setpoint") if ch == "do2" else None
+        lo, hi = vals.get("low"), vals.get("high")
+        if sp is None and lo is None and hi is None:
+            continue
+        try:
+            rb = driver.write_channel_values(ch, sp, lo, hi)
+        except DriverError as ex:
+            results.append({"parameter": f"{ch}_values", "status": "error", "message": str(ex)})
+            continue
+        for key, want in (("setpoint", sp), ("low", lo), ("high", hi)):
+            if want is None:
+                continue
+            got = rb.get(key)
+            status = "confirmed" if got is not None and abs(got - want) < 1e-6 else "mismatch"
+            db.add(SetpointCommand(experiment_id=e.id, reactor_id=e.reactor_id, parameter=f"{ch}_{key}", old_value=None,
+                                   requested_value=want, readback_value=got, status=status, origin="profile",
+                                   author=who(request, db)))
+            results.append({"parameter": f"{ch}_{key}", "status": status, "readback": got})
     wanted = [loop for loop in LOOP_PLAN if getattr(prof, LOOP_PLAN[loop][0]) and loop in chans]
     diffs: dict[str, str] = {}
     if wanted and prof.loop_assignments:
@@ -1611,6 +1650,94 @@ def reset_counters(reactor_id: str, body: S.CounterResetIn, request: Request, db
         _reactor_event(db, request, reactor_id, exp, f"{MANUAL_RESET_KIND}:{r.counter}", msg,
                        severity="info" if r.status == "confirmed" else "alert")
     return {"results": [r.__dict__ for r in results]}
+
+
+# --- manual pumps (hold to run), loop assignments (2.3) ------------------------------------------
+
+def _pumps_of(cfg) -> list:
+    acts = [a for lp in cfg.loops for a in lp.actuators if a.pump] + [a for a in (cfg.free_outputs or cfg.unassigned_pumps) if a.pump]
+    seen, out = set(), []
+    for a in acts:
+        if a.id not in seen:
+            seen.add(a.id)
+            out.append(a)
+    return out
+
+
+@router.get("/reactors/{reactor_id}/pumps")
+def list_pumps(reactor_id: str, request: Request):
+    """Pumps of the controller with what blocks a manual run, and the runs in progress."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    manual: ManualPumps = request.app.state.manual
+    try:
+        cfg = _loop_config(request, reactor_id, True)
+    except DriverError as ex:
+        return {"reachable": False, "message": str(ex), "pumps": []}
+    out = []
+    for a in _pumps_of(cfg):
+        try:
+            st = driver.manual_state(a.id)
+            why = ("its loop is on" if st.assigned_loop_on else "under loop control" if st.controlled
+                   else "interlocked" if st.interlocked else "in manual on the controller" if st.manual_on else None)
+            counter = st.counter_ml
+        except DriverError as ex:
+            why, counter = str(ex), None
+        run = manual.runs.get((reactor_id, a.id))
+        out.append({"id": a.id, "name": a.name, "calibrated": a.calibrated, "blocked": why, "counter_ml": counter,
+                    "running": run is not None, "seconds": (time.monotonic() - run.started) if run else None})
+    return {"reachable": True, "pumps": out, "hold_timeout_s": HOLD_TIMEOUT_S, "max_run_s": MAX_RUN_S}
+
+
+@router.post("/reactors/{reactor_id}/pumps/{pump_id}/hold")
+def hold_pump(reactor_id: str, pump_id: int, request: Request, db: Session = Depends(get_db), start: bool = True):
+    """Start (or keep running) a manual pump; call again at least every second while the button is held."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    _check_remote(request)
+    manual: ManualPumps = request.app.state.manual
+    try:
+        run = manual.hold(reactor_id, pump_id, who(request, db), start=start)
+    except ManualRefused as ex:
+        raise HTTPException(409, str(ex))
+    except DriverError as ex:
+        raise HTTPException(502, str(ex))
+    return {"running": True, "seconds": time.monotonic() - run.started, "max_run_s": MAX_RUN_S}
+
+
+@router.post("/reactors/{reactor_id}/pumps/{pump_id}/release")
+def release_pump(reactor_id: str, pump_id: int, request: Request):
+    manual: ManualPumps = request.app.state.manual
+    try:
+        run = manual.release(reactor_id, pump_id)
+    except DriverError as ex:
+        raise HTTPException(502, f"The pump may still be running — stop it on the controller's display. {ex}")
+    return {"running": False, "was_running": run is not None}
+
+
+@router.post("/reactors/{reactor_id}/loop-assignment")
+def change_loop_assignment(reactor_id: str, body: S.AssignIn, request: Request, db: Session = Depends(get_db)):
+    """Add an actuator to a loop (side +1 below / -1 above the setpoint) or remove it (side 0). Loop must be off."""
+    acq: Acquisition = request.app.state.acq
+    driver = _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == reactor_id, Experiment.status == ExperimentStatus.fermenting))
+    if exp is not None:
+        raise HTTPException(409, f"{exp.code} is recording on {reactor_id}: change the loop configuration before Start or after End.")
+    try:
+        driver.write_loop_assignment(body.loop, body.actuator_id, body.side, body.cascade)
+        time.sleep(0.3)
+        cfg = _loop_config(request, reactor_id, True)
+    except DriverError as ex:
+        raise HTTPException(502, str(ex))
+    lp = next((x for x in cfg.loops if x.key == body.loop), None)
+    now_ids = {(a.id, 1 if a.side > 0 else -1) for a in (lp.actuators if lp else ())}
+    ok = ((body.actuator_id, body.side) in now_ids) if body.side else all(i != body.actuator_id for i, _ in now_ids)
+    name = next((a.name for a in list(lp.actuators if lp else ()) + list(cfg.free_outputs) if a.id == body.actuator_id), f"actuator {body.actuator_id}")
+    what = "removed from" if body.side == 0 else f"added {'below' if body.side > 0 else 'above'} the setpoint of"
+    _reactor_event(db, request, reactor_id, None, "loop_config",
+                   f"{reactor_id}: {name} {what} the {body.loop} loop by {who(request, db)}"
+                   + ("" if ok else " — NOT confirmed by the controller"), severity="info" if ok else "alert")
+    return {"confirmed": ok, "reachable": True, **loops.config_view(cfg), "assignments": loops.assignments_of(cfg)}
 
 
 @router.get("/reactors/{reactor_id}/activity")

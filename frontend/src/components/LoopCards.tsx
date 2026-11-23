@@ -3,7 +3,9 @@
  * target and limits (edit), its actuators with output %, then sensors and outputs in no loop.
  */
 import { useState } from "react";
-import type { LoopConfigView, LoopInfo, Snapshot } from "../api";
+import { api, type LoopConfigView, type LoopInfo, type Snapshot } from "../api";
+import { useCan } from "./UserGate";
+import { SidePanel } from "./SidePanels";
 import { fmt } from "../hooks";
 import { ControlEditDialog } from "./ControlEditDialog";
 
@@ -43,7 +45,7 @@ function Bar({ name, v, unit }: { name: string; v: number | null; unit: string }
   );
 }
 
-function LoopCard({ l, s, onEdit }: { l: LoopInfo; s: Snapshot | null; onEdit?: (p: string) => void }) {
+function LoopCard({ l, s, onEdit, onActuators }: { l: LoopInfo; s: Snapshot | null; onEdit?: (p: string) => void; onActuators?: () => void }) {
   const [sp, lo, hi, d] = limitsOf(l.key, s);
   const level = l.key === "level";
   const unit = { temperature: "°C", stirrer: "rpm", do2: "%", redox: "mV" }[l.key] ?? "";
@@ -67,6 +69,7 @@ function LoopCard({ l, s, onEdit }: { l: LoopInfo; s: Snapshot | null; onEdit?: 
       {l.drives && <span className="xs muted">Cascade to {l.drives}{l.active ? "" : " (inactive while the loop is off)"}</span>}
       {l.control_type && l.key !== "stirrer" && l.actuators.length > 0 && <span className="xs muted">control {l.control_type}</span>}
       {l.warnings.map((w) => <span key={w} className="xs" style={{ color: "var(--data-orange-text)" }}>⚠ {w}</span>)}
+      {onActuators && l.key !== "redox" && <button className="link-btn" style={{ alignSelf: "flex-start" }} onClick={onActuators}>Edit actuators</button>}
     </div>
   );
 }
@@ -74,25 +77,99 @@ function LoopCard({ l, s, onEdit }: { l: LoopInfo; s: Snapshot | null; onEdit?: 
 export function LoopCards({ reactor, cfg, s, onChanged, columns = true }:
   { reactor: string; cfg: LoopConfigView | undefined; s: Snapshot | null; onChanged?: () => void; columns?: boolean }) {
   const [edit, setEdit] = useState<string | null>(null);
+  const [assign, setAssign] = useState<string | null>(null);
+  const can = useCan();
   if (!cfg) return <span className="small muted">Reading the controller configuration…</span>;
   if (!cfg.reachable) return <span className="small muted">{cfg.message ?? "Controller not reachable."}</span>;
   const loops = cfg.loops.filter((l) => l.installed);
-  const free = cfg.unassigned_pumps;
+  const free = cfg.free_outputs ?? cfg.unassigned_pumps;
+  const absent = cfg.not_installed ?? [];
   return (
     <>
       <div className={columns ? "loop-grid" : "stack"} style={columns ? undefined : { gap: 10 }}>
-        {loops.map((l) => <LoopCard key={l.key} l={l} s={s} onEdit={s ? setEdit : undefined} />)}
+        {loops.map((l) => <LoopCard key={l.key} l={l} s={s} onEdit={s ? setEdit : undefined}
+          onActuators={can("admin") ? () => setAssign(l.key) : undefined} />)}
       </div>
       {free.length > 0 && <>
         <span className="kicker" style={{ marginTop: 6 }}>Outputs not assigned to a loop</span>
         <div className={columns ? "free-grid" : "stack"} style={columns ? undefined : { gap: 8 }}>
-          {free.map((a) => { const o = outputOf(a.name, s); return <div key={a.id} className="loop-card slim"><Bar name={a.name} v={o.v} unit={o.unit} /></div>; })}
+          {free.map((a) => {
+            const o = outputOf(a.name, s);
+            const gas = "gas" in a && a.gas;
+            return gas
+              ? <button key={a.id} className="loop-card slim as-btn" title="Gas management is not implemented yet"
+                  onClick={() => window.alert(`${a.name}: gas management is not implemented yet in FM2. Use the controller's display.`)}>
+                  <Bar name={`${a.name} · gas`} v={o.v} unit={o.unit} /></button>
+              : <div key={a.id} className="loop-card slim"><Bar name={a.name} v={o.v} unit={o.unit} /></div>;
+          })}
+        </div>
+      </>}
+      {absent.length > 0 && <>
+        <span className="kicker" style={{ marginTop: 6 }}>Known to the controller, not installed</span>
+        <div className="free-grid">
+          {absent.map((x) => (
+            <div key={`${x.kind}${x.id}`} className="loop-card slim absent">
+              <span className="row between small" style={{ flexWrap: "nowrap" }}><span>{x.name}</span><span className="xs">{x.kind}</span></span>
+              <span className="xs">not installed on controller</span>
+            </div>
+          ))}
         </div>
       </>}
       <span className="xs muted">As read from the controller: each loop with its sensor and actuators (output now), then the outputs in no loop.
-        Assignments are changed on the controller's display (from FM2 in 2.3.x).</span>
+        Administrators change the actuators with Edit actuators (loop off).</span>
+      {assign && <AssignPanel reactor={reactor} cfg={cfg} loop={assign} onClose={() => setAssign(null)} onChanged={onChanged} />}
       {edit && s && <ControlEditDialog reactor={reactor} parameter={edit} snapshot={s} remote={!window.location.hostname.match(/^(localhost|127\.)/)}
         onClose={(changed) => { setEdit(null); if (changed) onChanged?.(); }} />}
     </>
+  );
+}
+
+
+/** Edit the actuators of one loop (admin, loop off): remove, or add a free output below / above the setpoint. */
+function AssignPanel({ reactor, cfg, loop, onClose, onChanged }: { reactor: string; cfg: LoopConfigView; loop: string; onClose: () => void; onChanged?: () => void }) {
+  const [view, setView] = useState(cfg);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
+  const [pick, setPick] = useState<number | "">("");
+  const [side, setSide] = useState(1);
+  const l = view.loops.find((x) => x.key === loop)!;
+  const free = (view.free_outputs ?? view.unassigned_pumps).filter((a) => !("gas" in a && a.gas));
+  const run = async (actuator_id: number, sd: number, label: string) => {
+    if (sd === 0 && !window.confirm(`Remove ${label} from the ${l.label} loop on the controller?`)) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await api.assignActuator(reactor, { loop, actuator_id, side: sd });
+      setView(r); onChanged?.(); setPick("");
+      setMsg(r.confirmed ? { kind: "good", text: "Done and confirmed by the controller (read back)." }
+        : { kind: "alert", text: "Sent, but the controller does not show the change: check on its display." });
+    } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <SidePanel title={`Actuators · ${l.label} loop`} sub={`${reactor} · as on the controller's Loop Configuration`} busy={busy} onClose={onClose}>
+      {l.active && <div className="banner warn small">The loop is on: stop it (Loops) before changing its actuators.</div>}
+      {l.actuators.length === 0 && <span className="small muted">No actuator in this loop.</span>}
+      {l.actuators.map((a) => (
+        <div key={`${a.kind}${a.id}`} className="row between" style={{ padding: "8px 0", borderBottom: "1px solid var(--divider)", flexWrap: "nowrap" }}>
+          <span>{a.name} <span className="xs muted">· {a.side > 0 ? "below the setpoint (↑)" : "above the setpoint (↓)"}{a.kind === "sensor" ? " · cascade" : ""}</span></span>
+          {a.kind === "actuator" && <button className="btn text" disabled={busy || !!l.active} onClick={() => run(a.id, 0, a.name)}>Remove</button>}
+        </div>
+      ))}
+      <span className="kicker" style={{ marginTop: 8 }}>Add a free output</span>
+      <div className="row" style={{ gap: 8 }}>
+        <select value={pick} onChange={(e) => setPick(e.target.value === "" ? "" : Number(e.target.value))} style={{ width: "auto", height: 38 }} aria-label="Output">
+          <option value="">Choose…</option>
+          {free.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        <select value={side} onChange={(e) => setSide(Number(e.target.value))} style={{ width: "auto", height: 38 }} aria-label="Side">
+          <option value={1}>below the setpoint (↑)</option><option value={-1}>above the setpoint (↓)</option>
+        </select>
+        <button className="btn filled" disabled={busy || pick === "" || !!l.active} onClick={() => run(pick as number, side, "")}>Add</button>
+      </div>
+      {msg && <div className={`banner ${msg.kind} small`}>{msg.text}</div>}
+      <div className="banner warn small"><span>Written to the controller like Accept on its Loop Configuration page (Engineer login), then read back and
+        logged. First use: check the result on the display. Not possible while an experiment is recording on this bioreactor. A profile made for
+        other actuators does not load its loop parameters.</span></div>
+    </SidePanel>
   );
 }

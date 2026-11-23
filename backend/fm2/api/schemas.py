@@ -317,3 +317,10 @@ class TemplatePatch(BaseModel):
     description: Optional[str] = None
     data: Optional[dict] = None
     archived: Optional[bool] = None
+
+
+class AssignIn(BaseModel):
+    loop: str
+    actuator_id: int = Field(ge=0, le=63)
+    side: int = Field(ge=-1, le=1)        # +1 below the setpoint, -1 above, 0 remove
+    cascade: bool = False

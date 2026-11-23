@@ -192,7 +192,7 @@ function FermentationView({ e, partner, onChange }: { e: Experiment; partner?: E
           <ControllerButton reactor={e.reactor_id} name={name} s={r?.snapshot} channels={ch} phMode={r?.ph_control?.mode} onChanged={refresh} />
           <LoopsButton reactor={e.reactor_id} channels={ch} dots={loopDots(r?.snapshot, ch)} />
           <ResetCountersButton reactor={e.reactor_id} recording={e.status === "fermenting"} onDone={() => { readings.refresh(); timeline.refresh(); }} />
-          <ManualPumpsButton name={name} />
+          <ManualPumpsButton reactor={e.reactor_id} name={name} />
           <span style={{ flex: 1 }} />
           {preparing && <StartExperimentButton e={e} onDone={onChange} />}
           {running && !preparing && <EndExperimentButton e={e} onDone={onChange} danger />}

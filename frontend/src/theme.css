@@ -572,3 +572,7 @@ html[data-theme="dark"] .wordmark-2 .wm-light, html[data-theme="dim"] .wordmark-
 .switch.green.on { background: var(--data-green-dark); }
 .switch:disabled { opacity: .45; cursor: not-allowed; }
 .status, .tag { border-radius: 999px; }
+.btn.danger { background: var(--alert) !important; color: #fff !important; border-color: var(--alert) !important; }
+.btn.hold-on { background: var(--data-green-dark) !important; color: #fff !important; }
+.loop-card.absent { background: var(--surface-container); color: var(--ink-soft); box-shadow: none; border: 1px dashed var(--outline-variant); }
+.as-btn { border: 0; text-align: left; font: inherit; cursor: pointer; }

@@ -313,3 +313,13 @@ Same on both: actuator numbering (28 Addition 2 → pH acid side, not calibrated
   calibration), Inhibit None (`2.29`), Interval 5 (`2.51`, period of the on/off duty cycle, s); Timer
   function Delay/On/Off time 0/1/0 s (`2.23`/`2.24`/`2.25`). Read-only for FM2. The high limit caps the
   loop's dosing rate; the timer probably makes pulse dosing (on/off cycles) — to verify before use.
+
+
+### Written by FM2 from 2.3.0 (23 Nov 2026)
+- Prime `2.46.<pump>` 0/1 (pumps 22–30, Operator login) for "hold to run", with FM2-side checks before
+  switching on (`1.14.<2.7>`, `2.19`, `2.47`, `2.20`), keep-alive watchdog (1.5 s), 60 s limit, switch-off at
+  start-up of what FM2 left on (`data/manual-outputs.json`). `2.20` (manual toggle) is still never written.
+- Loop configuration `3.51/3.52/3.53.<sensor>` = actuator id (Engineer login, loop off, not while recording),
+  read back from `2.7/2.8` and logged. **First live use to be checked on the display.**
+- dO2 setpoint `1.13.1` and limits `1.4/1.5.1`, stirrer limits `1.4/1.5.13`, from the plan ("Check and load").
+- Login answer `-5`: reported as "controller locked by a login on the display or web UI".

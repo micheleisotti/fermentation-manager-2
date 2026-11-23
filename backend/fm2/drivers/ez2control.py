@@ -1,5 +1,5 @@
 """
-Applikon ez2-Control driver — READ-ONLY for now.
+Applikon ez2-Control driver (writes only the allow-listed addresses, see WRITABLE_ADDRESSES).
 
 How the controller talks (found by inspecting the web UI, firmware mE.2.9.2.4,
 see docs/controller-inspection.md):
@@ -38,7 +38,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from .base import (PH_MODE_PARAMS, ControllerDriver, ControllerSnapshot, DriverCapabilities, DriverError,
+from .base import (ManualState, PH_MODE_PARAMS, ControllerDriver, ControllerSnapshot, DriverCapabilities, DriverError,
                    LoopActuator, LoopConfig, LoopInfo, PhControl)
 
 log = logging.getLogger(__name__)
@@ -161,7 +161,16 @@ LOOP_ACTIVE_ADDRESSES = {loop: f"1.14.{s}" for loop, s in SWITCH_SENSORS.items()
 DOSE_RESET_ADDRESSES = {"base": f"2.13.{BASE_ACTUATOR}", "acid": f"2.13.{ACID_ACTUATOR}",
                         "antifoam": f"2.13.{ANTIFOAM_ACTUATOR}"}
 
-WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | frozenset(LOOP_TYPE_ADDRESSES.values())
+# 2.3: manual drive of the pumps (prime 2.46, 0/1 only), loop configuration commands (Engineer, loop
+# off; 3.51 add above / 3.52 add below / 3.53 remove, value = actuator id) and dO2 / stirrer values.
+PUMP_IDS = tuple(range(22, 31))
+PRIME_ADDRESSES = frozenset(f"2.46.{a}" for a in PUMP_IDS)
+ASSIGN_ADDRESSES = frozenset(f"3.{k}.{s}" for k in (51, 52, 53) for s in (PH, DO2, TEMPERATURE, STIRRER, LEVEL))
+CHANNEL_SENSORS = {"do2": DO2, "stirrer": STIRRER}
+CHANNEL_ADDRESSES = frozenset([f"1.13.{DO2}"] + [f"1.{k}.{s}" for k in (4, 5) for s in CHANNEL_SENSORS.values()])
+CASCADE_FLAG = 0x40000000
+
+WRITABLE_ADDRESSES = (SETPOINT_ADDRESSES | PRIME_ADDRESSES | ASSIGN_ADDRESSES | CHANNEL_ADDRESSES | frozenset(LOOP_TYPE_ADDRESSES.values())
                       | frozenset(LOOP_ACTIVE_ADDRESSES.values())
                       | frozenset(DOSE_RESET_ADDRESSES.values())
                       | frozenset(a for d in LOOP_PARAM_ADDRESSES.values() for a in d.values())
@@ -175,6 +184,10 @@ def build_write_request(address: str, text: str) -> bytes:
         raise DriverError(f"refusing to write malformed value {text!r}")
     if address in DOSE_RESET_ADDRESSES.values() and text != "1":
         raise DriverError(f"refusing to write {text!r} to the dose counter {address}: only the reset command 1")
+    if address in PRIME_ADDRESSES and text not in ("0", "1"):
+        raise DriverError(f"refusing to write {text!r} to the prime command {address}: only 0 or 1")
+    if address in ASSIGN_ADDRESSES and not text.isdigit():
+        raise DriverError(f"refusing to write {text!r} to the loop configuration {address}: only an actuator id")
     if address in LOOP_ACTIVE_ADDRESSES.values() and text not in ("0", "1"):
         raise DriverError(f"refusing to write {text!r} to the loop switch {address}: only 0 or 1")
     if address in LOOP_TYPE_ADDRESSES.values() and text not in WRITABLE_PH_MODES.values():
@@ -421,7 +434,7 @@ class Ez2ControlDriver(ControllerDriver):
         return snapshot_from_values(values, self._clock())
 
     # -- writes ----------------------------------------------------------------------
-    def _logged_in_writes(self, writes: list[tuple[str, str, int]]) -> None:
+    def _logged_in_writes(self, writes: list[tuple[str, str, int]], wait_readback: bool = True, as_level: Optional[int] = None) -> None:
         """
         Log in, send each (address, text, decimals) write and wait for its read-back, log out.
         Caller holds self._lock and has validated the values. Never claims another login.
@@ -436,17 +449,21 @@ class Ez2ControlDriver(ControllerDriver):
         logged_in = False
         try:
             try:
-                ws.send(build_login_request(self.login_level, self.login_user, password))
+                ws.send(build_login_request(as_level or self.login_level, self.login_user, password))
             except Exception as e:
                 raise DriverError(f"{self.url}: login failed: {e}") from e
             level, until = None, time.monotonic() + 2.0
             while time.monotonic() < until:
                 state = self._query_once({"login": LOGIN_ADDRESS}).get("login", "")
                 level = to_float(state.split("|")[0]) if state else None
-                if level is not None and level >= self.login_level:
+                if level is not None and (level >= 1 or level < 0):
                     break
                 time.sleep(0.2)
-            if level is None or level < self.login_level:
+            if level is not None and level < 0:
+                # verified 23 Nov 2026: -5 while someone is logged in on the display / web UI
+                raise DriverError("controller locked: someone is logged in on the controller's display or web UI "
+                                  f"(code {int(level)}). Log out there (View) and retry. Nothing was written.")
+            if level is None or level < 1:
                 raise DriverError("login refused by the controller (wrong password, or another user is "
                                   "logged in on the display/web UI). Nothing was written.")
             logged_in = True
@@ -456,6 +473,9 @@ class Ez2ControlDriver(ControllerDriver):
                 except Exception as e:
                     raise DriverError(f"{self.url}: write of {address} failed: {e}") from e
                 log.info("%s: %s -> %s sent", self.reactor_id, address, text)
+                if not wait_readback:
+                    time.sleep(0.15)
+                    continue
                 deadline = time.monotonic() + 3.0
                 while time.monotonic() < deadline:
                     got = to_float(self._query_once({"v": address}).get("v"))
@@ -613,6 +633,78 @@ class Ez2ControlDriver(ControllerDriver):
         with self._lock:
             self._logged_in_writes([(DOSE_RESET_ADDRESSES[counter], "1", 0)])
 
+    # -- manual pumps (prime), loop assignments, dO2/stirrer values (2.3) ------------
+    def manual_state(self, pump_id: int) -> ManualState:
+        if pump_id not in PUMP_IDS:
+            raise DriverError(f"actuator {pump_id} is not a pump")
+        with self._lock:
+            v = self._query({"name": f"2.1.{pump_id}", "assigned": f"2.7.{pump_id}", "controlled": f"2.19.{pump_id}",
+                             "manual": f"2.20.{pump_id}", "inter": f"2.47.{pump_id}", "prime": f"2.46.{pump_id}",
+                             "count": f"2.13.{pump_id}"})
+            sensor = to_float(v.get("assigned"))
+            loop_on = False
+            if sensor is not None and sensor >= 0:
+                loop_on = to_float(self._query({"a": f"1.14.{int(sensor)}"}).get("a")) == 1
+        return ManualState(pump_id=pump_id, name=(v.get("name") or f"Pump {pump_id}").strip(), assigned_loop_on=loop_on,
+                           controlled=to_float(v.get("controlled")) == 1, interlocked=to_float(v.get("inter")) == 1,
+                           manual_on=(to_float(v.get("manual")) or 0) != 0, prime_on=to_float(v.get("prime")) == 1,
+                           counter_ml=to_float(v.get("count")))
+
+    def write_prime(self, pump_id: int, on: bool) -> None:
+        if pump_id not in PUMP_IDS:
+            raise DriverError(f"actuator {pump_id} is not a pump")
+        with self._lock:
+            # Operator level is enough (verified 23 Nov 2026)
+            self._logged_in_writes([(f"2.46.{pump_id}", "1" if on else "0", 0)], as_level=1)
+
+    def write_loop_assignment(self, loop: str, actuator_id: int, side: int, cascade: bool = False) -> None:
+        sensor = dict(CONFIG_LOOPS).get(loop)
+        if sensor is None or loop == "redox":
+            raise DriverError(f"unknown loop {loop!r}")
+        if side not in (-1, 0, 1) or not (0 <= actuator_id < N_ACTUATORS):
+            raise DriverError("invalid actuator or side")
+        # loopconfiguration.js: 3.51 = "positive" side (position > 0, acts below the setpoint, e.g. Alkali),
+        # 3.52 = "negative" side (above the setpoint, e.g. Addition 2 as acid), 3.53 = remove
+        code = {1: 51, -1: 52, 0: 53}[side]
+        value = actuator_id + (CASCADE_FLAG if cascade else 0)
+        with self._lock:
+            if to_float(self._query({"a": f"1.14.{sensor}"}).get("a")) == 1:
+                raise DriverError(f"the {loop} loop is on: stop it before changing its actuators")
+            self._logged_in_writes([(f"3.{code}.{sensor}", str(value), 0)], wait_readback=False, as_level=2)
+
+    def write_channel_values(self, channel: str, setpoint: Optional[float], low: Optional[float], high: Optional[float]) -> dict:
+        import math
+        sensor = CHANNEL_SENSORS.get(channel)
+        if sensor is None:
+            raise DriverError(f"no channel values for {channel!r}")
+        if channel == "stirrer" and setpoint is not None:
+            raise DriverError("the stirrer setpoint is written as a setpoint, not here")
+        with self._lock:
+            cur = self._query({"sp": f"1.13.{sensor}", "hi": f"1.4.{sensor}", "lo": f"1.5.{sensor}", "max": f"1.6.{sensor}",
+                               "min": f"1.7.{sensor}", "dec": f"1.58.{sensor}"})
+            rmin, rmax, dec = to_float(cur.get("min")), to_float(cur.get("max")), to_float(cur.get("dec"))
+            if None in (rmin, rmax, dec):
+                raise DriverError(f"{channel}: cannot read the controller's range, not writing")
+            dec = int(dec)
+            lo_new = to_float(cur.get("lo")) if low is None else low
+            hi_new = to_float(cur.get("hi")) if high is None else high
+            for name, val in (("setpoint", setpoint), ("low limit", low), ("high limit", high)):
+                if val is not None and (not math.isfinite(val) or not (rmin <= val <= rmax)):
+                    raise DriverError(f"{channel} {name} {val!r} outside the controller's range {rmin:g}–{rmax:g}")
+            if lo_new is not None and hi_new is not None and lo_new >= hi_new:
+                raise DriverError(f"{channel}: low limit {lo_new:g} must be below high limit {hi_new:g}")
+            writes = []
+            if setpoint is not None:
+                writes.append((f"1.13.{sensor}", _format(setpoint, dec, f"{channel} setpoint"), dec))
+            lim = [(f"1.5.{sensor}", low), (f"1.4.{sensor}", high)]
+            if low is not None and to_float(cur.get("hi")) is not None and low >= to_float(cur.get("hi")):
+                lim.reverse()
+            writes += [(a, _format(val, dec, f"{channel} limit"), dec) for a, val in lim if val is not None]
+            if writes:
+                self._logged_in_writes(writes)
+            after = self._query({"setpoint": f"1.13.{sensor}", "high": f"1.4.{sensor}", "low": f"1.5.{sensor}"})
+        return {k: to_float(x) for k, x in after.items()}
+
     # -- loop configuration (read only) ----------------------------------------------
     def read_loop_config(self) -> LoopConfig:
         """Read the loops, the actuators assigned to them, cascades and calibration (read only)."""
@@ -624,6 +716,9 @@ class Ez2ControlDriver(ControllerDriver):
             for name, p in ACTUATOR_FIELDS.items():
                 keys[f"a{a}.{name}"] = f"2.{p}.{a}"
         keys["level.type"], keys["level.sens"] = f"5.{LEVEL}.0", f"5.{LEVEL}.1"
+        for s in range(N_SENSORS):
+            keys.setdefault(f"s{s}.name", f"1.1.{s}")
+            keys.setdefault(f"s{s}.available", f"1.11.{s}")
         values: dict[str, str] = {}
         items = list(keys.items())
         with self._lock:
@@ -647,6 +742,7 @@ SENSOR_FIELDS = {"name": 1, "available": 11, "setpoint": 13, "active": 14, "valu
 ACTUATOR_FIELDS = {"name": 1, "dose_mon": 3, "factor": 4, "unit": 5, "assigned": 7, "position": 8,
                    "available": 21}
 N_ACTUATORS = 64
+N_SENSORS = 40
 PUMP_ACTUATORS = range(22, 31)      # stepper pumps 22-27, digital pumps 28-30
 
 
@@ -659,9 +755,11 @@ def decode_loop_config(v: dict[str, str]) -> LoopConfig:
         return int(x) if x is not None else default
 
     acts: list[tuple[int, LoopActuator]] = []    # (sensor it is assigned to, actuator)
-    unassigned = []
+    unassigned, free, absent = [], [], []
     for a in range(N_ACTUATORS):
         avail = i(f"a{a}.available", 0)
+        if avail == 1:
+            absent.append(("output", a, (v.get(f"a{a}.name") or f"Output {a}").strip()))
         if avail < 3:
             continue
         pump = a in PUMP_ACTUATORS
@@ -674,8 +772,10 @@ def decode_loop_config(v: dict[str, str]) -> LoopConfig:
         sensor = i(f"a{a}.assigned")
         if sensor >= 0:
             acts.append((sensor, act))
-        elif pump:
-            unassigned.append(act)
+        else:
+            free.append(act)
+            if pump:
+                unassigned.append(act)
     key_of = {s: k for k, s in CONFIG_LOOPS}
     loops = []
     for key, s in CONFIG_LOOPS:
@@ -698,7 +798,11 @@ def decode_loop_config(v: dict[str, str]) -> LoopConfig:
             value=(v.get(f"s{s}.value") or "").strip() or None, setpoint=num(f"s{s}.setpoint"),
             has_actuator=None if num(f"s{s}.in_loop") is None else i(f"s{s}.in_loop") == 1,
             actuators=tuple(own), drives=drives, probe=probe))
-    return LoopConfig(loops=tuple(loops), unassigned_pumps=tuple(unassigned))
+    loop_sensors = {s for _, s in CONFIG_LOOPS}
+    for s in range(N_SENSORS):
+        if s not in loop_sensors and i(f"s{s}.available", 0) == 1:
+            absent.append(("input", s, (v.get(f"s{s}.name") or f"Input {s}").strip()))
+    return LoopConfig(loops=tuple(loops), unassigned_pumps=tuple(unassigned), free_outputs=tuple(free), not_installed=tuple(absent))
 
 
 def _format(value: float, dec: int, what: str) -> str:

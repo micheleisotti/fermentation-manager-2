@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Channel, type CountersState, type LiveReactor, type LoopsState, type Snapshot, type SwitchLoop } from "../api";
 import { fmt } from "../hooks";
 import { Icon, THEMED } from "./ui";
@@ -158,29 +158,45 @@ export function ResetCountersButton({ reactor, recording, compact = false, onDon
   { reactor: string; recording: boolean; compact?: boolean; onDone?: () => void }) {
   const [open, setOpen] = useState(false);
   const [st, setSt] = useState<CountersState | null>(null);
-  const [sel, setSel] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: string; text: string } | null>(null);
   const show = async () => {
-    setOpen(true); setSt(null); setSel([]); setMsg(null);
+    setOpen(true); setSt(null); setArmed(null); setMsg(null);
     try { setSt(await api.counters(reactor)); } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+  };
+  useEffect(() => {      // the red "confirm" state goes back after a few seconds
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
+  const reset = async (key: string, label: string) => {
+    if (armed !== key) { setArmed(key); return; }
+    setArmed(null); setBusy(key); setMsg(null);
+    try {
+      const r = (await api.resetCounters(reactor, [key])).results[0];
+      setMsg(r.status === "confirmed" ? { kind: "good", text: `${label}: reset and confirmed by the controller.` }
+        : { kind: "alert", text: `${label}: not confirmed (${r.message || r.status}).` });
+      setSt(await api.counters(reactor)); onDone?.();
+    } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
+    finally { setBusy(null); }
   };
   const list = (st?.counters ?? []).filter((c) => c.value != null);
   return (
     <>
       <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Reset counters</button>
       {open && (
-        <Dialog title={`Reset dose counters on ${reactor}`} busy={busy} onClose={() => setOpen(false)} width={480}>
+        <Dialog title={`Dose counters · ${reactor}`} busy={!!busy} onClose={() => setOpen(false)} width={480}>
           {!st && !msg && <span className="muted small">Reading the controller…</span>}
           {st && !st.reachable && <div className="banner alert small">{reactor}: no reading from the controller yet.</div>}
           {st?.reachable && (
-            <div className="stack" style={{ gap: 8 }}>
+            <div className="stack" style={{ gap: 0 }}>
               {list.map((c) => (
-                <label key={c.key} className="choice">
-                  <input type="checkbox" disabled={busy} checked={sel.includes(c.key)}
-                    onChange={() => setSel(sel.includes(c.key) ? sel.filter((k) => k !== c.key) : [...sel, c.key])} />
-                  <span><b>{c.label}</b> <span className="mono muted">{fmt(c.value, 2)} mL</span></span>
-                </label>
+                <div key={c.key} className="row between" style={{ padding: "12px 0", borderBottom: "1px solid var(--divider)", flexWrap: "nowrap" }}>
+                  <span className="stack" style={{ gap: 2 }}><b>{c.label}</b><span className="mono small muted">{fmt(c.value, 2)} mL</span></span>
+                  <button className={`btn ${armed === c.key ? "filled danger" : "outlined"}`} disabled={!!busy}
+                    onClick={() => reset(c.key, c.label)}>{busy === c.key ? "Resetting…" : armed === c.key ? "Click to confirm" : "Reset"}</button>
+                </div>
               ))}
               {list.length === 0 && <span className="muted small">The controller reports no dose counter.</span>}
             </div>
@@ -188,21 +204,8 @@ export function ResetCountersButton({ reactor, recording, compact = false, onDon
           {recording && <div className="banner warn small"><Icon name="warn" color="#8a5a00" size={18} />
             <span>An experiment is recording: the cumulative curve restarts from 0 at the reset. The totals in the analysis keep the volume dosed since Start.</span></div>}
           {msg && <div className={`banner ${msg.kind} small`}>{msg.text}</div>}
-          <span className="xs muted">Same as "Reset Dose Monitor" on the controller; logged as an event. Calibration is not touched.</span>
-          <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-            <button className="btn text" disabled={busy} onClick={() => setOpen(false)}>Close</button>
-            <button className="btn filled" disabled={busy || sel.length === 0} onClick={async () => {
-              setBusy(true); setMsg(null);
-              try {
-                const r = await api.resetCounters(reactor, sel);
-                const bad = r.results.filter((x) => x.status !== "confirmed");
-                setMsg(bad.length ? { kind: "alert", text: `Not confirmed: ${bad.map((b) => `${b.counter} (${b.message || b.status})`).join(", ")}` }
-                  : { kind: "good", text: "Reset and confirmed by the controller." });
-                setSel([]); setSt(await api.counters(reactor)); onDone?.();
-              } catch (x) { setMsg({ kind: "alert", text: (x as Error).message }); }
-              finally { setBusy(false); }
-            }}>{busy ? "Resetting…" : `Reset ${sel.length || ""} counter${sel.length === 1 ? "" : "s"}`}</button>
-          </div>
+          <span className="xs muted">Click Reset, then click again to confirm. Same as "Reset Dose Monitor" on the controller; logged as an event.
+            Calibration is not touched.</span>
         </Dialog>
       )}
     </>

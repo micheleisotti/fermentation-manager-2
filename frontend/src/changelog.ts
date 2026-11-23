@@ -12,6 +12,12 @@ export const CHANGELOG: { version: string; date: string; items: string[] }[] = [
     "Templates: save a whole plan and start a new experiment from it",
     "Plan: dO2 and stirrer limits saved with the plan; Rules section (run by FM2, from 2.4)",
     "Installable app keeps the interface: opens with \"Lab PC not reachable\" when the PC cannot be reached",
+    "Manual pumps, hold to run: stopped on release, after 60 s, without signal for 1.5 s and when FM2 restarts; refused while the loop is on",
+    "Loop actuators can be removed or added from the Controller page (administrators, loop off), read back and logged",
+    "Plan loads also the dO2 setpoint and limits and the stirrer limits",
+    "Dose counters reset one by one (click, then click again to confirm)",
+    "Gas valves and the inputs/outputs not installed on the controller are listed on the Controller page",
+    "Clear message when the controller is locked by a login on its display",
   ] },
   { version: "2.2.1", date: "2026-11", items: [
     "Controller profiles can be edited; experiments using one keep their values and show when it changed",

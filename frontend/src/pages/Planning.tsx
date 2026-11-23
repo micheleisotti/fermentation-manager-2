@@ -599,15 +599,15 @@ function PlanControllerTable({ value, channels, reactor, onChange }: {
   if (channels.includes("stirrer")) {
     rows.push({ id: "st_sp", group: "Stirrer", label: "Stirrer setpoint (rpm)", kind: "num", plan: v.stirrer_setpoint, ctrl: snap?.stirrer_setpoint,
       set: (x) => ({ ...v, stirrer_setpoint: x as number | null }) });
-    rows.push({ id: "st_lim", group: "Stirrer", label: "Stirrer alarm limits (rpm) · saved, not loaded yet", kind: "pair",
+    rows.push({ id: "st_lim", group: "Stirrer", label: "Stirrer alarm limits (rpm)", kind: "pair",
       plan: [cp("stirrer").low, cp("stirrer").high], ctrl: undefined,
       set: (x) => { const [lo, hi] = x as [Cell, Cell]; return setCp("stirrer", { low: lo as number | null, high: hi as number | null }); } });
   }
   if (channels.includes("do2")) {
     const ex = snap?.extra ?? {};
-    rows.push({ id: "do2_sp", group: "dO2", label: "dO2 setpoint (%) · saved, not loaded yet", kind: "num", plan: cp("do2").setpoint, ctrl: ex.do2_setpoint,
+    rows.push({ id: "do2_sp", group: "dO2", label: "dO2 setpoint (%)", kind: "num", plan: cp("do2").setpoint, ctrl: ex.do2_setpoint,
       set: (x) => setCp("do2", { setpoint: x as number | null }) });
-    rows.push({ id: "do2_lim", group: "dO2", label: "dO2 alarm limits (%) · saved, not loaded yet", kind: "pair",
+    rows.push({ id: "do2_lim", group: "dO2", label: "dO2 alarm limits (%)", kind: "pair",
       plan: [cp("do2").low, cp("do2").high], ctrl: snap ? [ex.do2_low_limit ?? null, ex.do2_high_limit ?? null] : undefined,
       set: (x) => { const [lo, hi] = x as [Cell, Cell]; return setCp("do2", { low: lo as number | null, high: hi as number | null }); } });
   }
@@ -814,19 +814,19 @@ export function ControlSection({ d, set, profiles, profile, reactor, loopCfg, ch
       </>)}
       {row("stirrer", "Stirrer", <div className="cf-row">
         <Field label="Setpoint (rpm)" digits={0} value={v.stirrer_setpoint} ctrl={ctl(snap?.stirrer_setpoint)} onChange={(n) => setPlan({ stirrer_setpoint: n })} />
-        <Field label="Low limit · saved" digits={0} value={cp("stirrer").low} onChange={(n) => setCp("stirrer", { low: n })} />
-        <Field label="High limit · saved" digits={0} value={cp("stirrer").high} onChange={(n) => setCp("stirrer", { high: n })} />
+        <Field label="Low limit" digits={0} value={cp("stirrer").low} onChange={(n) => setCp("stirrer", { low: n })} />
+        <Field label="High limit" digits={0} value={cp("stirrer").high} onChange={(n) => setCp("stirrer", { high: n })} />
       </div>)}
       {row("do2", "dO2", <div className="cf-row">
-        <Field label="Setpoint (%) · saved" digits={1} value={cp("do2").setpoint} ctrl={ctl(x.do2_setpoint)} onChange={(n) => setCp("do2", { setpoint: n })} />
-        <Field label="Low limit · saved" digits={0} value={cp("do2").low} ctrl={ctl(x.do2_low_limit)} onChange={(n) => setCp("do2", { low: n })} />
-        <Field label="High limit · saved" digits={0} value={cp("do2").high} ctrl={ctl(x.do2_high_limit)} onChange={(n) => setCp("do2", { high: n })} />
+        <Field label="Setpoint (%)" digits={1} value={cp("do2").setpoint} ctrl={ctl(x.do2_setpoint)} onChange={(n) => setCp("do2", { setpoint: n })} />
+        <Field label="Low limit" digits={0} value={cp("do2").low} ctrl={ctl(x.do2_low_limit)} onChange={(n) => setCp("do2", { low: n })} />
+        <Field label="High limit" digits={0} value={cp("do2").high} ctrl={ctl(x.do2_high_limit)} onChange={(n) => setCp("do2", { high: n })} />
       </div>)}
       {row("level", "Level", <span className="xs muted">The level / foam probe acts through the actuators assigned on the controller (Loop Configuration).
         {loopOf("level")?.actuators.length === 0 ? " None is assigned now: the probe is recorded, nothing is dosed." : ""}</span>)}
       {row("redox", "Redox", null)}
-      <span className="xs muted">“saved” = kept with the plan and the profile; loaded on the controller from 2.3.x, after verification. pH and temperature values,
-        modes and loop parameters are loaded with <b>Check and load to controller</b>.</span>
+      <span className="xs muted"><b>Check and load to controller</b> writes setpoints and process limits (pH, temperature, stirrer, dO2), control modes and
+        loop parameters (pH, temperature), then reads them back. Loop actuators are changed on the Controller page.</span>
     </section>
   );
 }

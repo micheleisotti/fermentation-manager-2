@@ -39,7 +39,8 @@ export interface LoopInfo { key: string; label: string; sensor: number; name: st
   active: boolean | null; control_type: string | null; value: string | null; setpoint: number | null; has_actuator: boolean | null;
   actuators: LoopActuator[]; drives: string | null; probe: string | null; warnings: string[] }
 export interface LoopConfigView { reachable: boolean; message?: string; loops: LoopInfo[]; unassigned_pumps: LoopActuator[];
-  assignments: LoopAssignments }
+  assignments: LoopAssignments; free_outputs?: (LoopActuator & { gas?: boolean })[]; not_installed?: { kind: "input" | "output"; id: number; name: string }[] }
+export interface PumpInfo { id: number; name: string; calibrated: boolean | null; blocked: string | null; counter_ml: number | null; running: boolean; seconds: number | null }
 
 export type Channel = "temperature" | "ph" | "stirrer" | "do2" | "level" | "redox";
 export const DEFAULT_CHANNELS: Channel[] = ["temperature", "ph", "stirrer"];
@@ -270,6 +271,11 @@ export const api = {
   deleteBioreactor: (id: string) => req<{ deleted: string }>(`/bioreactors/${id}`, { method: "DELETE" }),
   testBioreactor: (id: string, body: { driver?: string; address?: string }) =>
     req<{ ok: boolean; error?: string; values?: Record<string, unknown> }>(`/bioreactors/${id}/test`, { method: "POST", body: JSON.stringify(body) }),
+  pumps: (id: string) => req<{ reachable: boolean; message?: string; pumps: PumpInfo[]; hold_timeout_s?: number; max_run_s?: number }>(`/reactors/${id}/pumps`),
+  holdPump: (id: string, pump: number, start: boolean) => req<{ running: boolean; seconds: number }>(`/reactors/${id}/pumps/${pump}/hold?start=${start}`, { method: "POST" }),
+  releasePump: (id: string, pump: number) => req<{ running: boolean }>(`/reactors/${id}/pumps/${pump}/release`, { method: "POST" }),
+  assignActuator: (id: string, body: { loop: string; actuator_id: number; side: number; cascade?: boolean }) =>
+    req<LoopConfigView & { confirmed: boolean }>(`/reactors/${id}/loop-assignment`, { method: "POST", body: JSON.stringify(body) }),
   reactorHistory: (id: string) => req<ReactorHistory>(`/reactors/${id}/history`),
   templates: () => req<Template[]>("/templates"),
   createTemplate: (body: { name: string; description?: string; data?: TemplateData; from_experiment_id?: number }) =>
