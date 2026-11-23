@@ -552,3 +552,23 @@ button.ch-card:hover { box-shadow: var(--elev-3); }
 /* notification centre as a panel from the right */
 .notif-panel { left: auto !important; right: 0 !important; top: 0 !important; bottom: 0 !important; width: min(420px, 100vw); max-height: none;
   border-radius: 20px 0 0 20px; animation: fm2-slide .2s cubic-bezier(.2, .8, .2, 1); box-shadow: -12px 0 30px -12px rgba(0,0,0,.35); }
+
+/* ---- 2.3 round 3: side logo on two lines, white active item, bioreactors low, rounded pills, green loop switch ---- */
+.side-logo { padding: 0 6px; text-decoration: none; }
+.side-logo-inner { display: flex; align-items: center; gap: 12px; }
+.side-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--ink); display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.side-icon img { height: 34px; width: auto; }
+.side-name { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.side-name img { width: auto; }
+.wordmark-2 .wm-light { display: none; }
+html[data-theme="dark"] .wordmark-2 .wm-dark, html[data-theme="dim"] .wordmark-2 .wm-dark { display: none; }
+html[data-theme="dark"] .wordmark-2 .wm-light, html[data-theme="dim"] .wordmark-2 .wm-light { display: block; }
+.side-nav a.active, .side-reactor.active { background: var(--surface); color: var(--ink); box-shadow: var(--elev-1); }
+.side-reactors { margin-top: auto; border-top: 0; }
+.side-foot { margin-top: 0; }
+.side-status { flex-direction: column; gap: 4px; padding: 4px 12px 6px; }
+.chip { border-radius: 999px; }
+.tab-chip { border-radius: 999px; }
+.switch.green.on { background: var(--data-green-dark); }
+.switch:disabled { opacity: .45; cursor: not-allowed; }
+.status, .tag { border-radius: 999px; }

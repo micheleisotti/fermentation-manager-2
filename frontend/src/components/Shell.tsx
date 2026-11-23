@@ -7,6 +7,24 @@ import { UserButton, useCan } from "./UserGate";
 import { ConnectionBanner } from "./ConnectionBanner";
 import wordmark from "../assets/wordmark.svg";
 import wordmarkLight from "../assets/wordmark-light.svg";
+import wmF from "../assets/wm-fermentation.svg";
+import wmM from "../assets/wm-manager.svg";
+import wmFl from "../assets/wm-fermentation-light.svg";
+import wmMl from "../assets/wm-manager-light.svg";
+import bioreactor from "../assets/bioreactor.svg";
+
+/** Side column logo: bioreactor icon and the name on two lines (desktop prototype). */
+function SideLogo() {
+  return (
+    <span className="side-logo-inner">
+      <span className="side-icon"><img src={bioreactor} alt="" aria-hidden="true" /></span>
+      <span className="side-name wordmark-2">
+        <img className="wm-dark" src={wmF} alt="Fermentation" style={{ height: 17 }} /><img className="wm-dark" src={wmM} alt="manager 2" style={{ height: 17 }} />
+        <img className="wm-light" src={wmFl} alt="" aria-hidden="true" style={{ height: 17 }} /><img className="wm-light" src={wmMl} alt="" aria-hidden="true" style={{ height: 17 }} />
+      </span>
+    </span>
+  );
+}
 
 const NAV = [
   { to: "/", label: "Home", icon: "home", end: true },
@@ -171,10 +189,10 @@ function ServerStatus() {
   return (
     <div className="side-status xs muted">
       <span title={sys.data ? `${sys.data.server.host} · v${sys.data.server.version}` : ""}>
-        <span className={`dot ${down ? "bad" : sys.data ? "ok" : ""}`} />Server</span>
+        <span className={`dot ${down ? "bad" : sys.data ? "ok" : ""}`} />{down ? "Lab PC not reachable" : "Lab PC online"}</span>
       <span title={sys.data?.remote.detail ?? sys.data?.remote.name ?? ""}>
         <span className={`dot ${down ? "" : remote === "available" ? "ok" : remote === "unknown" ? "idle" : "bad"}`} />
-        Remote{remote === "available" ? "" : remote === "unknown" ? " ?" : " off"}</span>
+        Remote access{remote === "available" ? "" : remote === "unknown" ? " ?" : " off"}</span>
     </div>
   );
 }
@@ -191,8 +209,7 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="app">
       {/* wide screens: side column with logo, navigation, bioreactors, notifications, account */}
       <aside className="sidebar" aria-label="Main navigation">
-        <Link to="/" className="side-logo" aria-label="Home"><Wordmark height={21} /></Link>
-        <ServerStatus />
+        <Link to="/" className="side-logo" aria-label="Home"><SideLogo /></Link>
         <NewMenu wide />
         <nav className="side-nav">
           {NAV.map((n) => (
@@ -203,6 +220,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </nav>
         <SideReactors live={live.data} />
         <div className="side-foot">
+          <ServerStatus />
           <BellButton n={notif.unread} onClick={openPanel} />
           <UserButton wide />
         </div>

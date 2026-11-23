@@ -120,14 +120,16 @@ export function LoopsButton({ reactor, channels, compact = false, dots }: { reac
                 return (
                   <div key={l.key} className="row between" style={{ padding: "10px 0", borderBottom: "1px solid var(--divider)", flexWrap: "nowrap", alignItems: "flex-start" }}>
                     <span className="stack" style={{ gap: 2, minWidth: 0 }}>
-                      <span><b>{l.label}</b> <span className={`status ${l.active ? "fermenting" : "planned"}`} style={{ marginLeft: 6 }}>{l.active ? "On" : "Off"}</span></span>
+                      <span><b>{l.label}</b> <span className={`loop-badge ${l.active ? "on" : ""}`} style={{ marginLeft: 6 }}>loop {l.active ? "on" : "off"}</span></span>
                       <span className="small muted">{sidesText(l.actuators)}
                         {l.also_switches.length > 0 && ` · switches the ${l.also_switches.join(", ")} loop too`}</span>
                       {(!l.allowed || (!l.active && startWhy)) && <span className="xs muted">{l.allowed ? `Cannot start: ${startWhy}` : startWhy}</span>}
                     </span>
                     <span className="row" style={{ gap: 6, flexWrap: "nowrap", flex: "0 0 auto" }}>
-                      <button className="btn tonal" disabled={!!busy || l.active || !!startWhy} onClick={() => switchOne(l, true)}>{busy === l.key && !l.active ? "…" : "Start"}</button>
-                      <button className="btn outlined" disabled={!!busy || !l.active || !l.allowed} onClick={() => switchOne(l, false)}>{busy === l.key && l.active ? "…" : "Stop"}</button>
+                      {busy === l.key && <span className="xs muted">…</span>}
+                      <button role="switch" aria-checked={!!l.active} aria-label={`${l.label} loop ${l.active ? "on" : "off"}`}
+                        className={`switch green ${l.active ? "on" : ""}`} title={l.active ? (l.allowed ? "Stop the loop" : "Not enabled in Settings › Loop control") : startWhy ?? "Start the loop"}
+                        disabled={!!busy || (l.active ? !l.allowed : !!startWhy)} onClick={() => switchOne(l, !l.active)}><span /></button>
                     </span>
                   </div>
                 );
