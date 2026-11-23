@@ -74,7 +74,7 @@ function NotificationPanel({ list, seen, onClose, onRead }: { list: EventItem[];
       {list.length === 0 ? <div className="small muted" style={{ padding: "8px 16px 16px" }}>No notifications.</div> : (
         <div className="notif-list">
           {list.slice(0, 40).map((e) => (
-            <Link key={e.id} className={`notif ${e.severity} ${e.at > seen ? "unread" : ""}`}
+            <Link key={e.id} className={`notif ${e.severity} ${e.at > seen && e.severity === "alert" ? "unread" : ""}`}
               to={e.experiment_id ? `/experiments/${e.experiment_id}` : `/reactors/${e.reactor_id}`} onClick={onClose}>
               <Icon name={e.severity === "alert" ? "warn" : e.severity === "good" ? "check" : "info"} size={18}
                 color={e.severity === "alert" ? "#b30020" : e.severity === "good" ? "#1f7a63" : "#54565a"} />

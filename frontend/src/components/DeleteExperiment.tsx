@@ -4,8 +4,9 @@ import { api, type Experiment } from "../api";
 import { Icon } from "./ui";
 
 /** "Delete experiment" button + confirmation dialog that asks to type the experiment code. */
-export function DeleteExperiment({ e }: { e: Experiment }) {
-  const [open, setOpen] = useState(false);
+export function DeleteExperiment({ e, startOpen = false, onClosed }: { e: Experiment; startOpen?: boolean; onClosed?: () => void }) {
+  const [open, setOpenRaw] = useState(startOpen);
+  const setOpen = (b: boolean) => { setOpenRaw(b); if (!b) onClosed?.(); };
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -21,7 +22,7 @@ export function DeleteExperiment({ e }: { e: Experiment }) {
 
   return (
     <>
-      <button className="btn text" style={{ color: "var(--ink)" }} onClick={() => { setOpen(true); setCode(""); setErr(null); }}>Delete experiment</button>
+      {!startOpen && <button className="btn text" style={{ color: "var(--ink)" }} onClick={() => { setOpen(true); setCode(""); setErr(null); }}>Delete experiment</button>}
       {open && (
         <div className="scrim" onClick={(x) => { if (x.target === x.currentTarget) setOpen(false); }}>
           <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="del-t">

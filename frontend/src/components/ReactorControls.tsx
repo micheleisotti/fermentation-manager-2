@@ -72,9 +72,10 @@ export function ControllerPanel({ reactor, s, channels, phMode, onChanged }:
 function Dialog({ title, onClose, busy, children, width = 560 }:
   { title: string; onClose: () => void; busy: boolean; children: React.ReactNode; width?: number }) {
   return (
-    <div className="scrim" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) onClose(); }}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title} style={{ width: `min(${width}px, 100vw)` }}>
-        <h2 style={{ fontSize: 20 }}>{title}</h2>
+    <div className="scrim side" onMouseDown={(x) => { if (x.target === x.currentTarget && !busy) onClose(); }}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-label={title} data-width={width}>
+        <div className="row between" style={{ flexWrap: "nowrap" }}><h2 style={{ fontSize: 20 }}>{title}</h2>
+          <button className="btn icon text" aria-label="Close" disabled={busy} onClick={onClose}><Icon name="close" /></button></div>
         {children}
       </div>
     </div>
@@ -85,7 +86,7 @@ function Dialog({ title, onClose, busy, children, width = 560 }:
  * One "Loops" button: the loops of the experiment's channels (or all, on the monitoring page) with
  * their state and Start / Stop next to each. Only loops enabled in Settings › Loop control can be switched.
  */
-export function LoopsButton({ reactor, channels, compact = false }: { reactor: string; channels?: Channel[]; compact?: boolean }) {
+export function LoopsButton({ reactor, channels, compact = false, dots }: { reactor: string; channels?: Channel[]; compact?: boolean; dots?: boolean[] }) {
   const [open, setOpen] = useState(false);
   const [st, setSt] = useState<LoopsState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -106,7 +107,8 @@ export function LoopsButton({ reactor, channels, compact = false }: { reactor: s
   };
   return (
     <>
-      <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Loops</button>
+      <button className="btn outlined" style={compact ? { flex: "1 1 0", justifyContent: "center" } : undefined} onClick={show}>Loops{dots && dots.length > 0 && <span className="loop-dots" aria-label={`${dots.filter(Boolean).length} of ${dots.length} loops on`}>
+        {dots.map((on, i) => <i key={i} className={on ? "on" : ""} />)}</span>}</button>
       {open && (
         <Dialog title={`Control loops on ${reactor}`} busy={!!busy} onClose={() => setOpen(false)}>
           {!st && !msg && <span className="muted small">Reading the controller…</span>}

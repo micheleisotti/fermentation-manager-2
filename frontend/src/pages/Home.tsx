@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, type Channel, type EventItem, type LiveReactor, type Snapshot } from "../api";
 import { ExperimentTable } from "./ExperimentsList";
 import { usePolling, fmt, fmtDuration, fmtAge } from "../hooks";
@@ -55,47 +55,57 @@ function savePreview(reactor: string, key: string) {
   } catch { /* storage unavailable */ }
 }
 
+/** Values strip of a card: one cell per channel (desktop prototype "Home"). */
+function ValueStrip({ s, ch }: { s: Snapshot | null | undefined; ch: Channel[] | null }) {
+  const x = s?.extra ?? {};
+  const on = (c: Channel, reported: boolean) => (ch ? ch.includes(c) : reported);
+  const cells: { k: string; label: string; v: string; bad?: boolean }[] = [];
+  if (on("ph", s?.ph != null)) cells.push({ k: "ph", label: "pH", v: fmt(s?.ph), bad: outOf(s?.ph, s?.ph_low_limit, s?.ph_high_limit) });
+  if (on("temperature", s?.temperature != null)) cells.push({ k: "t", label: "T °C", v: fmt(s?.temperature, 1), bad: outOf(s?.temperature, s?.temperature_low_limit, s?.temperature_high_limit) });
+  if (on("stirrer", s?.stirrer != null)) cells.push({ k: "st", label: "Stirrer rpm", v: fmt(s?.stirrer, 0) });
+  if (on("do2", x.do2 != null)) cells.push({ k: "do2", label: "dO2 %", v: fmt(x.do2, 1) });
+  if (on("ph", s?.ph != null) && ch) cells.push({ k: "base", label: "Base mL", v: fmt(s?.base_cumulative_ml, 1) });
+  if (on("redox", x.redox_mv != null)) cells.push({ k: "rdx", label: "Redox mV", v: fmt(x.redox_mv, 0) });
+  if (on("level", false) && x.level_contact != null) cells.push({ k: "lvl", label: "Level", v: x.level_contact ? "contact" : "no contact" });
+  return (
+    <div className="vstrip" style={{ gridTemplateColumns: `repeat(${Math.max(1, cells.length)}, minmax(0, 1fr))` }}>
+      {cells.map((c) => <div key={c.k}><span className="xs muted">{c.label}</span><b className="mono" style={c.bad ? { color: "var(--alert-text)" } : undefined}>{c.v}</b></div>)}
+    </div>
+  );
+}
+
 /** A reactor with no experiment recording: live values only, nothing is stored. */
 function IdleCard({ r }: { r: LiveReactor }) {
-  const s = r.snapshot;
+  const nav = useNavigate();
   return (
-    <div className="card">
-      <div className="row between" style={{ alignItems: "flex-start" }}>
-        <div className="stack" style={{ gap: 4 }}>
-          <span className="kicker">{reactorName(r)}</span>
-          <span style={{ fontSize: 18, fontWeight: 500 }}>No experiment</span>
+    <div className={`card home-card ${r.online ? "" : "offline"}`} role="link" tabIndex={0} onClick={() => nav(`/reactors/${r.reactor_id}`)}
+      onKeyDown={(e) => { if (e.key === "Enter") nav(`/reactors/${r.reactor_id}`); }}>
+      <div className="row between" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
+        <div className="stack" style={{ gap: 0 }}>
+          <span className="xs muted">{reactorName(r)}</span>
+          <span className="hc-title">{r.online ? "Idle · controller on" : "Controller not reachable"}</span>
         </div>
-        <span className="pill" title="Live values from the controller; nothing is recorded until Start">
-          <span className="dot idle" />Idle · not recording
-        </span>
+        <span className={`run-chip ${r.online ? "" : "bad"}`}><span className={`dot ${r.online ? "idle" : "bad"}`} />{r.online ? "Idle" : "Offline"}</span>
       </div>
-      {!r.online ? (
-        <div className="banner alert" role="alert">
-          <Icon name="bell" color="#b30020" size={20} />
-          <span>Controller not reachable{r.error ? `: ${r.error}` : ""}</span>
-        </div>
-      ) : (
-        <div className="dv-grid">{liveValues(s, null)}</div>
-      )}
-      <div className="row between small muted">
-        <span>last reading{" "}
-          <span className="mono">{fmtAge(r.last_reading_age_s)}</span> ago</span>
-        <span className="row" style={{ gap: 8 }}>
-          <Link className="btn tonal" to={`/reactors/${r.reactor_id}`}>Controller</Link>
-        </span>
+      {r.online ? <ValueStrip s={r.snapshot} ch={null} />
+        : <span className="small muted">{r.error ? `${r.error} · ` : ""}check cable or power, or disable it in Settings › Bioreactors & probes</span>}
+      <div className="row between xs muted">
+        <span>{r.online ? "No experiment · open to monitor or plan" : ""}</span>
+        <span>{fmtAge(r.last_reading_age_s)} ago</span>
       </div>
     </div>
   );
 }
 
 function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
+  const nav = useNavigate();
   const exp = r.experiment!;
   const s = r.snapshot;
   const readings = usePolling(() => api.readings(exp.id), 30000, [exp.id]);
   const analysis = usePolling(() => api.analysis(exp.id, 0.25), 60000, [exp.id]);
   const ch = exp.channels ?? ["temperature", "ph", "stirrer"];
   const vars = varsFor(ch);
-  const choices = [...(ch.includes("ph") ? [{ key: "ph_rate", label: "pH + base rate" }] : []), ...vars.map((v) => ({ key: v.key, label: v.label }))];
+  const choices = [...(ch.includes("ph") ? [{ key: "ph_rate", label: "pH · base rate" }] : []), ...vars.map((v) => ({ key: v.key, label: v.label }))];
   const [preview, setPreview] = useState(() => {
     const k = loadPreview(r.reactor_id);
     return choices.some((c) => c.key === k) ? k! : choices[0]?.key ?? "";
@@ -105,38 +115,31 @@ function RunningCard({ r, events }: { r: LiveReactor; events: EventItem[] }) {
     const v = vars.find((x) => x.key === preview);
     return v ? trendsOption(readings.data, v, null, { setpoints: true, limits: true, compact: true, bins: analysis.data?.rate_bins, endH: analysis.data?.estimated_end?.t_end_h }) : {};
   }, [readings.data, analysis.data, preview, ch.join()]);
-  const lastBin = analysis.data?.rate_bins.filter((b) => b.complete).at(-1);
-  const lastAcid = analysis.data?.acid_rate_bins?.filter((b) => b.complete).at(-1);
   const alert = events.find((e) => e.experiment_id === exp.id && e.severity === "alert" &&
     Date.now() - new Date(e.at).getTime() < 30 * 60 * 1000);
+  const go = () => nav(`/experiments/${exp.id}`);
   return (
-    <div className="card">
-      <div className="row between" style={{ alignItems: "flex-start" }}>
-        <div className="stack" style={{ gap: 4 }}>
-          <span className="kicker">{reactorName(r)}{exp.parallel_run ? ` · parallel run ${exp.parallel_run}` : ""}</span>
-          <span style={{ fontSize: 18, fontWeight: 600 }}>{exp.name}{exp.strain && <span style={{ fontWeight: 400 }}> · {exp.strain}</span>} <span className="mono code-chip">{exp.code}</span></span>
+    <div className="card home-card" role="link" tabIndex={0} onClick={go} onKeyDown={(e) => { if (e.key === "Enter") go(); }}>
+      <div className="row between" style={{ alignItems: "flex-start", flexWrap: "nowrap" }}>
+        <div className="stack" style={{ gap: 0, minWidth: 0 }}>
+          <span className="xs muted">{reactorName(r)} · <span className="mono">{exp.code}</span>{exp.parallel_run ? ` · Parallel run ${exp.parallel_run}` : ""}</span>
+          <span className="hc-title">{exp.name}{exp.strain && <> · {exp.strain}</>}</span>
         </div>
-        <StatusChip status={exp.status ?? "fermenting"} />
+        {exp.status === "preparing"
+          ? <span className="run-chip prep"><span className="dot prep" />Preparing</span>
+          : <span className="run-chip ok"><span className="dot ok" />{fmtDuration(exp.t_h)}</span>}
       </div>
-      <div className="dv-grid">{liveValues(s, ch, { baseRate: lastBin?.rate_ml_min, acidRate: lastAcid?.rate_ml_min })}</div>
-      <div className="row between" style={{ gap: 8 }}>
-        <span className="xs muted">Preview</span>
-        <select aria-label="Preview chart" value={preview} style={{ height: 32, width: "auto", fontSize: 13 }}
-          onChange={(x) => { setPreview(x.target.value); savePreview(r.reactor_id, x.target.value); }}>
-          {choices.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-        </select>
-      </div>
+      <ValueStrip s={s} ch={ch} />
       <EChart option={option} className="chart mini" ariaLabel={`${r.reactor_id}: ${choices.find((c) => c.key === preview)?.label ?? ""} since start`} />
-      {alert && (
-        <div className="banner alert" role="alert"><Icon name="bell" color="#b30020" size={20} /><span>{alert.message}</span></div>
-      )}
-      <div className="row between small muted">
-        <span>{exp.status === "preparing" ? <>Not recording · t = —</> : <>t = <span className="mono" style={{ color: "var(--ink)" }}>{fmtDuration(exp.t_h)}</span></>} · last reading{" "}
-          <span className="mono">{fmtAge(r.last_reading_age_s)}</span> ago</span>
-        <span className="row" style={{ gap: 8 }}>
-          <Link className="btn text" to={`/reactors/${r.reactor_id}`}>Controller</Link>
-          <Link className="btn tonal" to={`/experiments/${exp.id}`}>Open</Link>
+      <div className="row between xs muted" onClick={(e) => e.stopPropagation()}>
+        <span className="row" style={{ gap: 6 }}>
+          <select aria-label="Preview chart" value={preview} className="mini-select"
+            onChange={(x) => { setPreview(x.target.value); savePreview(r.reactor_id, x.target.value); }}>
+            {choices.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>· since start
+          {alert && <span className="warn-chip"><Icon name="warn" size={13} color="#8a5a00" />{alert.message}</span>}
         </span>
+        <span>{fmtAge(r.last_reading_age_s)} ago</span>
       </div>
     </div>
   );
@@ -153,6 +156,8 @@ export function Home() {
 
   const reactors = live.data ?? [];
   const running = reactors.filter((r) => r.experiment);
+  const idle = reactors.filter((r) => !r.experiment && r.online);
+  const offline = reactors.filter((r) => !r.experiment && !r.online);
   // Planned and recording first, then the most recent: 10 rows, archived hidden
   const rank = (e: { status: string }) => (e.status === "fermenting" || e.status === "preparing" ? 0 : e.status === "planned" ? 1 : 2);
   const last = (exps.data ?? []).filter((e) => !e.archived)
@@ -184,10 +189,13 @@ export function Home() {
       </header>
 
       <section className="stack" aria-labelledby="running">
-        <div className="stack" style={{ gap: 10 }}>
+        <div className="row" style={{ gap: 14 }}>
           <span className="live-pill">Live</span>
-          <h2 id="running" className="display">Bioreactors{running.length > 0
-            ? <> · <span className="hl">{running.length} running</span></> : <span className="muted" style={{ fontWeight: 500 }}> · idle</span>}</h2>
+          <h2 id="running" className="display">{[
+            running.length ? <span key="r" className="hl">{running.length} running</span> : null,
+            idle.length ? <span key="i">{idle.length} idle</span> : null,
+            offline.length ? <span key="o">{offline.length} offline</span> : null,
+          ].filter(Boolean).flatMap((x, i) => (i ? [<span key={`s${i}`}> · </span>, x] : [x]))}</h2>
         </div>
         {reactors.length === 0 ? (
           <div className="card"><span className="muted">Waiting for the server…</span></div>
