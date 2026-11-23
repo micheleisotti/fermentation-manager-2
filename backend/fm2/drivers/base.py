@@ -165,6 +165,9 @@ class ControllerDriver(ABC):
     def read(self) -> ControllerSnapshot:
         """Read current values, setpoints and (if available) limits. Raises DriverError."""
 
+    def close(self) -> None:
+        """Release the connection (driver replaced or bioreactor disabled in Settings)."""
+
     @abstractmethod
     def write_setpoint(self, parameter: str, value: float) -> None:
         """Write one setpoint. Callers must read back to confirm. Raises DriverError."""

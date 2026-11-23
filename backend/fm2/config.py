@@ -59,6 +59,11 @@ class ReactorConfig:
     address: str = ""        # controller IP / URL for real drivers (from local.env, never in the repository)
 
 
+INTERVAL_MIN_S, INTERVAL_MAX_S, INTERVAL_WARN_S = 2.0, 300.0, 5.0
+DRIVERS = {"ez2control": "ez2-Control", "simulator": "Simulator"}
+IDLE_HISTORY_S = 3 * 3600   # live values kept in memory for the Trends of a bioreactor without experiment
+
+
 @dataclass(frozen=True)
 class SetpointRange:
     """Allowed range for remote setpoint changes, on top of the controller's own limits."""
@@ -72,7 +77,8 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: Path(_env("DATA_DIR", str(Path.cwd() / "data"))))
     frontend_dist: Path = field(default_factory=lambda: Path(_env(
         "FRONTEND_DIST", str(Path(__file__).resolve().parents[2] / "frontend" / "dist"))))
-    sampling_interval_s: float = float(_env("SAMPLING_INTERVAL_S", "30"))
+    sampling_interval_s: float = float(_env("SAMPLING_INTERVAL_S", "5"))   # default for new bioreactors
+    # Initial bioreactors, used only to fill Settings > Bioreactors & probes on first start (2.3).
     reactors: tuple[ReactorConfig, ...] = (
         ReactorConfig("R1", _env("R1_DRIVER", "simulator"), _env("R1_ADDRESS", "")),
         ReactorConfig("R2", _env("R2_DRIVER", "simulator"), _env("R2_ADDRESS", "")),

@@ -290,17 +290,36 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class Reactor(Base):
+    """
+    A bioreactor controller FM2 reads (Settings > Bioreactors & probes). The id ("R1", "R2", ...) is what
+    experiments store; name, driver, address and sampling interval can change. Addresses are site data:
+    they live here and in backups, never in the code.
+    """
+    __tablename__ = "reactors"
+    id: Mapped[str] = mapped_column(String(10), primary_key=True)
+    name: Mapped[str] = mapped_column(String(60))
+    driver: Mapped[str] = mapped_column(String(30), default="simulator")     # "ez2control" | "simulator"
+    address: Mapped[str] = mapped_column(String(200), default="")
+    interval_s: Mapped[float] = mapped_column(Float, default=5.0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class User(Base):
     """
-    People who use the app. Identity only (no permission levels): the chosen user signs
-    experiments, measurements and commands. An optional PIN stops others from signing
-    as that user; "Guest" never has a PIN.
+    People who use the app. The chosen user signs experiments, measurements and commands.
+    Levels (2.3): admin, operator, observer. Admin and operator need a PIN to use their
+    level; without PIN, and as "Guest", a user is an observer. Until an administrator
+    exists, levels are not enforced (as in earlier versions).
     """
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     pin_hash: Mapped[Optional[str]] = mapped_column(String(200))   # "salt$hash" (PBKDF2-SHA256), None = no PIN
     token_version: Mapped[int] = mapped_column(Integer, default=0)  # bumped on PIN change: old sign-ins expire
+    role: Mapped[Optional[str]] = mapped_column(String(20), default="operator")  # admin | operator | observer (None = operator)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

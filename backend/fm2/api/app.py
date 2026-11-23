@@ -29,7 +29,7 @@ from ..alerts import AlertParams
 from ..analysis import base_dosing, control, kinetics, report, stats
 from ..services.app_settings import SWITCHABLE_LOOPS
 from .. import loops
-from ..config import Settings
+from ..config import DRIVERS, INTERVAL_MAX_S, INTERVAL_MIN_S, INTERVAL_WARN_S, Settings
 import logging
 from pathlib import Path
 
@@ -42,7 +42,7 @@ from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
 from ..models import (
     DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event,
     Experiment, ExperimentStatus, ManualMeasurement, ManualMeasurementEdit, Medium, ParallelRun,
-    PhControlMode, SessionMember, SetpointCommand, Variable, VariableCategory,
+    PhControlMode, Reactor, SessionMember, SetpointCommand, Variable, VariableCategory,
 )
 from ..services import commands
 from .. import users as users_mod
@@ -69,11 +69,21 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
         if not s.scalar(select(func.count()).select_from(Variable)):
             s.add_all(Variable(name=n, unit=u, category=c) for n, u, c in DEFAULT_VARIABLES)
 
-    drivers = drivers or {r.reactor_id: make_driver(r.driver, r.reactor_id, r.address) for r in settings.reactors}
+    given = drivers is not None
+    reactors = _seed_reactors(sessions, settings, list(drivers) if given else None)
+    if not given:
+        drivers = {}
+        for r in reactors:
+            if r["enabled"]:
+                try:
+                    drivers[r["id"]] = make_driver(r["driver"], r["id"], r["address"], clock=None if clock is _utcnow else clock)
+                except ValueError as ex:
+                    log.error("bioreactor %s: %s", r["id"], ex)
     app_settings = AppSettings(sessions)
     notifier = Notifier(app_settings)
     acq = Acquisition(drivers, sessions, settings.sampling_interval_s, clock=clock,
-                      alert_params=app_settings.alert_params(), notifier=notifier)
+                      alert_params=app_settings.alert_params(), notifier=notifier,
+                      intervals={r["id"]: r["interval_s"] for r in reactors if r["id"] in drivers})
     backups = BackupManager(db_file, app_settings)
 
     def _apply(section: str, _value: dict) -> None:
@@ -97,9 +107,46 @@ def create_app(settings: Settings, drivers: Optional[dict[str, ControllerDriver]
     app.state.app_settings, app.state.notifier, app.state.backups = app_settings, notifier, backups
     app.state.auth_secret = users_mod.load_secret(db_file.parent / "auth-secret.txt")
     app.state.pin_throttle = users_mod.Throttle()
+    @app.middleware("http")
+    async def check_level(request: Request, call_next):
+        need = needed_role(request.method, request.url.path)
+        if need:
+            s_ = sessions()
+            try:
+                have = role_of(request, s_)
+            finally:
+                s_.close()
+            if users_mod.role_rank(have) < users_mod.role_rank(need):
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"detail": f"This needs the {users_mod.ROLE_LABELS[need]} level "
+                                               f"(you are {users_mod.ROLE_LABELS[have]})."}, status_code=403)
+        return await call_next(request)
+
     app.include_router(router, prefix="/api")
     _mount_frontend(app, settings)
     return app
+
+
+def _seed_reactors(sessions, settings: Settings, given_ids: Optional[list[str]]) -> list[dict]:
+    """
+    Fill Settings > Bioreactors & probes on first start from the old configuration (FM2_R1_*, local.env),
+    so updating keeps the same controllers and addresses. With drivers given (tests, demo clock) the
+    table just mirrors their ids.
+    """
+    with session_scope(sessions) as s:
+        if given_ids is not None:
+            for i, rid in enumerate(given_ids):
+                if s.get(Reactor, rid) is None:
+                    s.add(Reactor(id=rid, name=f"Bioreactor {rid[1:] if rid[1:].isdigit() else rid}",
+                                  driver="simulator", interval_s=settings.sampling_interval_s, position=i))
+        elif not s.scalar(select(func.count()).select_from(Reactor)):
+            for i, r in enumerate(settings.reactors):
+                s.add(Reactor(id=r.reactor_id, name=f"Bioreactor {r.reactor_id[1:]}", driver=r.driver,
+                              address=r.address, interval_s=settings.sampling_interval_s, position=i))
+            log.info("bioreactors created from the previous configuration")
+        s.flush()
+        return [{"id": r.id, "driver": r.driver, "address": r.address, "interval_s": r.interval_s,
+                 "enabled": r.enabled} for r in s.scalars(select(Reactor).order_by(Reactor.position, Reactor.id))]
 
 
 def _mount_frontend(app: FastAPI, settings: Settings) -> None:
@@ -173,6 +220,54 @@ def current_user(request: Request, db: Session) -> Optional[User]:
         return None
     u = db.get(User, parsed[0])
     return u if u and not u.archived and u.token_version == parsed[1] else None
+
+
+def admins_exist(db: Session) -> bool:
+    return bool(db.scalar(select(func.count()).select_from(User).where(User.role == "admin", User.archived.is_(False))))
+
+
+def effective_role(u: Optional[User], db: Session) -> str:
+    """Level actually in force for a user (see users.py): admin/operator need a PIN, Guest is an observer."""
+    if not admins_exist(db):
+        return "admin"            # no administrator yet: levels not enforced (earlier behaviour)
+    if u is None or u.name == GUEST_NAME or not u.pin_hash:
+        return "observer"
+    return u.role or "operator"
+
+
+def role_of(request: Request, db: Session) -> str:
+    return effective_role(current_user(request, db), db)
+
+
+def require_role(request: Request, db: Session, needed: str) -> None:
+    have = role_of(request, db)
+    if users_mod.role_rank(have) < users_mod.role_rank(needed):
+        raise HTTPException(403, f"This needs the {users_mod.ROLE_LABELS[needed]} level (you are {users_mod.ROLE_LABELS[have]}).")
+
+
+# Level needed by each writing request, checked in one place (middleware) so no endpoint is forgotten.
+# First match wins; any other POST/PUT/PATCH/DELETE under /api needs Operator. Reading (GET) is open.
+ROLE_RULES: list[tuple[str, str, Optional[str]]] = [
+    ("POST", r"^/api/auth/login$", None),
+    ("POST", r"^/api/users$", None),                       # creating yourself (new users start as Operator)
+    ("PUT", r"^/api/users/\d+$", None),                   # own name and PIN (checked in the endpoint)
+    ("POST", r"^/api/users/\d+/first-admin$", None),      # checked in the endpoint (lab PC, no admin yet)
+    ("PUT", r"^/api/users/\d+/role$", "admin"),
+    ("PUT", r"^/api/settings/", "admin"),
+    ("POST", r"^/api/settings/", "admin"),
+    ("POST", r"^/api/backup/run$", "admin"),
+    ("ANY", r"^/api/bioreactors", "admin"),
+    ("DELETE", r"^/api/experiments/\d+$", "admin"),
+]
+
+
+def needed_role(method: str, path: str) -> Optional[str]:
+    if method in ("GET", "HEAD", "OPTIONS") or not path.startswith("/api/"):
+        return None
+    for m, pattern, role in ROLE_RULES:
+        if (m == "ANY" or m == method) and re.match(pattern, path):
+            return role
+    return "operator"
 
 
 def who(request: Request, db: Session) -> str:
@@ -1069,11 +1164,15 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
     acq: Acquisition = request.app.state.acq
     now = now_of(request)
     out = []
-    for rid, live in acq.live.items():
+    names = {r.id: r for r in db.scalars(select(Reactor))}
+    order = sorted(acq.live.items(), key=lambda kv: (names[kv[0]].position if kv[0] in names else 99, kv[0]))
+    for rid, live in order:
         exp = db.scalar(select(Experiment).where(Experiment.reactor_id == rid, Experiment.status.in_(ACTIVE)))
         snap = live.snapshot
         out.append({
             "reactor_id": rid,
+            "name": names[rid].name if rid in names else rid,
+            "interval_s": acq.interval_of(rid),
             "online": live.last_error is None and live.last_ok is not None,
             "last_reading_age_s": (now - live.last_ok).total_seconds() if live.last_ok else None,
             "error": live.last_error,
@@ -1087,6 +1186,155 @@ def reactors_live(request: Request, db: Session = Depends(get_db)):
                                                     "parallel_run": exp.parallel_run.code if exp.parallel_run else None},
         })
     return out
+
+
+# --- bioreactors & probes (Settings, 2.3) ----------------------------------------------------
+
+def _reactor_out(r: Reactor, acq: Acquisition, db: Session, now: datetime) -> dict:
+    live = acq.live.get(r.id)
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == r.id, Experiment.status.in_(ACTIVE)))
+    used = db.scalar(select(func.count()).select_from(Experiment).where(Experiment.reactor_id == r.id))
+    status = ("disabled" if not r.enabled else "simulated" if r.driver == "simulator" and live and live.last_ok
+              else "connected" if live and live.last_ok and live.last_error is None
+              else "not_reachable" if live and live.last_error else "starting")
+    return {"id": r.id, "name": r.name, "driver": r.driver, "driver_label": DRIVERS.get(r.driver, r.driver),
+            "address": r.address, "interval_s": r.interval_s, "enabled": r.enabled, "position": r.position,
+            "status": status, "error": live.last_error if live else None,
+            "last_reading_age_s": (now - live.last_ok).total_seconds() if live and live.last_ok else None,
+            "active_experiment": exp.code if exp else None, "experiments": used,
+            "interval_warning": r.interval_s < INTERVAL_WARN_S or r.interval_s > 60}
+
+
+@router.get("/bioreactors")
+def list_bioreactors(request: Request, db: Session = Depends(get_db)):
+    acq: Acquisition = request.app.state.acq
+    now = now_of(request)
+    return {"reactors": [_reactor_out(r, acq, db, now) for r in db.scalars(select(Reactor).order_by(Reactor.position, Reactor.id))],
+            "drivers": [{"id": k, "label": v} for k, v in DRIVERS.items()],
+            "interval": {"min": INTERVAL_MIN_S, "max": INTERVAL_MAX_S, "warn_below": INTERVAL_WARN_S, "default": request.app.state.settings.sampling_interval_s}}
+
+
+def _check_reactor_fields(driver: Optional[str], address: Optional[str], interval_s: Optional[float]) -> None:
+    if driver is not None and driver not in DRIVERS:
+        raise HTTPException(422, f"Driver must be one of: {', '.join(DRIVERS.values())}.")
+    if interval_s is not None and not (INTERVAL_MIN_S <= interval_s <= INTERVAL_MAX_S):
+        raise HTTPException(422, f"Sampling interval must be {INTERVAL_MIN_S:g}-{INTERVAL_MAX_S:g} s.")
+    if address is not None and len(address) > 200:
+        raise HTTPException(422, "Address too long.")
+
+
+def _apply_reactor(request: Request, r: Reactor) -> None:
+    """Make the running acquisition match the saved configuration of one bioreactor."""
+    acq: Acquisition = request.app.state.acq
+    if not r.enabled:
+        acq.remove_reactor(r.id)
+        return
+    if r.driver != "simulator" and not r.address.strip():
+        acq.remove_reactor(r.id)
+        return
+    clock = request.app.state.clock
+    acq.set_reactor(r.id, make_driver(r.driver, r.id, r.address.strip(), clock=None if clock is _utcnow else clock), r.interval_s)
+
+
+@router.post("/bioreactors", status_code=201)
+def create_bioreactor(body: S.ReactorIn, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    _check_reactor_fields(body.driver, body.address, body.interval_s)
+    n = 1
+    while db.get(Reactor, f"R{n}"):
+        n += 1
+    rid = f"R{n}"
+    name = (body.name or f"Bioreactor {n}").strip()[:60]
+    if db.scalar(select(Reactor).where(func.lower(Reactor.name) == name.lower())):
+        raise HTTPException(409, f"A bioreactor named {name} already exists.")
+    pos = (db.scalar(select(func.max(Reactor.position))) or 0) + 1
+    r = Reactor(id=rid, name=name, driver=body.driver or "simulator", address=(body.address or "").strip(),
+                interval_s=body.interval_s or request.app.state.settings.sampling_interval_s,
+                enabled=bool(body.enabled), position=pos)
+    db.add(r)
+    db.flush()
+    _apply_reactor(request, r)
+    return _reactor_out(r, request.app.state.acq, db, now_of(request))
+
+
+@router.patch("/bioreactors/{rid}")
+def update_bioreactor(rid: str, body: S.ReactorPatch, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    r = _404(db.get(Reactor, rid), "Unknown bioreactor")
+    _check_reactor_fields(body.driver, body.address, body.interval_s)
+    exp = db.scalar(select(Experiment).where(Experiment.reactor_id == rid, Experiment.status.in_(ACTIVE)))
+    reconnect = ((body.driver is not None and body.driver != r.driver)
+                 or (body.address is not None and body.address.strip() != r.address)
+                 or (body.enabled is not None and body.enabled != r.enabled))
+    if exp and reconnect and not body.confirm:
+        raise HTTPException(409, f"{exp.code} is running on {r.name}: recording pauses while the controller reconnects. Confirm to go on.")
+    if body.name is not None:
+        name = body.name.strip()[:60]
+        if not name or db.scalar(select(Reactor).where(func.lower(Reactor.name) == name.lower(), Reactor.id != rid)):
+            raise HTTPException(409, "Name empty or already used.")
+        r.name = name
+    if body.driver is not None:
+        r.driver = body.driver
+    if body.address is not None:
+        r.address = body.address.strip()
+    if body.enabled is not None:
+        r.enabled = body.enabled
+    if body.interval_s is not None:
+        r.interval_s = body.interval_s
+    db.flush()
+    if reconnect:
+        _apply_reactor(request, r)
+    elif body.interval_s is not None and rid in request.app.state.acq.drivers:
+        request.app.state.acq.set_interval(rid, r.interval_s)
+    if exp and (reconnect or body.interval_s is not None):
+        _event(db, exp, "bioreactor_config", f"{r.name}: configuration changed by {who(request, db)}"
+               + (f" (sampling every {r.interval_s:g} s)" if body.interval_s is not None else ""))
+    return _reactor_out(r, request.app.state.acq, db, now_of(request))
+
+
+@router.delete("/bioreactors/{rid}", status_code=204)
+def delete_bioreactor(rid: str, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    r = _404(db.get(Reactor, rid), "Unknown bioreactor")
+    if db.scalar(select(func.count()).select_from(Experiment).where(Experiment.reactor_id == rid)):
+        raise HTTPException(409, f"{r.name} is used by experiments: disable it instead.")
+    request.app.state.acq.remove_reactor(rid)
+    db.delete(r)
+
+
+@router.post("/bioreactors/{rid}/test")
+def test_bioreactor(rid: str, body: S.ReactorTestIn, request: Request, db: Session = Depends(get_db)):
+    """Read the controller once with the given (or saved) driver and address; nothing is written."""
+    r = _404(db.get(Reactor, rid), "Unknown bioreactor")
+    driver_kind = body.driver or r.driver
+    address = (body.address if body.address is not None else r.address).strip()
+    _check_reactor_fields(driver_kind, address, None)
+    if driver_kind != "simulator" and not address:
+        return {"ok": False, "error": "Give the controller's address."}
+    acq: Acquisition = request.app.state.acq
+    same = driver_kind == r.driver and address == r.address and rid in acq.drivers
+    try:
+        drv = acq.drivers[rid] if same else make_driver(driver_kind, rid, address)
+        snap = drv.read()
+    except (DriverError, ValueError) as ex:
+        return {"ok": False, "error": str(ex)}
+    finally:
+        if not same:
+            try:
+                drv.close()   # type: ignore[possibly-undefined]
+            except Exception:
+                pass
+    vals = {k: v for k, v in snap.__dict__.items() if isinstance(v, (int, float)) and v is not None}
+    found = [c for c in ("ph", "temperature", "stirrer", "do2", "redox") if vals.get(c) is not None or (snap.extra or {}).get(c) is not None]
+    return {"ok": True, "channels": found, "values": {k: vals[k] for k in ("ph", "temperature", "stirrer") if k in vals}}
+
+
+@router.get("/reactors/{reactor_id}/history")
+def reactor_history(reactor_id: str, request: Request):
+    """Live values of the last 3 hours, kept in memory only (Trends of a bioreactor without experiment)."""
+    acq: Acquisition = request.app.state.acq
+    _404(acq.drivers.get(reactor_id), "Unknown reactor")
+    return {"interval_s": acq.interval_of(reactor_id), "window_h": 3, "points": acq.history_of(reactor_id)}
 
 
 @router.post("/reactors/{reactor_id}/setpoints")
@@ -2057,16 +2305,20 @@ def _attachment(name: str) -> str:
 
 # --- users (identity for signatures, optional PIN) ---------------------------------------------
 
-def _user_out(u: User) -> dict:
-    return {"id": u.id, "name": u.name, "has_pin": u.pin_hash is not None, "archived": u.archived,
-            "guest": u.name == GUEST_NAME}
+def _user_out(u: User, db: Optional[Session] = None) -> dict:
+    role = "observer" if u.name == GUEST_NAME else (u.role or "operator")
+    out = {"id": u.id, "name": u.name, "has_pin": u.pin_hash is not None, "archived": u.archived,
+           "guest": u.name == GUEST_NAME, "role": role}
+    if db is not None:
+        out["effective_role"] = effective_role(u, db)
+    return out
 
 
 @router.get("/users")
 def list_users(db: Session = Depends(get_db), include_archived: bool = False):
     q = select(User).order_by(User.name)
     users = [u for u in db.scalars(q) if include_archived or not u.archived]
-    return sorted([_user_out(u) for u in users], key=lambda x: (x["guest"], x["name"].lower()))
+    return sorted([_user_out(u, db) for u in users], key=lambda x: (x["guest"], x["name"].lower()))
 
 
 @router.post("/users", status_code=201)
@@ -2104,7 +2356,47 @@ def login(body: S.LoginIn, request: Request, db: Session = Depends(get_db)):
 @router.get("/auth/me")
 def me(request: Request, db: Session = Depends(get_db)):
     u = current_user(request, db)
-    return {"user": _user_out(u) if u else None}
+    return {"user": _user_out(u, db) if u else None, "role": effective_role(u, db),
+            "admins_exist": admins_exist(db), "client_local": is_local(request)}
+
+
+@router.post("/users/{uid}/first-admin")
+def first_admin(uid: int, request: Request, db: Session = Depends(get_db)):
+    """Make the first administrator: only from the lab PC, only while none exists, only for a user with a PIN."""
+    if admins_exist(db):
+        raise HTTPException(409, "An administrator already exists: ask them to change levels.")
+    if not is_local(request):
+        raise HTTPException(403, "The first administrator can be set only on the lab PC.")
+    u = _404(db.get(User, uid))
+    me_ = current_user(request, db)
+    if me_ is None or me_.id != u.id:
+        raise HTTPException(403, f"Sign in as {u.name} first.")
+    if u.name == GUEST_NAME or not u.pin_hash:
+        raise HTTPException(422, "Set a PIN first: an administrator needs one.")
+    u.role = "admin"
+    log.info("first administrator: %s", u.name)
+    db.flush()
+    return _user_out(u, db)
+
+
+@router.put("/users/{uid}/role")
+def set_role(uid: int, body: S.RoleIn, request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, "admin")
+    u = _404(db.get(User, uid))
+    if body.role not in users_mod.ROLES:
+        raise HTTPException(422, "Unknown level.")
+    if u.name == GUEST_NAME:
+        raise HTTPException(422, "Guest is always an observer.")
+    if (u.role == "admin" and body.role != "admin"
+            and db.scalar(select(func.count()).select_from(User).where(User.role == "admin", User.archived.is_(False))) <= 1):
+        raise HTTPException(409, "This is the last administrator: make someone else administrator first.")
+    old = u.role or "operator"
+    u.role = body.role
+    log.info("level of %s: %s -> %s (by %s)", u.name, old, body.role, who(request, db))
+    db.add(Event(experiment_id=None, reactor_id="-", kind="user_level", severity="info",
+                 message=f"{u.name}: {users_mod.ROLE_LABELS[old]} → {users_mod.ROLE_LABELS[body.role]} (by {who(request, db)})"))
+    db.flush()
+    return _user_out(u, db)
 
 
 @router.put("/users/{uid}")
@@ -2129,6 +2421,9 @@ def update_user(uid: int, body: S.UserPatch, request: Request, db: Session = Dep
         u.token_version += 1   # other devices signed in as this user must sign in again
         token = users_mod.make_token(request.app.state.auth_secret, u.id, u.token_version)
     if body.archived is not None:
+        if body.archived and u.role == "admin" and db.scalar(select(func.count()).select_from(User).where(
+                User.role == "admin", User.archived.is_(False))) <= 1:
+            raise HTTPException(409, "This is the last administrator and cannot be archived.")
         u.archived = body.archived
     db.flush()
     return {"user": _user_out(u), "token": token}
@@ -2201,10 +2496,10 @@ def system_info(request: Request, db: Session = Depends(get_db)):
     return {
         "version": __version__, "citation": citation.info(), **build_info(), "client_local": is_local(request), "data_dir": str(st.data_dir), "sampling_interval_s": acq.interval_s,
         "experiments": db.scalar(select(func.count()).select_from(Experiment)),
-        "reactors": [{"reactor_id": r.reactor_id, "driver": r.driver, "address": r.address,
-                      "online": acq.live[r.reactor_id].last_error is None and acq.live[r.reactor_id].last_ok is not None,
-                      "capabilities": acq.drivers[r.reactor_id].capabilities.__dict__}
-                     for r in st.reactors if r.reactor_id in acq.drivers],
+        "reactors": [{"reactor_id": r.id, "name": r.name, "driver": r.driver, "address": r.address,
+                      "online": acq.live[r.id].last_error is None and acq.live[r.id].last_ok is not None,
+                      "capabilities": acq.drivers[r.id].capabilities.__dict__}
+                     for r in db.scalars(select(Reactor).order_by(Reactor.position, Reactor.id)) if r.id in acq.drivers],
     }
 
 

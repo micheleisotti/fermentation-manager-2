@@ -262,3 +262,29 @@ class UserPatch(BaseModel):
 class LoginIn(BaseModel):
     user_id: int
     pin: Optional[str] = None
+
+
+class ReactorIn(BaseModel):
+    name: Optional[str] = None
+    driver: Optional[str] = "simulator"
+    address: Optional[str] = ""
+    interval_s: Optional[float] = None
+    enabled: bool = False
+
+
+class ReactorPatch(BaseModel):
+    name: Optional[str] = None
+    driver: Optional[str] = None
+    address: Optional[str] = None
+    interval_s: Optional[float] = None
+    enabled: Optional[bool] = None
+    confirm: bool = False
+
+
+class ReactorTestIn(BaseModel):
+    driver: Optional[str] = None
+    address: Optional[str] = None
+
+
+class RoleIn(BaseModel):
+    role: str
