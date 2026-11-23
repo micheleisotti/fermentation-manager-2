@@ -69,3 +69,24 @@ def test_sampling_volume_and_timeline(env):
     s = next(x for x in tl if x["category"] == "sampling")
     assert "OD600 = 0.42" in s["title"] and "5 mL taken" in s["detail"]
     assert tl == sorted(tl, key=lambda x: x["at"], reverse=True)
+
+
+def test_templates_and_channel_params(env):
+    c, clock, app = env
+    prof = c.post("/api/profiles", json={"name": "std", "ph_setpoint": 6.2,
+                                         "channel_params": {"do2": {"setpoint": 20, "low": 10, "high": 90, "mode": "pid",
+                                                                    "params": {"P": 1.5}}}}).json()
+    assert prof["channel_params"]["do2"]["setpoint"] == 20
+    assert c.post("/api/profiles", json={"name": "bad", "channel_params": {"do2": {"low": 5, "high": 1}}}).status_code == 422
+    b = c.post("/api/buffers", json={"name": "NaOH", "molarity": 2}).json()
+    e = c.post("/api/experiments", json={"name": "B2", "reactor_id": "R1", "strain": "Lp187_B2", "buffer_id": b["id"],
+                                        "buffer_volume_ml": 250, "profile_id": prof["id"],
+                                        "channels": ["ph", "temperature", "do2"]}).json()
+    t = c.post("/api/templates", json={"name": "Biomass B2", "from_experiment_id": e["id"]}).json()
+    assert t["data"]["strain"] == "Lp187_B2" and t["data"]["buffer_volume_ml"] == 250 and t["profile_name"] == "std"
+    assert t["data"]["channels"] == ["temperature", "ph", "do2"]
+    assert c.post("/api/templates", json={"name": "biomass b2"}).status_code == 409
+    t2 = c.put(f"/api/templates/{t['id']}", json={"description": "standard run"}).json()
+    assert t2["description"] == "standard run"
+    assert [x["name"] for x in c.get("/api/templates").json()] == ["Biomass B2"]
+    assert c.delete(f"/api/templates/{t['id']}").status_code == 204

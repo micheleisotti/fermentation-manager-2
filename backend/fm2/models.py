@@ -111,10 +111,29 @@ class ControllerProfile(Base):
     # Actuators (and cascades) per loop the profile was made for, as read from a controller:
     # {"ph": [{"id": 29, "name": "Alkali", "side": 1, "kind": "actuator"}, ...], ...} (loops.py)
     loop_assignments: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Other channels (2.3: stirrer limits, dO2, level, ...): {channel: {setpoint, low, high, mode, params}}.
+    # Kept with the plan; loaded on the controller only where the driver supports it (verified per channel).
+    channel_params: Mapped[Optional[dict]] = mapped_column(JSON)
     notes: Mapped[str] = mapped_column(Text, default="")
     author: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class ExperimentTemplate(Base):
+    """
+    Whole plan of an experiment, reusable (Library > Templates, 2.3): general data, medium, buffer and
+    volume, channels, a linked profile and the plan's controller values; later also FM2 rules.
+    """
+    __tablename__ = "experiment_templates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    data: Mapped[dict] = mapped_column(JSON)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    author: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 # --- experiments --------------------------------------------------------------

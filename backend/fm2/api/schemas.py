@@ -97,6 +97,7 @@ class ProfileIn(BaseModel):
     temperature_control_mode: Optional[str] = None
     temperature_pid: Optional[dict] = None
     loop_assignments: Optional[dict] = None
+    channel_params: Optional[dict] = None
     notes: str = ""
     author: str = ""
 
@@ -116,6 +117,7 @@ class ProfileOut(ORM):
     temperature_control_mode: Optional[str] = None
     temperature_pid: Optional[dict] = None
     loop_assignments: Optional[dict] = None
+    channel_params: Optional[dict] = None
     notes: str
     updated_at: Optional[datetime] = None
     n_experiments: int = 0
@@ -301,3 +303,17 @@ class ReactorTestIn(BaseModel):
 
 class RoleIn(BaseModel):
     role: str
+
+
+class TemplateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    data: Optional[dict] = None
+    from_experiment_id: Optional[int] = None
+
+
+class TemplatePatch(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    data: Optional[dict] = None
+    archived: Optional[bool] = None

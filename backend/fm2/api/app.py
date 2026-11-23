@@ -40,7 +40,7 @@ from ..db import add_missing_columns, make_engine, make_session_factory, session
 from ..drivers.base import CHANNELS, DEFAULT_CHANNELS, DOSE_COUNTER_LABELS, DOSE_COUNTERS, EXTRA_FIELDS, counter_value
 from ..drivers import ControllerDriver, DriverError, PhControl, make_driver
 from ..models import (
-    DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event,
+    DEFAULT_VARIABLES, AnalysisSession, Base, Buffer, ControllerProfile, ControllerReading, Event, ExperimentTemplate,
     Experiment, ExperimentStatus, ManualMeasurement, ManualMeasurementEdit, Medium, ParallelRun,
     PhControlMode, Reactor, SessionMember, SetpointCommand, Variable, VariableCategory,
 )
@@ -306,7 +306,7 @@ def _check_channels(ch: Optional[list[str]]) -> Optional[list[str]]:
 
 PLAN_KEYS = ("ph_setpoint", "temperature_setpoint", "stirrer_setpoint", "ph_control_mode", "ph_pid",
              "ph_low_limit", "ph_high_limit", "temperature_low_limit", "temperature_high_limit",
-             "temperature_control_mode", "temperature_pid", "loop_assignments")
+             "temperature_control_mode", "temperature_pid", "loop_assignments", "channel_params")
 LOOP_PLAN = {"ph": ("ph_control_mode", "ph_pid"), "temperature": ("temperature_control_mode", "temperature_pid")}
 
 
@@ -318,7 +318,35 @@ def profile_params(p: Optional[ControllerProfile]) -> dict:
     d["ph_pid"] = dict(p.ph_pid) if p.ph_pid else None
     d["temperature_pid"] = dict(p.temperature_pid) if p.temperature_pid else None
     d["loop_assignments"] = dict(p.loop_assignments) if p.loop_assignments else None
+    d["channel_params"] = dict(p.channel_params) if p.channel_params else None
     return d
+
+
+CHANNEL_PARAM_KEYS = ("setpoint", "low", "high")
+
+
+def _clean_channel_params(v) -> Optional[dict]:
+    """{channel: {setpoint, low, high, mode, params{}}} for channels other than pH and temperature."""
+    if not v:
+        return None
+    if not isinstance(v, dict):
+        raise HTTPException(422, "channel_params must be an object")
+    out = {}
+    for ch, block in v.items():
+        if ch not in CHANNELS or not isinstance(block, dict):
+            raise HTTPException(422, f"Unknown channel {ch}")
+        b: dict = {}
+        for k in CHANNEL_PARAM_KEYS:
+            x = block.get(k)
+            b[k] = None if x in ("", None) else float(x)
+        if b["low"] is not None and b["high"] is not None and b["low"] >= b["high"]:
+            raise HTTPException(422, f"{ch}: low limit must be lower than high limit")
+        mode = block.get("mode")
+        b["mode"] = str(mode)[:30] if mode else None
+        b["params"] = {str(kk)[:40]: (None if vv in ("", None) else float(vv)) for kk, vv in (block.get("params") or {}).items()} or None
+        if any(x is not None for x in b.values()):
+            out[ch] = b
+    return out or None
 
 
 def plan_of(e: Experiment) -> dict:
@@ -340,6 +368,8 @@ def _clean_plan(d: Optional[dict]) -> Optional[dict]:
             out[k] = v or None
         elif k == "loop_assignments":
             out[k] = _clean_assignments(v)
+        elif k == "channel_params":
+            out[k] = _clean_channel_params(v)
         elif k in ("ph_pid", "temperature_pid"):
             out[k] = {kk: (None if vv in ("", None) else float(vv)) for kk, vv in (v or {}).items()} or None
         else:
@@ -491,6 +521,84 @@ _catalogue("media", Medium)
 _catalogue("buffers", Buffer)
 
 
+# --- experiment templates (Library, 2.3) ------------------------------------------------------
+
+TEMPLATE_KEYS = ("strain", "medium_id", "buffer_id", "buffer_volume_ml", "working_volume_ml", "profile_id",
+                 "plan_params", "channels", "notes", "rules")
+
+
+def _clean_template(d: Optional[dict], db: Session) -> dict:
+    d = {k: v for k, v in (d or {}).items() if k in TEMPLATE_KEYS}
+    if "channels" in d:
+        d["channels"] = _check_channels(d["channels"])
+    if "plan_params" in d:
+        d["plan_params"] = _clean_plan(d["plan_params"])
+    for k, model in (("medium_id", Medium), ("buffer_id", Buffer), ("profile_id", ControllerProfile)):
+        if d.get(k) is not None and db.get(model, d[k]) is None:
+            raise HTTPException(422, f"{k.replace('_id', '')} not found")
+    d["rules"] = []   # FM2 rules come with the pump commands (verified on the controller first)
+    return d
+
+
+def _template_out(t: ExperimentTemplate, db: Session) -> dict:
+    d = t.data or {}
+    prof = db.get(ControllerProfile, d["profile_id"]) if d.get("profile_id") else None
+    return {"id": t.id, "name": t.name, "description": t.description, "data": d, "archived": t.archived,
+            "author": t.author, "updated_at": t.updated_at,
+            "profile_name": prof.name if prof else None,
+            "medium_name": (db.get(Medium, d["medium_id"]).name if d.get("medium_id") and db.get(Medium, d["medium_id"]) else None),
+            "buffer_name": (db.get(Buffer, d["buffer_id"]).name if d.get("buffer_id") and db.get(Buffer, d["buffer_id"]) else None)}
+
+
+@router.get("/templates")
+def list_templates(db: Session = Depends(get_db), include_archived: bool = False):
+    q = select(ExperimentTemplate).order_by(ExperimentTemplate.name)
+    if not include_archived:
+        q = q.where(ExperimentTemplate.archived.is_(False))
+    return [_template_out(t, db) for t in db.scalars(q)]
+
+
+@router.post("/templates", status_code=201)
+def create_template(body: S.TemplateIn, request: Request, db: Session = Depends(get_db)):
+    name = body.name.strip()
+    if db.scalar(select(ExperimentTemplate).where(func.lower(ExperimentTemplate.name) == name.lower())):
+        raise HTTPException(409, f"A template named {name} already exists.")
+    if body.from_experiment_id is not None:
+        e = _404(db.get(Experiment, body.from_experiment_id))
+        data = {k: getattr(e, k) for k in TEMPLATE_KEYS if k != "rules" and hasattr(e, k)}
+        data["plan_params"] = e.plan_params or (profile_params(e.profile) if e.profile else None)
+        data["channels"] = e.channels
+    else:
+        data = body.data or {}
+    t = ExperimentTemplate(name=name, description=body.description, data=_clean_template(data, db), author=who(request, db))
+    db.add(t)
+    db.flush()
+    return _template_out(t, db)
+
+
+@router.put("/templates/{tid}")
+def update_template(tid: int, body: S.TemplatePatch, db: Session = Depends(get_db)):
+    t = _404(db.get(ExperimentTemplate, tid))
+    if body.name is not None:
+        name = body.name.strip()
+        if not name or db.scalar(select(ExperimentTemplate).where(func.lower(ExperimentTemplate.name) == name.lower(), ExperimentTemplate.id != tid)):
+            raise HTTPException(409, "Name empty or already used.")
+        t.name = name
+    if body.description is not None:
+        t.description = body.description
+    if body.data is not None:
+        t.data = _clean_template(body.data, db)
+    if body.archived is not None:
+        t.archived = body.archived
+    db.flush()
+    return _template_out(t, db)
+
+
+@router.delete("/templates/{tid}", status_code=204)
+def delete_template(tid: int, db: Session = Depends(get_db)):
+    db.delete(_404(db.get(ExperimentTemplate, tid)))
+
+
 VARIABLE_ROLES = ("biomass", "product", "substrate", "other")
 FIT_ROLES = ("biomass", "product")   # growth-like (increasing) curves: the primary models apply
 
@@ -576,6 +684,7 @@ def _profile_data(body: S.ProfileIn) -> dict:
         raise HTTPException(422, "temperature control mode must be pid or adaptive")
     data["temperature_control_mode"] = data["temperature_control_mode"] or None
     data["loop_assignments"] = _clean_assignments(data["loop_assignments"])
+    data["channel_params"] = _clean_channel_params(data.get("channel_params"))
     for a, b in (("ph_low_limit", "ph_high_limit"), ("temperature_low_limit", "temperature_high_limit")):
         if data[a] is not None and data[b] is not None and data[a] >= data[b]:
             raise HTTPException(422, f"{a.replace('_', ' ')} must be lower than {b.replace('_', ' ')}")
